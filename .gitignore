@@ -9,3 +9,6 @@ pictures/
 
 # Python cache
 __pycache__/
+
+# TRELLIS.2 source code, cloned by install.sh (a separate Git repository)
+/TRELLIS.2/

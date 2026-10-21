@@ -5,21 +5,21 @@
 #
 # Steps:
 #   1. installs Miniforge (conda) in ~/miniforge3 if conda isn't available
-#   2. clones TRELLIS.2 (to $TRELLIS2_DIR, default ~/TRELLIS.2) if it isn't there yet
+#   2. clones TRELLIS.2 (to $TRELLIS2_DIR, default ./TRELLIS.2 in this folder) if it isn't there yet
 #   3. creates the conda environment from environment.yml
 #   4. builds TRELLIS.2's CUDA add-ons for the GPU in this machine
 #   5. makes "import trellis2" work from anywhere in the environment
 #   6. downloads the model weights (needs a Hugging Face login with access to DINOv3 and RMBG-2.0)
 #
 # Settings (optional environment variables):
-#   TRELLIS2_DIR   where TRELLIS.2's code lives        (default: ~/TRELLIS.2)
+#   TRELLIS2_DIR   where TRELLIS.2's code lives        (default: ./TRELLIS.2 in this folder)
 #   BUILD_DIR      where add-on sources are built      (default: ~/.cache/inpainting-3d-build)
 #   SKIP_WEIGHTS=1 don't download the model weights
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_NAME="inpainting-3d-modelling"
-TRELLIS2_DIR="${TRELLIS2_DIR:-$HOME/TRELLIS.2}"
+TRELLIS2_DIR="${TRELLIS2_DIR:-$PROJECT_DIR/TRELLIS.2}"
 BUILD_DIR="${BUILD_DIR:-$HOME/.cache/inpainting-3d-build}"
 
 # Tested versions of TRELLIS.2 and its add-ons
