@@ -1,0 +1,11 @@
+# Generated 3D models and logs (large files, can be regenerated)
+outputs/
+
+# Input pictures from the internet (belong to other artists)
+pictures/
+
+# PyCharm personal settings
+.idea/
+
+# Python cache
+__pycache__/
