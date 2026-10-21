@@ -1,26 +1,30 @@
 #!/bin/bash
-# Sets up TRELLIS.2 for this project on a Linux machine with an NVIDIA GPU, without root/sudo.
+# Sets up everything this project needs inside this folder, on a Linux machine with an NVIDIA GPU.
+# No root/sudo needed, and nothing is installed outside this folder (delete the folder to remove it all).
 #
 #   ./install.sh
 #
 # Steps:
-#   1. installs Miniforge (conda) in ~/miniforge3 if conda isn't available
-#   2. clones TRELLIS.2 (to $TRELLIS2_DIR, default ./TRELLIS.2 in this folder) if it isn't there yet
+#   1. installs Miniforge (conda) in ./conda
+#   2. clones TRELLIS.2 into ./TRELLIS.2 (skipped if it's already there)
 #   3. creates the conda environment from environment.yml
 #   4. builds TRELLIS.2's CUDA add-ons for the GPU in this machine
 #   5. makes "import trellis2" work from anywhere in the environment
-#   6. downloads the model weights (needs a Hugging Face login with access to DINOv3 and RMBG-2.0)
+#   6. downloads the model weights into ./models (needs a Hugging Face login with access to DINOv3 and RMBG-2.0)
+#
+# Afterwards, start working with:  source activate.sh
 #
 # Settings (optional environment variables):
-#   TRELLIS2_DIR   where TRELLIS.2's code lives        (default: ./TRELLIS.2 in this folder)
-#   BUILD_DIR      where add-on sources are built      (default: ~/.cache/inpainting-3d-build)
-#   SKIP_WEIGHTS=1 don't download the model weights
+#   SKIP_WEIGHTS=1   don't download the model weights
+#   MAX_JOBS=<n>     parallel compile jobs (default: half the CPU cores)
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_NAME="inpainting-3d-modelling"
-TRELLIS2_DIR="${TRELLIS2_DIR:-$PROJECT_DIR/TRELLIS.2}"
-BUILD_DIR="${BUILD_DIR:-$HOME/.cache/inpainting-3d-build}"
+CONDA_DIR="$PROJECT_DIR/conda"
+TRELLIS2_DIR="$PROJECT_DIR/TRELLIS.2"
+MODELS_DIR="$PROJECT_DIR/models"
+BUILD_DIR="$CONDA_DIR/addon-sources"
 
 # Tested versions of TRELLIS.2 and its add-ons
 TRELLIS2_REPO="https://github.com/microsoft/TRELLIS.2.git"
@@ -43,29 +47,24 @@ checkout() {
     git -C "$dir" submodule update -q --init --recursive
 }
 
-step "1/6 Conda"
-# Prefer ~/miniforge3, then an activated conda. A conda without etc/profile.d/conda.sh
-# (e.g. Fedora's /usr/bin/conda package) can't activate environments in a script, so it's skipped.
-has_profile() { [ -n "$1" ] && [ -f "$1/etc/profile.d/conda.sh" ]; }
-CONDA_BASE=""
-if has_profile "$HOME/miniforge3"; then
-    CONDA_BASE="$HOME/miniforge3"
-elif [ -n "$CONDA_EXE" ] && has_profile "$(dirname "$(dirname "$CONDA_EXE")")"; then
-    CONDA_BASE="$(dirname "$(dirname "$CONDA_EXE")")"
-elif command -v conda >/dev/null && has_profile "$(conda info --base 2>/dev/null)"; then
-    CONDA_BASE="$(conda info --base)"
-else
-    echo "no usable conda found, installing Miniforge in ~/miniforge3"
+if [[ "$PROJECT_DIR" == *" "* ]]; then
+    echo "The project path contains a space: '$PROJECT_DIR'"
+    echo "conda and the CUDA build tools don't support that. Move or rename the folder first."
+    exit 1
+fi
+
+step "1/6 Conda (in ./conda)"
+if [ ! -f "$CONDA_DIR/etc/profile.d/conda.sh" ]; then
     installer=$(mktemp -d)/miniforge.sh
     curl -fsSL -o "$installer" https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
-    bash "$installer" -b -p "$HOME/miniforge3"
-    "$HOME/miniforge3/bin/conda" init bash >/dev/null
-    CONDA_BASE="$HOME/miniforge3"
+    bash "$installer" -b -p "$CONDA_DIR" >/dev/null
+    rm -f "$installer"
 fi
-source "$CONDA_BASE/etc/profile.d/conda.sh"
-echo "using conda in $CONDA_BASE"
+source "$CONDA_DIR/etc/profile.d/conda.sh"
+conda config --file "$CONDA_DIR/.condarc" --set auto_activate false
+echo "conda $(conda --version | cut -d' ' -f2) in $CONDA_DIR"
 
-step "2/6 TRELLIS.2 code"
+step "2/6 TRELLIS.2 code (in ./TRELLIS.2)"
 if [ -d "$TRELLIS2_DIR/.git" ]; then
     echo "using existing $TRELLIS2_DIR (not changing its version)"
 else
@@ -73,7 +72,7 @@ else
 fi
 
 step "3/6 Conda environment '$ENV_NAME'"
-if conda env list | grep -qE "^$ENV_NAME\s"; then
+if [ -d "$CONDA_DIR/envs/$ENV_NAME" ]; then
     conda env update -q -n "$ENV_NAME" -f "$PROJECT_DIR/environment.yml"
 else
     conda env create -q -f "$PROJECT_DIR/environment.yml"
@@ -83,7 +82,9 @@ conda activate "$ENV_NAME"
 # Build the add-ons for the GPU(s) in this machine, e.g. 8.6 = RTX 3090, 9.0 = H100.
 GPU_ARCHS=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sort -u | paste -sd ';')
 GPU_ARCHS=${GPU_ARCHS:-"8.0;8.6;8.9;9.0"}
-conda env config vars set -n "$ENV_NAME" CUDA_HOME="$CONDA_PREFIX" TORCH_CUDA_ARCH_LIST="$GPU_ARCHS" >/dev/null
+# HF_HUB_CACHE keeps the model weights in ./models; the Hugging Face login stays in ~/.cache/huggingface.
+conda env config vars set -n "$ENV_NAME" CUDA_HOME="$CONDA_PREFIX" TORCH_CUDA_ARCH_LIST="$GPU_ARCHS" \
+    HF_HUB_CACHE="$MODELS_DIR" HF_MODULES_CACHE="$MODELS_DIR/modules" >/dev/null
 conda deactivate && conda activate "$ENV_NAME"
 python -c "import torch; assert torch.cuda.is_available(), 'PyTorch cannot see the GPU'; print('PyTorch', torch.__version__, 'on', torch.cuda.get_device_name(0))"
 echo "building for GPU architecture(s): $TORCH_CUDA_ARCH_LIST"
@@ -113,24 +114,24 @@ import trellis2, os
 print('TRELLIS.2 loads from', os.path.dirname(trellis2.__file__))
 ")
 
-step "6/6 Model weights"
+step "6/6 Model weights (in ./models)"
 if [ "${SKIP_WEIGHTS:-0}" = "1" ]; then
     echo "skipped (SKIP_WEIGHTS=1)"
 elif ! hf auth whoami >/dev/null 2>&1; then
     echo "Not logged in to Hugging Face, so the weights are not downloaded yet. To finish:"
     echo "  1. request access to https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m"
     echo "     and https://huggingface.co/briaai/RMBG-2.0"
-    echo "  2. conda activate $ENV_NAME && hf auth login"
+    echo "  2. source activate.sh && hf auth login"
     echo "  3. run ./install.sh again (it reuses everything already built)"
 else
     hf download microsoft/TRELLIS.2-4B >/dev/null
     hf download microsoft/TRELLIS-image-large ckpts/ss_dec_conv3d_16l8_fp16.json ckpts/ss_dec_conv3d_16l8_fp16.safetensors >/dev/null
     hf download facebook/dinov3-vitl16-pretrain-lvd1689m >/dev/null
     hf download briaai/RMBG-2.0 --include "*.py" "*.json" "model.safetensors" >/dev/null
-    echo "weights are in $(python -c 'from huggingface_hub import constants; print(constants.HF_HUB_CACHE)')"
+    echo "weights are in $MODELS_DIR ($(du -sh "$MODELS_DIR" | cut -f1))"
 fi
 
 echo
-echo "Done. Start with:"
-echo "  conda activate $ENV_NAME"
+echo "Done. Start working with:"
+echo "  source activate.sh"
 echo "  python scripts/generate.py pictures/<your picture>"
