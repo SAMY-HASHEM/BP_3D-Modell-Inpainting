@@ -41,6 +41,8 @@ from trellis2.pipelines.rembg.BiRefNet import BiRefNet
 DEVICE = "cuda"
 FIT_SIZE = 512  # longest side of the picture while searching the camera
 BAKE_SIZE = 2048  # longest side of the depth image used to decide what the camera sees
+SHARPNESS = 16  # how strongly the best-facing picture wins where several see the same spot
+AGREEMENT = 0.35  # blurred colour difference (0..1) to TRELLIS.2's texture at which trust drops to 37 %
 
 
 # ---------- camera ----------
@@ -210,7 +212,7 @@ def texel_geometry(ctx, verts, normals, faces, uvs, size):
     return position[0], F.normalize(normal[0], dim=-1), rast[0, ..., 3] > 0
 
 
-def project(ctx, verts, faces, texels, cam, picture, mask, radius):
+def project(ctx, verts, faces, uvs_tex, texture, texels, cam, picture, mask, radius, check_colors=False):
     """Colour from the picture for every texel the camera sees, and how much to trust it (0..1)."""
     position, normal, covered = texels
     image = torch.tensor(np.asarray(picture.convert("RGB")), device=DEVICE, dtype=torch.float32) / 255
@@ -237,6 +239,19 @@ def project(ctx, verts, faces, texels, cam, picture, mask, radius):
     inside = cv2.erode((mask > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8), iterations=max(1, width // 1024))
     inside = cv2.GaussianBlur(inside.astype(np.float32), (0, 0), max(1.0, width / 1024))
     trust = trust * sample(torch.tensor(inside, device=DEVICE)[..., None], u, v)[:, 0]
+
+    # Where the 3D shape differs from the picture (e.g. a hand held a bit differently), the picture
+    # paints the hand onto whatever is behind it. TRELLIS.2's own texture is blurry but has roughly
+    # the right colours, so --check-colors compares both blurred (small details like eyes vanish,
+    # a hand in front of a black top does not) and trusts the picture less where they disagree.
+    # Off by default: it also rejects good detail where TRELLIS.2's shape is slightly off (faces).
+    if check_colors:
+        rendered, _ = render_texture(ctx, verts, faces, uvs_tex, texture, cam, dw, dh)
+        sigma = max(dw, dh) / 150
+        small = cv2.resize(image.cpu().numpy(), (dw, dh), interpolation=cv2.INTER_AREA)
+        difference = np.abs(cv2.GaussianBlur(small, (0, 0), sigma) - cv2.GaussianBlur(rendered.cpu().numpy(), (0, 0), sigma))
+        difference = torch.tensor(difference.mean(-1), device=DEVICE)[..., None]
+        trust = trust * torch.exp(-(sample(difference, u * dw / width, v * dh / height)[:, 0] / AGREEMENT) ** 2)
 
     weight = (covered.view(-1) & visible).float() * trust
     color = sample(image, u, v)
@@ -295,6 +310,9 @@ def main():
     parser.add_argument("model", help="the .glb from generate.py or multi_image.py")
     parser.add_argument("pictures", nargs="+", help="full-size pictures of the object, all in the same pose")
     parser.add_argument("--closeups", nargs="*", default=[], help="close-ups of the first picture, for more detail")
+    parser.add_argument("--check-colors", action="store_true",
+                        help="trust the pictures less where their colours differ strongly from the model's "
+                             "(against e.g. a hand painted onto the chest; can cost detail in faces)")
     args = parser.parse_args()
     start = time.time()
 
@@ -321,12 +339,7 @@ def main():
     masks = object_masks(pictures)
 
     texels = texel_geometry(ctx, verts, normals, faces, uvs, size)
-    # Where several pictures see the same texel, the one facing it most directly should win:
-    # weight**4 makes a well-facing picture count far more than one seeing the spot at an angle.
-    color_sum = torch.zeros_like(texture)
-    weight_sum = torch.zeros(size, size, device=DEVICE)
-    weight_max = torch.zeros(size, size, device=DEVICE)
-    cameras = []
+    colors, weights, cameras = [], [], []
     for i, (name, picture, mask) in enumerate(zip(names, pictures, masks)):
         print(f"2. Finding the camera of {name}...")
         cam, iou = fit_camera(ctx, verts, faces, uvs_tex, texture, picture, mask)
@@ -334,7 +347,7 @@ def main():
             print("    Warning: the outlines match poorly, so colours may land in the wrong places.")
         cameras.append(cam)
         print(f"3. Taking the colours from {name}...")
-        color, weight, picture_uv = project(ctx, verts, faces, texels, cam, picture, mask, radius)
+        color, weight, picture_uv = project(ctx, verts, faces, uvs_tex, texture, texels, cam, picture, mask, radius, args.check_colors)
         if i == 0:
             for path in args.closeups:
                 closeup = Image.open(path)
@@ -346,12 +359,18 @@ def main():
                 color = torch.lerp(color, c_color, c_weight[..., None])
                 print(f"    {os.path.basename(path)}: found ({inliers} matching points)")
         print(f"    {(weight > 0.5).float().mean().item():.0%} of the texture is seen by this picture")
-        strength = weight ** 4
-        color_sum += color * strength[..., None]
-        weight_sum += strength
-        weight_max = torch.maximum(weight_max, weight)
-        del color, weight
-    color = color_sum / weight_sum.clamp(min=1e-8)[..., None]
+        colors.append(color)
+        weights.append(weight)
+
+    # Where several pictures see the same texel, the one facing it most directly wins. Averaging
+    # them would show double edges ("ghosting"), because no two pictures line up perfectly.
+    # (weight / best weight) ** SHARPNESS keeps the best picture at 1 and lets the others drop off
+    # quickly, so they only blend in where two pictures are almost equally good (soft seams).
+    weights = torch.stack(weights)
+    weight_max = weights.max(0).values
+    strength = (weights / weight_max.clamp(min=1e-6)) ** SHARPNESS
+    color = (torch.stack(colors) * strength[..., None]).sum(0) / strength.sum(0).clamp(min=1e-6)[..., None]
+    del colors
     color, weight = spread_into_gaps(color, weight_max, texels[2])
     new_texture = torch.lerp(texture, color, weight[..., None])
     print(f"    In total {(weight > 0.5).float().mean().item():.0%} of the texture now comes from the pictures")
