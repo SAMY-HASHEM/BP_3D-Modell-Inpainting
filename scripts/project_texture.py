@@ -1,23 +1,26 @@
-"""Sharpen a TRELLIS.2 model's texture by projecting the original picture onto it.
+"""Sharpen a TRELLIS.2 model's texture by projecting the original picture(s) onto it.
 
 TRELLIS.2 only sees the picture at 1024 x 1024 (as 64 x 64 tiles), so fine details come out blurry.
-This script paints the colours of the full-size picture straight onto the parts of the model
-that the picture shows. The shape stays as it is.
+This script paints the colours of the full-size pictures straight onto the parts of the model
+that they show. The shape stays as it is. The angle of each picture is found automatically.
 
 Usage:
     source activate.sh
     python scripts/project_texture.py outputs/full_1536_seed42.glb pictures/4/full.jpg
+    python scripts/project_texture.py outputs/front_multi4_multidiffusion_1536_seed42.glb \\
+        pictures/yeonhee/front.png pictures/yeonhee/front-left.png pictures/yeonhee/side-right.png
     python scripts/project_texture.py outputs/full_1536_seed42.glb pictures/4/full.jpg \\
-        --closeups pictures/4/closeup-upper.jpg pictures/4/closeup-legs.jpg
+        --closeups pictures/4/closeup-upper.jpg
 
-Close-ups must be crops (or zoomed renders) of the same picture: they are found inside it by matching
-image features, and their colours replace the main picture's wherever they reach.
+All pictures must show the object in the same pose. Where several pictures see the same spot,
+the one that looks at it most directly wins. Close-ups must be crops (or zoomed renders) of the
+first picture: they are found inside it by matching image features, and replace its colours.
 
 Steps:
-    1. cut the object out of the picture (RMBG-2.0, the same as TRELLIS.2 uses)
-    2. find the camera: try many directions, keep the one whose outline matches best, fine-tune it
-    3. for every texel of the texture that the camera sees, take the colour from the picture
-    4. save <model>_projected.glb and <model>_projected_check.png (picture | before | after)
+    1. cut the object out of each picture (RMBG-2.0, the same as TRELLIS.2 uses)
+    2. find each picture's camera: try many directions, keep the best outline match, fine-tune it
+    3. for every texel of the texture that a camera sees, take the colour from that picture
+    4. save <model>_projected.glb and <model>_projected_check.png (per picture: picture | before | after)
 """
 import argparse
 import math
@@ -108,14 +111,14 @@ def bbox(mask):
 
 # ---------- step 1: cut out the object ----------
 
-def object_mask(picture):
-    """Alpha mask of the object, 0..1, at the picture's size (RMBG-2.0)."""
+def object_masks(pictures):
+    """Alpha mask of the object in each picture, 0..1, at the picture's size (RMBG-2.0)."""
     remover = BiRefNet(model_name="briaai/RMBG-2.0")
     remover.cuda()
-    cutout = remover(picture.convert("RGB"))
+    masks = [np.asarray(remover(p.convert("RGB")))[..., 3].astype(np.float32) / 255 for p in pictures]
     del remover
     torch.cuda.empty_cache()
-    return np.asarray(cutout)[..., 3].astype(np.float32) / 255
+    return masks
 
 
 # ---------- step 2: find the camera ----------
@@ -288,10 +291,10 @@ def spread_into_gaps(values, weight, covered, steps=8):
 # ---------- main ----------
 
 def main():
-    parser = argparse.ArgumentParser(description="Project the original picture onto a TRELLIS.2 model")
+    parser = argparse.ArgumentParser(description="Project the original picture(s) onto a TRELLIS.2 model")
     parser.add_argument("model", help="the .glb from generate.py or multi_image.py")
-    parser.add_argument("picture", help="the picture the model was generated from (full size)")
-    parser.add_argument("--closeups", nargs="*", default=[], help="close-ups of the same picture, for more detail")
+    parser.add_argument("pictures", nargs="+", help="full-size pictures of the object, all in the same pose")
+    parser.add_argument("--closeups", nargs="*", default=[], help="close-ups of the first picture, for more detail")
     args = parser.parse_args()
     start = time.time()
 
@@ -312,48 +315,69 @@ def main():
     ctx = dr.RasterizeCudaContext()
     print(f"Model: {len(faces):,} faces, texture {size} x {size}")
 
-    picture = Image.open(args.picture)
-    print("1. Cutting the object out of the picture...")
-    mask = object_mask(picture)
+    pictures = [Image.open(path) for path in args.pictures]
+    names = [os.path.basename(path) for path in args.pictures]
+    print("1. Cutting the object out of the pictures...")
+    masks = object_masks(pictures)
 
-    print("2. Finding the camera...")
-    cam, iou = fit_camera(ctx, verts, faces, uvs_tex, texture, picture, mask)
-    if iou < 0.8:
-        print("    Warning: the outlines match poorly, so colours may land in the wrong places.")
-
-    print("3. Taking the colours from the picture...")
     texels = texel_geometry(ctx, verts, normals, faces, uvs, size)
-    color, weight, picture_uv = project(ctx, verts, faces, texels, cam, picture, mask, radius)
-    for path in args.closeups:
-        closeup = Image.open(path)
-        homography, inliers = find_in_picture(closeup, picture)
-        if homography is None or inliers < 30:
-            print(f"    {os.path.basename(path)}: not found in the picture ({inliers} matches), skipped")
-            continue
-        c_color, c_weight = project_closeup(closeup, homography, picture_uv, weight, size)
-        color = torch.lerp(color, c_color, c_weight[..., None])
-        print(f"    {os.path.basename(path)}: found ({inliers} matching points)")
-    color, weight = spread_into_gaps(color, weight, texels[2])
+    # Where several pictures see the same texel, the one facing it most directly should win:
+    # weight**4 makes a well-facing picture count far more than one seeing the spot at an angle.
+    color_sum = torch.zeros_like(texture)
+    weight_sum = torch.zeros(size, size, device=DEVICE)
+    weight_max = torch.zeros(size, size, device=DEVICE)
+    cameras = []
+    for i, (name, picture, mask) in enumerate(zip(names, pictures, masks)):
+        print(f"2. Finding the camera of {name}...")
+        cam, iou = fit_camera(ctx, verts, faces, uvs_tex, texture, picture, mask)
+        if iou < 0.8:
+            print("    Warning: the outlines match poorly, so colours may land in the wrong places.")
+        cameras.append(cam)
+        print(f"3. Taking the colours from {name}...")
+        color, weight, picture_uv = project(ctx, verts, faces, texels, cam, picture, mask, radius)
+        if i == 0:
+            for path in args.closeups:
+                closeup = Image.open(path)
+                homography, inliers = find_in_picture(closeup, picture)
+                if homography is None or inliers < 30:
+                    print(f"    {os.path.basename(path)}: not found in the picture ({inliers} matches), skipped")
+                    continue
+                c_color, c_weight = project_closeup(closeup, homography, picture_uv, weight, size)
+                color = torch.lerp(color, c_color, c_weight[..., None])
+                print(f"    {os.path.basename(path)}: found ({inliers} matching points)")
+        print(f"    {(weight > 0.5).float().mean().item():.0%} of the texture is seen by this picture")
+        strength = weight ** 4
+        color_sum += color * strength[..., None]
+        weight_sum += strength
+        weight_max = torch.maximum(weight_max, weight)
+        del color, weight
+    color = color_sum / weight_sum.clamp(min=1e-8)[..., None]
+    color, weight = spread_into_gaps(color, weight_max, texels[2])
     new_texture = torch.lerp(texture, color, weight[..., None])
-    print(f"    {(weight > 0.5).float().mean().item():.0%} of the texture now comes from the picture")
+    print(f"    In total {(weight > 0.5).float().mean().item():.0%} of the texture now comes from the pictures")
 
     print("4. Saving...")
     base = os.path.splitext(args.model)[0] + "_projected"
     material.baseColorTexture = Image.fromarray((new_texture.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
     scene.export(base + ".glb")
 
-    # check picture: original | before | after, all from the found camera
-    view_w = 768
-    view_h = round(picture.size[1] * view_w / picture.size[0] / 8) * 8
-    before, seen = render_texture(ctx, verts, faces, uvs_tex, texture, cam, view_w, view_h)
-    after, _ = render_texture(ctx, verts, faces, uvs_tex, new_texture, cam, view_w, view_h)
-    gray = torch.full_like(before, 0.25)
-    panels = [np.asarray(picture.convert("RGB").resize((view_w, view_h), Image.LANCZOS))]
-    for img in (before, after):
-        panels.append((torch.where(seen[..., None], img, gray).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
-    Image.fromarray(np.concatenate(panels, axis=1)).save(base + "_check.png")
+    # check picture: one row per picture: picture | before | after, from that picture's camera
+    rows = []
+    for picture, cam in zip(pictures, cameras):
+        view_h = 768
+        view_w = round(picture.size[0] * view_h / picture.size[1] / 8) * 8
+        before, seen = render_texture(ctx, verts, faces, uvs_tex, texture, cam, view_w, view_h)
+        after, _ = render_texture(ctx, verts, faces, uvs_tex, new_texture, cam, view_w, view_h)
+        gray = torch.full_like(before, 0.25)
+        panels = [np.asarray(picture.convert("RGB").resize((view_w, view_h), Image.LANCZOS))]
+        for img in (before, after):
+            panels.append((torch.where(seen[..., None], img, gray).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
+        rows.append(np.concatenate(panels, axis=1))
+    width = max(r.shape[1] for r in rows)
+    rows = [np.pad(r, ((0, 0), (0, width - r.shape[1]), (0, 0)), constant_values=255) for r in rows]
+    Image.fromarray(np.concatenate(rows, axis=0)).save(base + "_check.png")
     print(f"Done in {time.time() - start:.0f} s: {base}.glb")
-    print(f"Check picture (original | before | after): {base}_check.png")
+    print(f"Check picture (per picture: original | before | after): {base}_check.png")
 
 
 if __name__ == "__main__":
