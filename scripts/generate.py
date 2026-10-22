@@ -1,10 +1,9 @@
 """Generate a 3D model (.glb) from one picture with TRELLIS.2.
 
 Usage:
-    conda activate trellis2
-    cd ~/Bachlor-project
-    python scripts/generate.py my_picture.png
-    python scripts/generate.py my_picture.png --resolution 1536 --seed 7
+    source activate.sh
+    python scripts/generate.py pictures/my_picture.png
+    python scripts/generate.py pictures/my_picture.png --resolution 1536 --seed 7
 
 The results go to outputs/: the picture after background removal (*_input.png) and the model (*.glb).
 """
@@ -12,8 +11,14 @@ import argparse
 import os
 import time
 
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # saves GPU memory
+# The conda environment sets these on activation. They are repeated here for runs that skip the
+# activation (e.g. PyCharm's Run button), so the model weights are never downloaded a second time.
+os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "models"))
+os.environ.setdefault("HF_MODULES_CACHE", os.path.join(PROJECT_DIR, "models", "modules"))
 
 import torch
 from PIL import Image
@@ -23,7 +28,6 @@ from trellis2.representations.mesh import base as mesh_base
 
 PIPELINE_TYPES = {"512": "512", "1024": "1024_cascade", "1536": "1536_cascade"}
 DEFAULT_STEPS = 12  # TRELLIS.2's default number of sampling steps per stage
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_DIR, "outputs")
 
 # CuMesh asks the GPU for memory directly and can't use the memory PyTorch keeps cached.
