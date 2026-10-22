@@ -1,10 +1,10 @@
-# BP_Samy_Hashem
+# BP_3D-Modell-Inpainting
 
-Bachelor project by Samy Hashem at the University of Duisburg-Essen.
+Bachelor project (BP) by Samy Hashem at the University of Duisburg-Essen.
 
 ## Topic
 
-_Coming soon._
+3D model inpainting: regenerating only selected parts of a 3D model, built on [TRELLIS.2](https://github.com/microsoft/TRELLIS.2).
 
 ## Author
 
