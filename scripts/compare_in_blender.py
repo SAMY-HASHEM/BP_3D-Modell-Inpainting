@@ -5,8 +5,10 @@ Rows are resolutions, columns are step counts (or seeds, if all models have the 
 Usage (runs Blender for you, see compare_in_blender.sh):
     ./scripts/compare_in_blender.sh outputs/<picture>
     ./scripts/compare_in_blender.sh outputs/<picture> --render
+    ./scripts/compare_in_blender.sh outputs/<picture> --render --back   # the backs of the models
 
-Saves outputs/<picture>/comparison.blend (open it in Blender) and, with --render, comparison.png.
+Saves outputs/<picture>/comparison.blend (open it in Blender) and, with --render, comparison.png
+(comparison_back.* with --back).
 """
 import argparse
 import glob
@@ -59,6 +61,7 @@ def main():
     parser = argparse.ArgumentParser(description="Compare a batch of .glb models in Blender")
     parser.add_argument("folder", help="folder with the .glb files, e.g. outputs/Kennen_Armored_Render")
     parser.add_argument("--render", action="store_true", help="also render the grid to comparison.png")
+    parser.add_argument("--back", action="store_true", help="turn the models around to compare their backs")
     args = parser.parse_args(argv)
 
     models = sorted((parse_name(p), p) for p in glob.glob(os.path.join(args.folder, "*.glb")) if parse_name(p))
@@ -79,6 +82,8 @@ def main():
         col = columns.index(steps if by_steps else seed)
         row = resolutions.index(resolution)
         holder.location = (col * SPACING, 0, -row * SPACING)
+        if args.back:
+            holder.rotation_euler.z = math.pi
 
     top = 0.5 + 0.25
     for col, value in enumerate(columns):
@@ -87,34 +92,38 @@ def main():
         add_label(str(resolution), (-0.95, 0, -row * SPACING))
 
     # Front camera (models face -Y after import), orthographic so all models have the same scale.
-    center = Vector(((len(columns) - 1) * SPACING / 2 - 0.25, 0, -(len(resolutions) - 1) * SPACING / 2 + 0.1))
+    # The picture is sized to the grid: models plus the row labels on the left and column labels on top.
+    width = (len(columns) - 1) * SPACING + 1.85
+    height = (len(resolutions) - 1) * SPACING + 1.4
+    center = Vector((((len(columns) - 1) * SPACING - 0.65) / 2, 0, (0.3 - (len(resolutions) - 1) * SPACING) / 2))
     camera = bpy.data.objects.new("Camera", bpy.data.cameras.new("Camera"))
     camera.data.type = "ORTHO"
-    camera.data.ortho_scale = max(len(columns) * SPACING + 0.6, (len(resolutions) * SPACING + 0.4) * 4 / 3)
+    camera.data.ortho_scale = max(width, height)
     camera.location = center + Vector((0, -10, 0))
     camera.rotation_euler = (math.radians(90), 0, 0)
     scene.collection.objects.link(camera)
     scene.camera = camera
 
     sun = bpy.data.objects.new("Sun", bpy.data.lights.new("Sun", "SUN"))
-    sun.data.energy = 3.0
+    sun.data.energy = 5.0
     sun.rotation_euler = (math.radians(60), 0, math.radians(-30))
     scene.collection.objects.link(sun)
     scene.world = bpy.data.worlds.new("World")
     scene.world.use_nodes = True
-    scene.world.node_tree.nodes["Background"].inputs["Strength"].default_value = 1.0
+    scene.world.node_tree.nodes["Background"].inputs["Strength"].default_value = 1.8
 
-    scene.render.resolution_x = 2400
-    scene.render.resolution_y = 1800
+    scene.render.resolution_x = round(2400 * width / max(width, height))
+    scene.render.resolution_y = round(2400 * height / max(width, height))
     scene.render.film_transparent = False
 
-    blend_path = os.path.abspath(os.path.join(args.folder, "comparison.blend"))
+    out_name = "comparison_back" if args.back else "comparison"
+    blend_path = os.path.abspath(os.path.join(args.folder, f"{out_name}.blend"))
     bpy.ops.wm.save_as_mainfile(filepath=blend_path)
     print(f"Saved scene: {blend_path}")
 
     if args.render:
         scene.render.engine = "BLENDER_EEVEE"
-        scene.render.filepath = os.path.abspath(os.path.join(args.folder, "comparison.png"))
+        scene.render.filepath = os.path.abspath(os.path.join(args.folder, f"{out_name}.png"))
         bpy.ops.render.render(write_still=True)
         print(f"Saved render: {scene.render.filepath}")
 
