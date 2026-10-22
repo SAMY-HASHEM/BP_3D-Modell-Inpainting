@@ -10,6 +10,9 @@ Usage:
     python scripts/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
         --part outputs/boot-right_1536_seed42.glb pictures/yeonhee/parts/boot-right.png \\
         --part outputs/boot-left_1536_seed42.glb pictures/yeonhee/parts/boot-left.png
+    # all cut-outs of a folder (from cut_parts.py), each with its newest model from outputs/:
+    python scripts/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
+        --parts-dir pictures/yeonhee/parts-auto
 
 Each part picture must be a cut-out (RGBA, transparent background) taken pixel for pixel from the
 full picture; its position in the full picture is found automatically.
@@ -22,6 +25,7 @@ Steps:
     5. save <model>_parts.glb (one mesh per part) and <model>_parts_check.png (picture | before | after)
 """
 import argparse
+import glob
 import os
 import time
 
@@ -32,6 +36,7 @@ import torch
 import trimesh
 from PIL import Image
 
+from generate import OUTPUT_DIR
 from project_texture import DEVICE, fit_camera, object_masks, rotation, to_camera, to_clip
 
 REMOVE_MARGIN = 0.02  # extra depth (fraction of the model size) removed in front of and behind a part
@@ -131,9 +136,21 @@ def main():
     parser = argparse.ArgumentParser(description="Insert detailed part models into a full TRELLIS.2 model")
     parser.add_argument("model", help="the full model (.glb)")
     parser.add_argument("picture", help="the picture the full model was generated from")
-    parser.add_argument("--part", nargs=2, action="append", required=True, metavar=("MODEL", "CUTOUT"),
+    parser.add_argument("--part", nargs=2, action="append", default=[], metavar=("MODEL", "CUTOUT"),
                         help="a part model and the RGBA cut-out it was generated from (repeat for more parts)")
+    parser.add_argument("--parts-dir", help="folder of RGBA cut-outs; each is paired with its newest model in outputs/")
     args = parser.parse_args()
+    if args.parts_dir:
+        for cutout in sorted(glob.glob(os.path.join(args.parts_dir, "*.png"))):
+            stem = os.path.splitext(os.path.basename(cutout))[0]
+            models = [m for m in glob.glob(os.path.join(OUTPUT_DIR, f"{stem}_*.glb"))
+                      if not m.endswith(("_parts.glb", "_projected.glb"))]
+            if not models:
+                print(f"No model for {cutout} in {OUTPUT_DIR} (generate it with generate.py), skipped")
+                continue
+            args.part.append([max(models, key=os.path.getmtime), cutout])
+    if not args.part:
+        parser.error("give parts with --part MODEL CUTOUT or --parts-dir FOLDER")
     start = time.time()
     ctx = dr.RasterizeCudaContext()
 
