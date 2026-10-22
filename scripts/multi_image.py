@@ -24,7 +24,7 @@ import torch
 from PIL import Image
 from torch import nn
 
-from generate import DEFAULT_STEPS, OUTPUT_DIR, PIPELINE_TYPES, load_pipeline, picture_name, save_glb
+from generate import DEFAULT_STEPS, OUTPUT_DIR, PIPELINE_TYPES, crop_to_object, load_pipeline, picture_name, save_glb
 
 MODES = ["multidiffusion", "stochastic"]
 
@@ -135,7 +135,7 @@ def main():
     images = []
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     for i, path in enumerate(args.images, start=1):
-        image = pipeline.preprocess_image(Image.open(path))
+        image = pipeline.preprocess_image(crop_to_object(pipeline, Image.open(path)))
         image.save(os.path.join(OUTPUT_DIR, f"{name}_input{i}.png"))
         images.append(image)
 
