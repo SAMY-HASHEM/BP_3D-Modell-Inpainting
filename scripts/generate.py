@@ -151,32 +151,53 @@ def main():
             parser.error(f"picture not found: {path} (is it in pictures/? e.g. pictures/{os.path.basename(path)})")
 
     pipeline = load_pipeline()  # once for all pictures
+    failed = []
     for i, path in enumerate(args.images, start=1):
-        name = f"{picture_name(path)}_{args.resolution}_seed{args.seed}"
-        if args.steps != DEFAULT_STEPS:
-            name += f"_steps{args.steps}"
-        if args.guidance is not None:
-            name += f"_guidance{args.guidance:g}"
-        if args.texture_guidance is not None:
-            name += f"_texguidance{args.texture_guidance:g}"
         if len(args.images) > 1:
             print(f"\n[{i}/{len(args.images)}] {path}")
+        # Some objects need more GPU memory than 24 GB at 1536 (e.g. hair alone: very many fine
+        # voxels). Then try again one resolution lower instead of giving up on this picture.
+        resolutions = [r for r in PIPELINE_TYPES if int(r) <= int(args.resolution)][::-1]
+        for resolution in resolutions[:2]:
+            try:
+                make_model(pipeline, path, resolution, args)
+                break
+            except torch.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                print(f"    Out of GPU memory at {resolution}.")
+        else:
+            failed.append(path)
+            print(f"    Skipped {path}.")
+        torch.cuda.empty_cache()
+    if failed:
+        print(f"\nNot generated (out of GPU memory): {', '.join(failed)}")
 
-        print("Removing the background...")
-        image = prepare_image(pipeline, path, name)
 
-        print(f"Generating the 3D model at {args.resolution} with {args.steps} steps per stage...")
-        mesh, gen_time = generate(pipeline, image, args.resolution, args.seed, args.steps,
-                                  args.guidance, args.texture_guidance)
-        print(f"    generated in {gen_time:.0f} s, {mesh.faces.shape[0]:,} faces")
+def make_model(pipeline, path, resolution, args):
+    """One picture -> one .glb in outputs/."""
+    name = f"{picture_name(path)}_{resolution}_seed{args.seed}"
+    if args.steps != DEFAULT_STEPS:
+        name += f"_steps{args.steps}"
+    if args.guidance is not None:
+        name += f"_guidance{args.guidance:g}"
+    if args.texture_guidance is not None:
+        name += f"_texguidance{args.texture_guidance:g}"
 
-        print("Saving as .glb...")
-        start = time.time()
-        glb_path = os.path.join(OUTPUT_DIR, f"{name}.glb")
-        save_glb(mesh, args.resolution, glb_path)
-        del mesh
-        print(f"    saved in {time.time() - start:.0f} s")
-        print(f"Done: {glb_path}")
+    print("Removing the background...")
+    image = prepare_image(pipeline, path, name)
+
+    print(f"Generating the 3D model at {resolution} with {args.steps} steps per stage...")
+    mesh, gen_time = generate(pipeline, image, resolution, args.seed, args.steps,
+                              args.guidance, args.texture_guidance)
+    print(f"    generated in {gen_time:.0f} s, {mesh.faces.shape[0]:,} faces")
+
+    print("Saving as .glb...")
+    start = time.time()
+    glb_path = os.path.join(OUTPUT_DIR, f"{name}.glb")
+    save_glb(mesh, resolution, glb_path)
+    del mesh
+    print(f"    saved in {time.time() - start:.0f} s")
+    print(f"Done: {glb_path}")
 
 
 if __name__ == "__main__":
