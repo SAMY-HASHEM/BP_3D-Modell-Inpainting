@@ -5,6 +5,7 @@ Usage:
     python scripts/generate.py pictures/my_picture.png
     python scripts/generate.py pictures/my_picture.png --resolution 1536 --seed 7
     python scripts/generate.py pictures/parts/*.png        # several pictures, TRELLIS.2 loaded once
+    python scripts/generate.py pictures/my_picture.png --texture-guidance 3   # colours follow the picture more
 
 The results go to outputs/: the picture after background removal (*_input.png) and the model (*.glb).
 """
@@ -92,17 +93,24 @@ def prepare_image(pipeline, image_path, name):
     return image
 
 
-def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS):
+def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=None, texture_guidance=None):
     """Returns the generated mesh and the generation time in seconds."""
     torch.cuda.empty_cache()
     start = time.time()
     # The same number of steps for all stages: structure, shape and texture.
-    sampler_params = {"steps": steps}
+    # Guidance = how strictly a stage follows the picture. TRELLIS.2's defaults: 7.5 for structure
+    # and shape, 1.0 (= off) for the texture. None keeps the default.
+    shape_params = {"steps": steps}
+    if guidance is not None:
+        shape_params["guidance_strength"] = guidance
+    texture_params = {"steps": steps}
+    if texture_guidance is not None:
+        texture_params["guidance_strength"] = texture_guidance
     mesh = pipeline.run(
         image, seed=seed, preprocess_image=False, pipeline_type=PIPELINE_TYPES[resolution],
-        sparse_structure_sampler_params=sampler_params,
-        shape_slat_sampler_params=sampler_params,
-        tex_slat_sampler_params=sampler_params,
+        sparse_structure_sampler_params=shape_params,
+        shape_slat_sampler_params=shape_params,
+        tex_slat_sampler_params=texture_params,
     )[0]
     return mesh, time.time() - start
 
@@ -132,6 +140,10 @@ def main():
     parser.add_argument("--resolution", choices=PIPELINE_TYPES.keys(), default="1024")
     parser.add_argument("--seed", type=int, default=42, help="same seed + same picture = same result")
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS, help="sampling steps per stage (more = slower)")
+    parser.add_argument("--guidance", type=float,
+                        help="how strictly the shape follows the picture (TRELLIS.2 default 7.5; too high gives artifacts)")
+    parser.add_argument("--texture-guidance", type=float,
+                        help="how strictly the colours follow the picture (TRELLIS.2 default 1.0 = off; try 2-4)")
     args = parser.parse_args()
     for path in args.images:
         if not os.path.isfile(path):
@@ -143,6 +155,10 @@ def main():
         name = f"{picture_name(path)}_{args.resolution}_seed{args.seed}"
         if args.steps != DEFAULT_STEPS:
             name += f"_steps{args.steps}"
+        if args.guidance is not None:
+            name += f"_guidance{args.guidance:g}"
+        if args.texture_guidance is not None:
+            name += f"_texguidance{args.texture_guidance:g}"
         if len(args.images) > 1:
             print(f"\n[{i}/{len(args.images)}] {path}")
 
@@ -150,7 +166,8 @@ def main():
         image = prepare_image(pipeline, path, name)
 
         print(f"Generating the 3D model at {args.resolution} with {args.steps} steps per stage...")
-        mesh, gen_time = generate(pipeline, image, args.resolution, args.seed, args.steps)
+        mesh, gen_time = generate(pipeline, image, args.resolution, args.seed, args.steps,
+                                  args.guidance, args.texture_guidance)
         print(f"    generated in {gen_time:.0f} s, {mesh.faces.shape[0]:,} faces")
 
         print("Saving as .glb...")

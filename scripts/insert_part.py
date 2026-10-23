@@ -169,8 +169,7 @@ def main():
         x0, y0 = locate(cutout, picture)
         replaced[y0:y0 + cutout.size[1], x0:x0 + cutout.size[0]] |= np.asarray(cutout)[..., 3] > 127
     replaced = cv2.dilate(replaced.astype(np.uint8), np.ones((15, 15), np.uint8)) > 0
-    full_cam, _ = fit_camera(ctx, full.verts, full.faces, full.uvs_tex, full.texture, picture, full_mask,
-                             ignore=replaced)
+    full_cam, _ = fit_camera(ctx, [full], picture, full_mask, ignore=replaced)
 
     scale = VIEW_SIZE / max(width, height)
     vw, vh = round(width * scale / 8) * 8, round(height * scale / 8) * 8
@@ -190,7 +189,7 @@ def main():
         x0, y0 = locate(cutout, picture)
         print(f"2. {name}: found at x={x0}, y={y0} in the picture; finding its camera...")
         alpha = np.asarray(cutout)[..., 3].astype(np.float32) / 255
-        crop_cam, _ = fit_camera(ctx, part.verts, part.faces, part.uvs_tex, part.texture, cutout, alpha)
+        crop_cam, _ = fit_camera(ctx, [part], cutout, alpha)
         part_cam = crop_camera_to_picture(crop_cam, cutout.size, (x0, y0), picture.size)
         move = similarity(part_cam, full_cam, picture.size)
 

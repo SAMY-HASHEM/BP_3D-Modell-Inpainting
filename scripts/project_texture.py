@@ -11,6 +11,8 @@ Usage:
         pictures/yeonhee/front.png pictures/yeonhee/front-left.png pictures/yeonhee/side-right.png
     python scripts/project_texture.py outputs/full_1536_seed42.glb pictures/4/full.jpg \\
         --closeups pictures/4/closeup-upper.jpg
+    # a model from insert_part.py (body + separately generated parts) works the same way:
+    python scripts/project_texture.py outputs/head_1536_seed42_parts.glb pictures/head/head.png
 
 All pictures must show the object in the same pose. Where several pictures see the same spot,
 the one that looks at it most directly wins. Close-ups must be crops (or zoomed renders) of the
@@ -96,12 +98,29 @@ def render_silhouette(ctx, verts, faces, cam, width, height):
     return mask[0, ..., 0]
 
 
-def render_texture(ctx, verts, faces, uvs, texture, cam, width, height):
-    clip = to_clip(verts, cam, width, height)[None]
-    rast, _ = dr.rasterize(ctx, clip, faces, (height, width))
-    uv, _ = dr.interpolate(uvs[None], rast, faces)
-    color = dr.texture(texture[None], uv, filter_mode="linear")
-    return color[0], rast[0, ..., 3] > 0
+def combine(meshes):
+    """All meshes as one vertex and face list (for outlines and depth, where textures don't matter)."""
+    verts = torch.cat([m.verts for m in meshes])
+    offsets = np.cumsum([0] + [len(m.verts) for m in meshes[:-1]])
+    faces = torch.cat([m.faces + int(o) for m, o in zip(meshes, offsets)]).contiguous()
+    return verts, faces
+
+
+def render_meshes(ctx, meshes, cam, width, height, textures=None):
+    """Textured render of several meshes together (the nearest surface wins) and where any is seen."""
+    image = torch.zeros((height, width, 3), device=DEVICE)
+    best = torch.full((height, width), float("inf"), device=DEVICE)
+    for i, m in enumerate(meshes):
+        texture = m.texture if textures is None else textures[i]
+        clip = to_clip(m.verts, cam, width, height)[None]
+        rast, _ = dr.rasterize(ctx, clip, m.faces, (height, width))
+        uv, _ = dr.interpolate(m.uvs_tex[None], rast, m.faces)
+        color = dr.texture(texture[None], uv, filter_mode="linear")[0]
+        z = torch.where(rast[0, ..., 3] > 0, rast[0, ..., 2], torch.full_like(best, float("inf")))
+        nearer = z < best
+        image = torch.where(nearer[..., None], color, image)
+        best = torch.where(nearer, z, best)
+    return image, best < float("inf")
 
 
 def bbox(mask):
@@ -125,9 +144,11 @@ def object_masks(pictures):
 
 # ---------- step 2: find the camera ----------
 
-def fit_camera(ctx, verts, faces, uvs, texture, picture, mask, ignore=None):
-    """Camera that shows the model like the picture. `ignore` (optional, picture-sized bool array)
-    marks areas whose outline must not steer the camera, e.g. a part that will be replaced."""
+def fit_camera(ctx, meshes, picture, mask, ignore=None):
+    """Camera that shows the model (a list of meshes) like the picture. `ignore` (optional,
+    picture-sized bool array) marks areas whose outline must not steer the camera, e.g. a part
+    that will be replaced. Each mesh needs .verts, .faces, .uvs_tex and .texture."""
+    verts, faces = combine(meshes)
     scale = FIT_SIZE / max(picture.size)
     width, height = (round(s * scale / 8) * 8 for s in picture.size)
     target = torch.tensor(cv2.resize(mask, (width, height), interpolation=cv2.INTER_AREA), device=DEVICE)
@@ -170,7 +191,7 @@ def fit_camera(ctx, verts, faces, uvs, texture, picture, mask, ignore=None):
     for iou, cam in candidates[:40]:
         if iou < best_iou - 0.15:
             break
-        rendered, covered = render_texture(ctx, verts, faces, uvs, texture, cam, width, height)
+        rendered, covered = render_meshes(ctx, meshes, cam, width, height)
         both = fg & covered & valid
         error = (rendered[both] - colors[both]).abs().mean().item() if both.any() else 1.0
         scored.append((error + 0.5 * (best_iou - iou), iou, cam))
@@ -220,23 +241,50 @@ def texel_geometry(ctx, verts, normals, faces, uvs, size):
     return position[0], F.normalize(normal[0], dim=-1), rast[0, ..., 3] > 0
 
 
-def project(ctx, verts, faces, uvs_tex, texture, texels, cam, picture, mask, radius, check_colors=False):
-    """Colour from the picture for every texel the camera sees, and how much to trust it (0..1)."""
-    position, normal, covered = texels
+def picture_view(ctx, meshes, cam, picture, mask, check_colors=False):
+    """Everything about one picture and its camera that all meshes share: the picture itself, the
+    depth of the nearest surface per pixel (what the camera sees), where the object is, and with
+    --check-colors how far the picture's colours are from the model's own."""
     image = torch.tensor(np.asarray(picture.convert("RGB")), device=DEVICE, dtype=torch.float32) / 255
     height, width = image.shape[:2]
-
-    # what the camera sees: depth of the nearest surface for every pixel
     scale = min(1.0, BAKE_SIZE / max(width, height))
     dw, dh = round(width * scale / 8) * 8, round(height * scale / 8) * 8
+    verts, faces = combine(meshes)
     clip = to_clip(verts, cam, dw, dh)[None]
     rast, _ = dr.rasterize(ctx, clip, faces, (dh, dw))
     depth, _ = dr.interpolate(clip[..., 3:].contiguous(), rast, faces)
     depth = torch.where(rast[..., 3:] > 0, depth, torch.full_like(depth, 1e9))[0]
 
+    # fade out towards the outline, so no background colour lands on the model's edges
+    inside = cv2.erode((mask > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8), iterations=max(1, width // 1024))
+    inside = cv2.GaussianBlur(inside.astype(np.float32), (0, 0), max(1.0, width / 1024))
+
+    # Where the 3D shape differs from the picture (e.g. a hand held a bit differently), the picture
+    # paints the hand onto whatever is behind it. TRELLIS.2's own texture is blurry but has roughly
+    # the right colours, so --check-colors compares both blurred (small details like eyes vanish,
+    # a hand in front of a black top does not) and trusts the picture less where they disagree.
+    # Off by default: it also rejects good detail where TRELLIS.2's shape is slightly off (faces).
+    difference = None
+    if check_colors:
+        rendered, _ = render_meshes(ctx, meshes, cam, dw, dh)
+        sigma = max(dw, dh) / 150
+        small = cv2.resize(image.cpu().numpy(), (dw, dh), interpolation=cv2.INTER_AREA)
+        difference = np.abs(cv2.GaussianBlur(small, (0, 0), sigma) - cv2.GaussianBlur(rendered.cpu().numpy(), (0, 0), sigma))
+        difference = torch.tensor(difference.mean(-1), device=DEVICE)[..., None]
+    return {"image": image, "depth": depth, "depth_size": (dw, dh),
+            "inside": torch.tensor(inside, device=DEVICE)[..., None], "difference": difference}
+
+
+def project(view, texels, cam, radius):
+    """Colour from the picture for every texel of one mesh the camera sees, and how much to trust it."""
+    position, normal, covered = texels
+    image = view["image"]
+    height, width = image.shape[:2]
+    dw, dh = view["depth_size"]
+
     p_cam = to_camera(position.view(-1, 3), cam)
     u, v, texel_depth = to_pixels(p_cam, cam, width, height)
-    surface_depth = sample(depth, u * dw / width, v * dh / height, mode="nearest")[:, 0]
+    surface_depth = sample(view["depth"], u * dw / width, v * dh / height, mode="nearest")[:, 0]
     visible = texel_depth <= surface_depth + 0.01 * radius
 
     # trust surfaces that face the camera; fade out towards the outline and at grazing angles
@@ -244,22 +292,9 @@ def project(ctx, verts, faces, uvs_tex, texture, texels, cam, picture, mask, rad
     facing = (normal_cam * F.normalize(-p_cam, dim=1)).sum(1).abs()
     trust = ((facing - 0.15) / 0.35).clamp(0, 1)
     trust = trust * trust * (3 - 2 * trust)
-    inside = cv2.erode((mask > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8), iterations=max(1, width // 1024))
-    inside = cv2.GaussianBlur(inside.astype(np.float32), (0, 0), max(1.0, width / 1024))
-    trust = trust * sample(torch.tensor(inside, device=DEVICE)[..., None], u, v)[:, 0]
-
-    # Where the 3D shape differs from the picture (e.g. a hand held a bit differently), the picture
-    # paints the hand onto whatever is behind it. TRELLIS.2's own texture is blurry but has roughly
-    # the right colours, so --check-colors compares both blurred (small details like eyes vanish,
-    # a hand in front of a black top does not) and trusts the picture less where they disagree.
-    # Off by default: it also rejects good detail where TRELLIS.2's shape is slightly off (faces).
-    if check_colors:
-        rendered, _ = render_texture(ctx, verts, faces, uvs_tex, texture, cam, dw, dh)
-        sigma = max(dw, dh) / 150
-        small = cv2.resize(image.cpu().numpy(), (dw, dh), interpolation=cv2.INTER_AREA)
-        difference = np.abs(cv2.GaussianBlur(small, (0, 0), sigma) - cv2.GaussianBlur(rendered.cpu().numpy(), (0, 0), sigma))
-        difference = torch.tensor(difference.mean(-1), device=DEVICE)[..., None]
-        trust = trust * torch.exp(-(sample(difference, u * dw / width, v * dh / height)[:, 0] / AGREEMENT) ** 2)
+    trust = trust * sample(view["inside"], u, v)[:, 0]
+    if view["difference"] is not None:
+        trust = trust * torch.exp(-(sample(view["difference"], u * dw / width, v * dh / height)[:, 0] / AGREEMENT) ** 2)
 
     weight = (covered.view(-1) & visible).float() * trust
     color = sample(image, u, v)
@@ -313,9 +348,37 @@ def spread_into_gaps(values, weight, covered, steps=8):
 
 # ---------- main ----------
 
+class Mesh:
+    """One textured mesh of a .glb, as GPU tensors (positions with its scene transform applied)."""
+
+    def __init__(self, geometry, transform):
+        self.geometry = geometry
+        self.material = geometry.visual.material
+        points = trimesh.transform_points(geometry.vertices, transform)
+        normals = trimesh.transform_points(geometry.vertex_normals, transform, translate=False)
+        self.verts = torch.tensor(points, device=DEVICE, dtype=torch.float32)
+        self.faces = torch.tensor(geometry.faces, device=DEVICE, dtype=torch.int32)
+        self.normals = torch.tensor(normals, device=DEVICE, dtype=torch.float32)
+        self.uvs = torch.tensor(geometry.visual.uv, device=DEVICE, dtype=torch.float32)
+        self.uvs_tex = torch.stack([self.uvs[:, 0], 1 - self.uvs[:, 1]], dim=1)  # trimesh's v points up
+        old = self.material.baseColorTexture.convert("RGB")
+        self.texture = torch.tensor(np.asarray(old), device=DEVICE, dtype=torch.float32) / 255
+        self.size = old.size[0]
+
+
+def load_meshes(path):
+    """The scene and all its textured meshes (a TRELLIS.2 model has one; insert_part.py adds more)."""
+    scene = trimesh.load(path)
+    meshes = []
+    for node in scene.graph.nodes_geometry:
+        transform, name = scene.graph[node]
+        meshes.append(Mesh(scene.geometry[name], transform))
+    return scene, meshes
+
+
 def main():
     parser = argparse.ArgumentParser(description="Project the original picture(s) onto a TRELLIS.2 model")
-    parser.add_argument("model", help="the .glb from generate.py or multi_image.py")
+    parser.add_argument("model", help="the .glb from generate.py, multi_image.py or insert_part.py")
     parser.add_argument("pictures", nargs="+", help="full-size pictures of the object, all in the same pose")
     parser.add_argument("--closeups", nargs="*", default=[], help="close-ups of the first picture, for more detail")
     parser.add_argument("--check-colors", action="store_true",
@@ -324,68 +387,64 @@ def main():
     args = parser.parse_args()
     start = time.time()
 
-    scene = trimesh.load(args.model)
-    assert len(scene.geometry) == 1, "expected a single mesh, as TRELLIS.2 exports it"
-    mesh = next(iter(scene.geometry.values()))
-    material = mesh.visual.material
-    old_texture = material.baseColorTexture.convert("RGB")
-    size = old_texture.size[0]
-
-    verts = torch.tensor(mesh.vertices, device=DEVICE, dtype=torch.float32)
-    faces = torch.tensor(mesh.faces, device=DEVICE, dtype=torch.int32)
-    normals = torch.tensor(mesh.vertex_normals, device=DEVICE, dtype=torch.float32)
-    uvs = torch.tensor(mesh.visual.uv, device=DEVICE, dtype=torch.float32)
-    uvs_tex = torch.stack([uvs[:, 0], 1 - uvs[:, 1]], dim=1)  # trimesh's v points up, image rows go down
-    texture = torch.tensor(np.asarray(old_texture), device=DEVICE, dtype=torch.float32) / 255
-    radius = ((verts.max(0).values - verts.min(0).values).norm() / 2).item()
+    scene, meshes = load_meshes(args.model)
+    all_verts, all_faces = combine(meshes)
+    radius = ((all_verts.max(0).values - all_verts.min(0).values).norm() / 2).item()
     ctx = dr.RasterizeCudaContext()
-    print(f"Model: {len(faces):,} faces, texture {size} x {size}")
+    print(f"Model: {len(meshes)} mesh(es), {len(all_faces):,} faces")
 
     pictures = [Image.open(path) for path in args.pictures]
     names = [os.path.basename(path) for path in args.pictures]
     print("1. Cutting the object out of the pictures...")
     masks = object_masks(pictures)
 
-    texels = texel_geometry(ctx, verts, normals, faces, uvs, size)
-    colors, weights, cameras = [], [], []
+    texels = [texel_geometry(ctx, m.verts, m.normals, m.faces, m.uvs, m.size) for m in meshes]
+    colors = [[] for _ in meshes]
+    weights = [[] for _ in meshes]
+    cameras = []
     for i, (name, picture, mask) in enumerate(zip(names, pictures, masks)):
         print(f"2. Finding the camera of {name}...")
-        cam, iou = fit_camera(ctx, verts, faces, uvs_tex, texture, picture, mask)
+        cam, iou = fit_camera(ctx, meshes, picture, mask)
         if iou < 0.8:
             print("    Warning: the outlines match poorly, so colours may land in the wrong places.")
         cameras.append(cam)
         print(f"3. Taking the colours from {name}...")
-        color, weight, picture_uv = project(ctx, verts, faces, uvs_tex, texture, texels, cam, picture, mask, radius, args.check_colors)
-        if i == 0:
-            for path in args.closeups:
-                closeup = Image.open(path)
-                homography, inliers = find_in_picture(closeup, picture)
-                if homography is None or inliers < 30:
-                    print(f"    {os.path.basename(path)}: not found in the picture ({inliers} matches), skipped")
-                    continue
-                c_color, c_weight = project_closeup(closeup, homography, picture_uv, weight, size)
-                color = torch.lerp(color, c_color, c_weight[..., None])
-                print(f"    {os.path.basename(path)}: found ({inliers} matching points)")
-        print(f"    {(weight > 0.5).float().mean().item():.0%} of the texture is seen by this picture")
-        colors.append(color)
-        weights.append(weight)
+        view = picture_view(ctx, meshes, cam, picture, mask, args.check_colors)
+        for k, m in enumerate(meshes):
+            color, weight, picture_uv = project(view, texels[k], cam, radius)
+            if i == 0:
+                for path in args.closeups:
+                    closeup = Image.open(path)
+                    homography, inliers = find_in_picture(closeup, picture)
+                    if homography is None or inliers < 30:
+                        print(f"    {os.path.basename(path)}: not found in the picture ({inliers} matches), skipped")
+                        continue
+                    c_color, c_weight = project_closeup(closeup, homography, picture_uv, weight, m.size)
+                    color = torch.lerp(color, c_color, c_weight[..., None])
+                    print(f"    {os.path.basename(path)}: found ({inliers} matching points)")
+            colors[k].append(color)
+            weights[k].append(weight)
+        del view
 
     # Where several pictures see the same texel, the one facing it most directly wins. Averaging
     # them would show double edges ("ghosting"), because no two pictures line up perfectly.
     # (weight / best weight) ** SHARPNESS keeps the best picture at 1 and lets the others drop off
     # quickly, so they only blend in where two pictures are almost equally good (soft seams).
-    weights = torch.stack(weights)
-    weight_max = weights.max(0).values
-    strength = (weights / weight_max.clamp(min=1e-6)) ** SHARPNESS
-    color = (torch.stack(colors) * strength[..., None]).sum(0) / strength.sum(0).clamp(min=1e-6)[..., None]
-    del colors
-    color, weight = spread_into_gaps(color, weight_max, texels[2])
-    new_texture = torch.lerp(texture, color, weight[..., None])
-    print(f"    In total {(weight > 0.5).float().mean().item():.0%} of the texture now comes from the pictures")
+    new_textures = []
+    for k, m in enumerate(meshes):
+        w = torch.stack(weights[k])
+        weight_max = w.max(0).values
+        strength = (w / weight_max.clamp(min=1e-6)) ** SHARPNESS
+        color = (torch.stack(colors[k]) * strength[..., None]).sum(0) / strength.sum(0).clamp(min=1e-6)[..., None]
+        color, weight = spread_into_gaps(color, weight_max, texels[k][2])
+        new_textures.append(torch.lerp(m.texture, color, weight[..., None]))
+        print(f"    mesh {k + 1}: {(weight > 0.5).float().mean().item():.0%} of its texture now comes from the pictures")
+    del colors, weights
 
     print("4. Saving...")
     base = os.path.splitext(args.model)[0] + "_projected"
-    material.baseColorTexture = Image.fromarray((new_texture.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
+    for m, texture in zip(meshes, new_textures):
+        m.material.baseColorTexture = Image.fromarray((texture.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
     scene.export(base + ".glb")
 
     # check picture: one row per picture: picture | before | after, from that picture's camera
@@ -393,8 +452,8 @@ def main():
     for picture, cam in zip(pictures, cameras):
         view_h = 768
         view_w = round(picture.size[0] * view_h / picture.size[1] / 8) * 8
-        before, seen = render_texture(ctx, verts, faces, uvs_tex, texture, cam, view_w, view_h)
-        after, _ = render_texture(ctx, verts, faces, uvs_tex, new_texture, cam, view_w, view_h)
+        before, seen = render_meshes(ctx, meshes, cam, view_w, view_h)
+        after, _ = render_meshes(ctx, meshes, cam, view_w, view_h, new_textures)
         gray = torch.full_like(before, 0.25)
         panels = [np.asarray(picture.convert("RGB").resize((view_w, view_h), Image.LANCZOS))]
         for img in (before, after):
