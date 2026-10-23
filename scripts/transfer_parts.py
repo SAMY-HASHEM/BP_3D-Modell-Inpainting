@@ -80,6 +80,7 @@ def main():
     parser = argparse.ArgumentParser(description="Split a TRELLIS.2 model into OmniPart's parts")
     parser.add_argument("model", help="detailed model from generate.py (one mesh)")
     parser.add_argument("parts", help="OmniPart's mesh_segment.glb for the same picture (one mesh per part)")
+    parser.add_argument("--out", help="output name without .glb (default: <model>_parts)")
     args = parser.parse_args()
 
     scene, detailed = load_single(args.model)
@@ -138,7 +139,7 @@ def main():
         piece.remove_unreferenced_vertices()
         out.add_geometry(piece, geom_name=f"part-{k + 1}")
         print(f"    part-{k + 1}: {keep.sum():,} faces")
-    base = os.path.splitext(args.model)[0] + "_parts"
+    base = args.out or os.path.splitext(args.model)[0] + "_parts"
     out.export(base + ".glb")
 
     # check picture: the detailed model coloured by part, from 4 sides (simple orthographic splat)

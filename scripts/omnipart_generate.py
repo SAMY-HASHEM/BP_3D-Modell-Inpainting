@@ -29,6 +29,33 @@ from huggingface_hub import hf_hub_download
 from omegaconf import OmegaConf
 
 
+def merge_parts(folder):
+    """Merge part1.glb, part2.glb, ... into mesh_textured.glb and mesh_segment.glb (one colour per part).
+
+    OmniPart's own merge_parts filters on the whole path and skips everything containing "parts",
+    so for an output folder like parts-front-clean_rgba_p10 it found no parts and crashed.
+    """
+    import glob
+    import re
+    import trimesh
+
+    paths = [p for p in glob.glob(os.path.join(folder, "part*.glb")) if re.fullmatch(r"part[1-9]\d*\.glb", os.path.basename(p))]
+    paths.sort(key=lambda p: int(re.findall(r"\d+", os.path.basename(p))[0]))
+    textured, segment = trimesh.Scene(), trimesh.Scene()
+    palette = np.random.default_rng(0).integers(60, 255, size=(len(paths), 3))
+    for i, path in enumerate(paths):
+        mesh = trimesh.load(path, force="mesh")
+        textured.add_geometry(mesh, geom_name=f"part-{i + 1}")
+        colored = mesh.copy()
+        colored.visual = trimesh.visual.ColorVisuals(mesh=colored, vertex_colors=np.append(palette[i], 255))
+        segment.add_geometry(colored, geom_name=f"part-{i + 1}")
+    textured.export(os.path.join(folder, "mesh_textured.glb"))
+    segment.export(os.path.join(folder, "mesh_segment.glb"))
+    for path in paths:
+        os.remove(path)
+    print(f"    merged {len(paths)} parts")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Picture + part mask -> 3D model made of parts (OmniPart)")
     parser.add_argument("image", help="RGBA picture (transparent background)")
@@ -50,8 +77,8 @@ def main():
     os.chdir(OMNIPART_DIR)
     sys.path.insert(0, OMNIPART_DIR)
     from modules.bbox_gen.models.autogressive_bbox_gen import BboxGen
-    from modules.inference_utils import (gen_mesh_from_bounds, load_img_mask, merge_parts,
-                                         prepare_bbox_gen_input, prepare_part_synthesis_input, vis_voxel_coords)
+    from modules.inference_utils import (gen_mesh_from_bounds, load_img_mask, prepare_bbox_gen_input,
+                                         prepare_part_synthesis_input, vis_voxel_coords)
     from modules.part_synthesis.pipelines import OmniPartImageTo3DPipeline
     from modules.part_synthesis.process_utils import save_parts_outputs
 
