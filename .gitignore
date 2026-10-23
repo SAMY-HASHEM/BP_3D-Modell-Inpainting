@@ -13,6 +13,9 @@ __pycache__/
 # TRELLIS.2 source code, cloned by install.sh (a separate Git repository)
 /TRELLIS.2/
 
+# OmniPart source code (github.com/HKU-MMLab/OmniPart, a separate Git repository)
+/OmniPart/
+
 # Conda (Miniforge + environment) and model weights, installed by install.sh
 /conda/
 /models/
