@@ -9,6 +9,8 @@ Usage:
     source activate.sh
     python scripts/cut_parts.py pictures/yeonhee/parts-colors.png pictures/yeonhee/parts-front.png
     python scripts/cut_parts.py colors.png picture.png --out pictures/yeonhee/parts --min-size 0.01
+    # no colour render: a part that already has its own colour (here turquoise hair) in the picture itself
+    python scripts/cut_parts.py pictures/head/head.png pictures/head/head.png --only teal --min-saturation 80 --close 25
 
 Writes <out>/<colour>-<n>.png (numbered left to right) and <out>/overview.jpg to check the parts.
 
@@ -67,7 +69,16 @@ def fine_align(mask, edges):
     return best_shift
 
 
-def find_parts(colors, min_area):
+def fill_holes(mask):
+    """Fill holes that lie completely inside a part (e.g. bright highlights that lost their colour)."""
+    inverse = (~mask).astype(np.uint8)
+    count, labels = cv2.connectedComponents(inverse)
+    touching = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]])))
+    holes = ~np.isin(labels, list(touching)) & ~mask
+    return mask | holes
+
+
+def find_parts(colors, min_area, only=None, min_saturation=None, close=7):
     """Masks of all clearly coloured parts in the colour render, with their colour names."""
     hsv = cv2.cvtColor(colors, cv2.COLOR_RGB2HSV).astype(int)
     hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
@@ -76,14 +87,17 @@ def find_parts(colors, min_area):
     nearest = distance.argmin(0)
     parts = []
     for i, name in enumerate(names):
-        colored = (saturation >= MIN_SATURATION.get(name, DEFAULT_MIN_SATURATION)) & (value > 50)
+        if only and name not in only:
+            continue
+        limit = min_saturation if min_saturation is not None else MIN_SATURATION.get(name, DEFAULT_MIN_SATURATION)
+        colored = (saturation >= limit) & (value > 50)
         mask = colored & (nearest == i) & (distance[i] <= MAX_HUE_DISTANCE)
-        mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+        mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((close, close), np.uint8))
         count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
         pieces = [j for j in range(1, count) if stats[j, cv2.CC_STAT_AREA] >= min_area]
         pieces.sort(key=lambda j: stats[j, cv2.CC_STAT_LEFT] + stats[j, cv2.CC_STAT_WIDTH] / 2)
         for n, j in enumerate(pieces, start=1):
-            parts.append((f"{name}-{n}", labels == j))
+            parts.append((f"{name}-{n}", fill_holes(labels == j)))
     return parts
 
 
@@ -94,6 +108,12 @@ def main():
     parser.add_argument("--out", help="folder for the cut-outs (default: <picture folder>/parts)")
     parser.add_argument("--min-size", type=float, default=0.005,
                         help="smallest part, as a fraction of the figure's area (default 0.005)")
+    parser.add_argument("--only", nargs="+", choices=list(HUES), help="cut only parts of these colours")
+    parser.add_argument("--close", type=int, default=7,
+                        help="close gaps up to this many pixels inside a part (default 7; e.g. 25 for hair)")
+    parser.add_argument("--min-saturation", type=int,
+                        help=f"0..255, how colourful a pixel must be to count (default {DEFAULT_MIN_SATURATION}; "
+                             f"lower it for parts with a natural, less saturated colour)")
     args = parser.parse_args()
     out = args.out or os.path.join(os.path.dirname(args.picture), "parts")
     os.makedirs(out, exist_ok=True)
@@ -109,7 +129,7 @@ def main():
     print(f"2. The colour render is shifted by ({dx:+.0f}, {dy:+.0f}) pixels against the picture")
 
     print("3. Finding the parts...")
-    parts = find_parts(colors, args.min_size * picture_mask.sum())
+    parts = find_parts(colors, args.min_size * picture_mask.sum(), args.only, args.min_saturation, args.close)
     gray = cv2.GaussianBlur(cv2.cvtColor(picture, cv2.COLOR_RGB2GRAY), (0, 0), 1.5)
     edges = cv2.dilate(cv2.Canny(gray, 30, 90), np.ones((3, 3), np.uint8)) > 0
 

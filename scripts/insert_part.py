@@ -161,7 +161,16 @@ def main():
 
     print("1. Finding the camera of the full model...")
     full_mask = object_masks([picture])[0]
-    full_cam, _ = fit_camera(ctx, full.verts, full.faces, full.uvs_tex, full.texture, picture, full_mask)
+    # The parts are replaced anyway, and the full model's own version of them is often what went
+    # wrong (e.g. hair that fell apart), so their outlines must not steer the full model's camera.
+    replaced = np.zeros((height, width), bool)
+    for _, cutout_path in args.part:
+        cutout = Image.open(cutout_path).convert("RGBA")
+        x0, y0 = locate(cutout, picture)
+        replaced[y0:y0 + cutout.size[1], x0:x0 + cutout.size[0]] |= np.asarray(cutout)[..., 3] > 127
+    replaced = cv2.dilate(replaced.astype(np.uint8), np.ones((15, 15), np.uint8)) > 0
+    full_cam, _ = fit_camera(ctx, full.verts, full.faces, full.uvs_tex, full.texture, picture, full_mask,
+                             ignore=replaced)
 
     scale = VIEW_SIZE / max(width, height)
     vw, vh = round(width * scale / 8) * 8, round(height * scale / 8) * 8

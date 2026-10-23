@@ -125,10 +125,17 @@ def object_masks(pictures):
 
 # ---------- step 2: find the camera ----------
 
-def fit_camera(ctx, verts, faces, uvs, texture, picture, mask):
+def fit_camera(ctx, verts, faces, uvs, texture, picture, mask, ignore=None):
+    """Camera that shows the model like the picture. `ignore` (optional, picture-sized bool array)
+    marks areas whose outline must not steer the camera, e.g. a part that will be replaced."""
     scale = FIT_SIZE / max(picture.size)
     width, height = (round(s * scale / 8) * 8 for s in picture.size)
     target = torch.tensor(cv2.resize(mask, (width, height), interpolation=cv2.INTER_AREA), device=DEVICE)
+    valid = torch.ones_like(target, dtype=torch.bool)
+    if ignore is not None:
+        small = cv2.resize(ignore.astype(np.float32), (width, height), interpolation=cv2.INTER_AREA)
+        valid = torch.tensor(small < 0.5, device=DEVICE)
+    overlap = lambda sil: (((sil > 0.5) & (target > 0.5) & valid).sum() / (((sil > 0.5) | (target > 0.5)) & valid).sum())
     colors = torch.tensor(np.asarray(picture.convert("RGB").resize((width, height), Image.LANCZOS)),
                           device=DEVICE, dtype=torch.float32) / 255
     box_t = bbox(target)
@@ -151,21 +158,22 @@ def fit_camera(ctx, verts, faces, uvs, texture, picture, mask):
             cam["cx"] = torch.tensor((px + tx - (px + s * (sx - px))) / width, device=DEVICE)
             cam["cy"] = torch.tensor((py + ty - (py + s * (sy - py))) / height, device=DEVICE)
             sil = render_silhouette(ctx, verts, faces, cam, width, height)
-            iou = ((sil > 0.5) & (target > 0.5)).sum() / ((sil > 0.5) | (target > 0.5)).sum()
-            candidates.append((iou.item(), cam))
+            candidates.append((overlap(sil).item(), cam))
 
-    # b) outlines of the front and the back are mirror images, so the colours decide among the best
+    # b) outlines alone can mislead (front and back are mirror images; a bust cut off by the picture
+    #    edge fits a camera from below about as well as one from the front), so the colours decide
+    #    among all directions whose outline is nearly as good as the best one
     candidates.sort(key=lambda c: -c[0])
     best_iou = candidates[0][0]
     fg = target > 0.5
     scored = []
-    for iou, cam in candidates[:12]:
-        if iou < best_iou - 0.05:
+    for iou, cam in candidates[:40]:
+        if iou < best_iou - 0.15:
             break
         rendered, covered = render_texture(ctx, verts, faces, uvs, texture, cam, width, height)
-        both = fg & covered
+        both = fg & covered & valid
         error = (rendered[both] - colors[both]).abs().mean().item() if both.any() else 1.0
-        scored.append((error, iou, cam))
+        scored.append((error + 0.5 * (best_iou - iou), iou, cam))
     error, iou, cam = min(scored, key=lambda c: c[0])
     print(f"    best start: yaw {math.degrees(cam['yaw']):.0f}°, pitch {math.degrees(cam['pitch']):.0f}°, "
           f"outline overlap {iou:.0%}")
@@ -180,15 +188,15 @@ def fit_camera(ctx, verts, faces, uvs, texture, picture, mask):
     blur = lambda m: F.avg_pool2d(m[None, None], 9, stride=1, padding=4)[0, 0]
     for _ in range(300):
         sil = render_silhouette(ctx, verts, faces, {"center": center, **params}, width, height)
-        loss = F.mse_loss(sil, target) + F.mse_loss(blur(sil), blur(target))
+        sil, goal = sil * valid, target * valid
+        loss = F.mse_loss(sil, goal) + F.mse_loss(blur(sil), blur(goal))
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
     cam = {"center": center, **{k: v.detach() for k, v in params.items()}}
-    sil = render_silhouette(ctx, verts, faces, cam, width, height)
-    iou = ((sil > 0.5) & (target > 0.5)).sum() / ((sil > 0.5) | (target > 0.5)).sum()
-    print(f"    after fine-tuning: outline overlap {iou.item():.0%}")
-    return cam, iou.item()
+    iou = overlap(render_silhouette(ctx, verts, faces, cam, width, height)).item()
+    print(f"    after fine-tuning: outline overlap {iou:.0%}")
+    return cam, iou
 
 
 # ---------- step 3: take the colours ----------
