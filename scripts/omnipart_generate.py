@@ -36,12 +36,13 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--steps", type=int, default=25, help="sampling steps for the parts (OmniPart default 25)")
     parser.add_argument("--guidance", type=float, default=7.5, help="how strictly the parts follow the picture")
-    parser.add_argument("--simplify", type=float, default=0.3, help="mesh simplification ratio (OmniPart default 0.3)")
+    parser.add_argument("--simplify", type=float, default=0.3, help="share of faces to REMOVE when simplifying (OmniPart default 0.3; 0 keeps all)")
     parser.add_argument("--textured", action="store_true", help="also bake textures (slower)")
+    parser.add_argument("--tag", default="", help="added to the output folder name, to keep several runs")
     args = parser.parse_args()
 
     image_path, mask_path = os.path.abspath(args.image), os.path.abspath(args.mask)
-    name = os.path.splitext(os.path.basename(image_path))[0]
+    name = os.path.splitext(os.path.basename(image_path))[0] + (f"_{args.tag}" if args.tag else "")
     out = os.path.join(PROJECT_DIR, "outputs", "omnipart", name)
     os.makedirs(out, exist_ok=True)
 
