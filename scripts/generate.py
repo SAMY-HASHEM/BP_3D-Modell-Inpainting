@@ -115,10 +115,11 @@ def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=No
     return mesh, time.time() - start
 
 
-def save_glb(mesh, resolution, glb_path):
+def save_glb(mesh, resolution, glb_path, remesh=None):
     # Remeshing rebuilds the mesh from the full voxel grid. At 1536 that gives ~51M faces,
     # which runs out of memory, so there we simplify the generated mesh directly instead.
-    remesh = resolution != "1536"
+    if remesh is None:
+        remesh = resolution != "1536"
     mesh.simplify(16777216 if remesh else 4_000_000)
     torch.cuda.empty_cache()
     glb = o_voxel.postprocess.to_glb(
