@@ -158,8 +158,9 @@ class KeepKnown:
     """While active, every sampler step resets the known part to the known latent, noised for that step:
     x_t = (1 - t) x_0 + (sigma_min + (1 - sigma_min) t) noise, TRELLIS.2's flow."""
 
-    def __init__(self, sampler, known, x0, noise):
-        self.sampler, self.known, self.x0, self.noise = sampler, known, x0, noise
+    def __init__(self, sampler, known, x0, noise, on_step=None):
+        self.sampler, self.known, self.x0, self.noise, self.on_step = sampler, known, x0, noise, on_step
+        self.step = 0
 
     def blend(self, x, t):
         noisy = (1 - t) * self.x0 + (self.sampler.sigma_min + (1 - self.sampler.sigma_min) * t) * self.noise
@@ -174,6 +175,9 @@ class KeepKnown:
                 out.pred_x_prev = out.pred_x_prev.replace(self.blend(out.pred_x_prev.feats, t_prev))
             else:
                 out.pred_x_prev = self.blend(out.pred_x_prev, t_prev)
+            self.step += 1
+            if self.on_step:
+                self.on_step(self.step)
             return out
 
         self.sampler.sample_once = sample_once
@@ -203,26 +207,22 @@ def normalization(stats, device):
 
 # ---------------------------------------------------------------- main
 
-def main():
-    parser = argparse.ArgumentParser(description="Regenerate one area of a 3D model with TRELLIS.2 (3D inpainting)")
-    parser.add_argument("model", help="the model to change (.glb with one textured mesh)")
-    parser.add_argument("picture", help="picture that guides the new area (usually the model's own picture)")
-    parser.add_argument("--select", help="mesh of the faces to regenerate, in the model's coordinates")
-    parser.add_argument("--box", type=float, nargs=6, metavar=("X0", "Y0", "Z0", "X1", "Y1", "Z1"),
-                        help="regenerate everything inside this box (model coordinates)")
-    parser.add_argument("--grow", type=int, default=2, help="grow the mask by this many voxels of 64 (default 2)")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--steps", type=int, default=generate.DEFAULT_STEPS)
-    parser.add_argument("--out", help="output file (default: <model>_inpaint_seed<N>.glb)")
-    args = parser.parse_args()
-    start = time.time()
+def box_points(box, size):
+    """Points filling a box (two corners), dense enough for the 64^3 mask of a model of this size."""
+    low, high = np.minimum(box[:3], box[3:]), np.maximum(box[:3], box[3:])
+    axes = [np.linspace(low[i], high[i], max(2, int((high[i] - low[i]) / size * GRID * 2))) for i in range(3)]
+    return np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
 
-    pipeline = generate.load_pipeline()
+
+def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print):
+    """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
+    `report` gets a short text for every stage and step."""
+    start = time.time()
     device = pipeline.device
-    mesh = load_model(args.model)
+    mesh = load_model(model_path)
     place = Placement(mesh.vertices)
     vertices = place.to_cube(mesh.vertices)
-    print(f"1. Reading the model into TRELLIS.2 ({len(mesh.faces):,} faces)...")
+    report(f"1/6 Reading the model into TRELLIS.2 ({len(mesh.faces):,} faces)")
     with torch.no_grad():
         encoder = models.from_pretrained(SHAPE_ENCODER).cuda().eval()
         shape_known = encode_shape(encoder, vertices, np.asarray(mesh.faces))
@@ -237,32 +237,26 @@ def main():
     torch.cuda.empty_cache()
     print(f"    {len(shape_known.coords):,} shape voxels, {len(tex_known.coords):,} colour voxels")
 
-    print("2. Mask...")
-    points = np.zeros((0, 3))
-    if args.select:
-        selected = trimesh.load(args.select, force="mesh")
-        points = np.concatenate([selected.vertices, trimesh.sample.sample_surface(selected, 200000, seed=0)[0]])
-    if args.box:
-        low, high = np.minimum(args.box[:3], args.box[3:]), np.maximum(args.box[:3], args.box[3:])
-        axes = [np.linspace(low[i], high[i], max(2, int((high[i] - low[i]) * place.scale * GRID * 2))) for i in range(3)]
-        points = np.concatenate([points, np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)])
-    mask = voxel_mask(place.to_cube(points) if len(points) else points, args.grow if len(points) else 0)
-    print(f"    {int(mask.sum()):,} of {GRID ** 3:,} voxels will be regenerated")
+    points = np.asarray(points, float).reshape(-1, 3)
+    mask = voxel_mask(place.to_cube(points) if len(points) else points, grow if len(points) else 0)
+    report(f"2/6 Mask: {int(mask.sum()):,} of {GRID ** 3:,} voxels will be regenerated")
 
-    image = generate.prepare_image(pipeline, args.picture, "inpaint")
-    torch.manual_seed(args.seed)
+    image = generate.prepare_image(pipeline, picture_path, "inpaint")
+    torch.manual_seed(seed)
     with torch.no_grad():
         cond_512 = pipeline.get_cond([image], 512)
         cond_1024 = pipeline.get_cond([image], 1024)
 
-        print("3. Structure...")
+        stage = "3/6 Structure"
+        report(stage)
+        progress = lambda i: report(f"{stage}: step {i}/{steps}")
         flow = pipeline.models["sparse_structure_flow_model"]
         noise = torch.randn(1, flow.in_channels, flow.resolution, flow.resolution, flow.resolution, device=device)
         cell = GRID // flow.resolution
         cell_mask = F.max_pool3d(mask[None, None].float(), cell, cell)[0, 0] > 0
-        with KeepKnown(pipeline.sparse_structure_sampler, ~cell_mask[None, None], ss_known, noise), OnGpu(flow):
+        with KeepKnown(pipeline.sparse_structure_sampler, ~cell_mask[None, None], ss_known, noise, progress), OnGpu(flow):
             z = pipeline.sparse_structure_sampler.sample(
-                flow, noise, **cond_512, **{**pipeline.sparse_structure_sampler_params, "steps": args.steps},
+                flow, noise, **cond_512, **{**pipeline.sparse_structure_sampler_params, "steps": steps},
                 verbose=True, tqdm_desc="Sampling sparse structure").samples
         with OnGpu(pipeline.models["sparse_structure_decoder"]) as decoder:
             new_occupied = decoder(z)[0, 0] > 0
@@ -272,42 +266,72 @@ def main():
         inside = mask[coords[:, 1].long(), coords[:, 2].long(), coords[:, 3].long()]
         print(f"    {len(coords):,} voxels, {int(inside.sum()):,} of them new or regenerated")
 
-        print("4. Shape...")
+        stage = "4/6 Shape"
+        report(stage)
         mean, std = normalization(pipeline.shape_slat_normalization, device)
         flow = pipeline.models["shape_slat_flow_model_1024"]
         x0, found = lookup(coords, shape_known.coords, (shape_known.feats.float() - mean) / std)
         noise = SparseTensor(feats=torch.randn(len(coords), flow.in_channels, device=device), coords=coords)
-        with KeepKnown(pipeline.shape_slat_sampler, (found & ~inside)[:, None], x0, noise.feats), OnGpu(flow):
+        with KeepKnown(pipeline.shape_slat_sampler, (found & ~inside)[:, None], x0, noise.feats, progress), OnGpu(flow):
             shape = pipeline.shape_slat_sampler.sample(
-                flow, noise, **cond_1024, **{**pipeline.shape_slat_sampler_params, "steps": args.steps},
+                flow, noise, **cond_1024, **{**pipeline.shape_slat_sampler_params, "steps": steps},
                 verbose=True, tqdm_desc="Sampling shape SLat").samples
         shape_norm = shape
         shape = shape * std + mean
 
-        print("5. Colours...")
+        stage = "5/6 Colours"
+        report(stage)
         tmean, tstd = normalization(pipeline.tex_slat_normalization, device)
         flow = pipeline.models["tex_slat_flow_model_1024"]
         x0, found = lookup(coords, tex_known.coords, (tex_known.feats.float() - tmean) / tstd)
         noise = shape_norm.replace(torch.randn(len(coords), flow.in_channels - shape_norm.feats.shape[1], device=device))
-        with KeepKnown(pipeline.tex_slat_sampler, (found & ~inside)[:, None], x0, noise.feats), OnGpu(flow):
+        with KeepKnown(pipeline.tex_slat_sampler, (found & ~inside)[:, None], x0, noise.feats, progress), OnGpu(flow):
             tex = pipeline.tex_slat_sampler.sample(
-                flow, noise, concat_cond=shape_norm, **cond_1024, **{**pipeline.tex_slat_sampler_params, "steps": args.steps},
+                flow, noise, concat_cond=shape_norm, **cond_1024, **{**pipeline.tex_slat_sampler_params, "steps": steps},
                 verbose=True, tqdm_desc="Sampling texture SLat").samples
         tex = tex * tstd + tmean
 
-        print("6. Decoding and saving...")
+        report("6/6 Decoding and saving (takes a few minutes)")
         result = pipeline.decode_latent(shape, tex, RESOLUTION)[0]
     # the export needs most of the GPU: drop everything else first
     del shape, tex, shape_norm, x0, noise, z, shape_known, tex_known, ss_known, cond_512, cond_1024
     gc.collect()
     torch.cuda.empty_cache()
     print(f"    {len(result.faces):,} faces; GPU memory still in use: {torch.cuda.memory_allocated() / 2**30:.1f} GB")
-    out = args.out or os.path.splitext(args.model)[0] + f"_inpaint_seed{args.seed}.glb"
     generate.save_glb(result, str(RESOLUTION), out, remesh=False)  # remeshing ~24M faces runs out of memory
+    del result
+    torch.cuda.empty_cache()
     scene = trimesh.load(out)
     scene.apply_transform(place.from_cube_matrix())
     scene.export(out, extension_webp=True)
-    print(f"Done in {time.time() - start:.0f} s: {out}")
+    report(f"Done in {time.time() - start:.0f} s")
+    return out
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Regenerate one area of a 3D model with TRELLIS.2 (3D inpainting)")
+    parser.add_argument("model", help="the model to change (.glb with one textured mesh)")
+    parser.add_argument("picture", help="picture that guides the new area (usually the model's own picture)")
+    parser.add_argument("--select", help="mesh of the faces to regenerate, in the model's coordinates")
+    parser.add_argument("--box", type=float, nargs=6, metavar=("X0", "Y0", "Z0", "X1", "Y1", "Z1"),
+                        help="regenerate everything inside this box (model coordinates)")
+    parser.add_argument("--grow", type=int, default=2, help="grow the mask by this many voxels of 64 (default 2)")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--steps", type=int, default=generate.DEFAULT_STEPS)
+    parser.add_argument("--out", help="output file (default: <model>_inpaint_seed<N>.glb)")
+    args = parser.parse_args()
+
+    pipeline = generate.load_pipeline()
+    points = [np.zeros((0, 3))]
+    if args.select:
+        selected = trimesh.load(args.select, force="mesh")
+        points += [selected.vertices, trimesh.sample.sample_surface(selected, 200000, seed=0)[0]]
+    if args.box:
+        size = np.ptp(load_model(args.model).vertices, 0).max()
+        points.append(box_points(np.array(args.box), size))
+    out = args.out or os.path.splitext(args.model)[0] + f"_inpaint_seed{args.seed}.glb"
+    inpaint(pipeline, args.model, args.picture, np.concatenate(points), out, args.grow, args.seed, args.steps)
+    print(out)
 
 
 if __name__ == "__main__":
