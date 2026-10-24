@@ -44,12 +44,17 @@ def load(path):
 
 
 def render(ctx, meshes, yaw, size, by_part):
+    return render_view(ctx, meshes, yaw, 10, size, by_part)[0]
+
+
+def render_view(ctx, meshes, yaw, pitch, size, by_part=False, background=0.25):
+    """One view (angles in degrees): the picture (uint8), where the model covers it, and the camera."""
     verts_all = np.concatenate([m[0] for m in meshes])
     center = torch.tensor((verts_all.min(0) + verts_all.max(0)) / 2, device=DEVICE, dtype=torch.float32)
     radius = float(np.linalg.norm(np.ptp(verts_all, 0)) / 2)
-    cam = make_camera(center, radius, math.radians(yaw), math.radians(10), focal=2.2)
+    cam = make_camera(center, radius, math.radians(yaw), math.radians(pitch), focal=2.2)
     light = F.normalize(torch.tensor([0.4, 0.6, 1.0], device=DEVICE), dim=0)
-    image = torch.full((size, size, 3), 0.25, device=DEVICE)
+    image = torch.full((size, size, 3), background, device=DEVICE)
     best = torch.full((size, size), float("inf"), device=DEVICE)
     for k, (v, f, uv, texture, colors) in enumerate(meshes):
         verts = torch.tensor(v, device=DEVICE, dtype=torch.float32)
@@ -74,7 +79,8 @@ def render(ctx, meshes, yaw, size, by_part):
         nearer = z < best
         image = torch.where(nearer[..., None], color * shade[..., None], image)
         best = torch.where(nearer, z, best)
-    return (image.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+    picture = (image.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+    return picture, torch.isfinite(best).cpu().numpy(), cam
 
 
 def main():
