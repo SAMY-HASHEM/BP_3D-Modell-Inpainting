@@ -10,17 +10,20 @@ Usage (TRELLIS.2 environment):
     python scripts/replace_part.py outputs/yeonhee_parts18.glb pictures/yeonhee/parts-front-clean.png \\
         --with outputs/head_1536_seed42.glb pictures/yeonhee/head.png
 
-The region to replace is what the cut-out covers in the picture, front and back, in whichever parts
-it lies. Writes <model>_<new part name>.glb (the rest unchanged, the new part under the cut-out's name).
+The region is what the cut-out covers in the picture (front and back, in whichever parts it lies); of
+it, only old surfaces close to the fitted new part are removed. If the new part was cut from another
+picture (e.g. a closer shot), --region gives a cut-out from the model's own picture for the region.
+Writes <model>_<new part name>.glb (the rest unchanged, the new part under the cut-out's name).
 
 Steps:
     1. find the camera of the whole model in the picture, ignoring the region that gets replaced
     2. place the new part roughly with its own camera in the cut-out (as insert_part.py does)
     3. fine-align it onto the old region with ICP (scale, rotation, shift), so it sits exactly there
-    4. match its colours to the old region's (the part alone often comes out in other colours)
-    5. drop the old region's faces from every part, add the new part; everything else is untouched
+    4. remove the old surfaces close to the new part (its old version); farther ones stay (neck, throne)
+    5. match its colours to the removed old surfaces' colours, add the new part; the rest is untouched
 """
 import argparse
+import math
 import os
 
 import cv2
@@ -32,7 +35,9 @@ from PIL import Image
 
 from insert_part import crop_camera_to_picture, locate, similarity
 from project_texture import fit_camera, load_meshes, object_masks, to_camera, to_pixels
-from transfer_parts import icp, similarity_fit
+from scipy.spatial import cKDTree
+
+from transfer_parts import icp, rough_align, similarity_fit
 
 
 class Part:
@@ -73,14 +78,16 @@ def match_colors(geometry, reference):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Replace one region of a part-split model with a new part")
-    parser.add_argument("model", help="model split into parts (transfer_parts.py output), or any model")
+    parser = argparse.ArgumentParser(description="Replace one region of a model with a newly generated part")
+    parser.add_argument("model", help="model to change (one mesh, or split into parts by transfer_parts.py)")
     parser.add_argument("picture", help="the picture the model was generated from")
     parser.add_argument("--with", dest="new", nargs=2, required=True, metavar=("MODEL", "CUTOUT"),
                         help="the new part's model and the RGBA cut-out it was generated from")
-    parser.add_argument("--overlap", type=float, default=0.12,
-                        help="how far (share of the new part's height) the old model reaches up into the "
-                             "new part's lower end, so no gap opens (default 0.12)")
+    parser.add_argument("--region", help="RGBA cut-out from the model's picture marking the region to replace; "
+                                         "needed when the new part was cut from another picture")
+    parser.add_argument("--near", type=float, default=0.05,
+                        help="old surfaces closer than this share of the new part's size to it are removed "
+                             "(default 0.05); farther ones stay, e.g. the neck below a new head")
     parser.add_argument("--keep-colors", action="store_true",
                         help="keep the new part's own colours (default: match them to the old region's)")
     args = parser.parse_args()
@@ -90,11 +97,11 @@ def main():
     names = [scene.graph[node][1] for node in scene.graph.nodes_geometry]
     picture = Image.open(args.picture)
     width, height = picture.size
-    cutout = Image.open(args.new[1]).convert("RGBA")
-    x0, y0 = locate(cutout, picture)
-    alpha = np.asarray(cutout)[..., 3].astype(np.float32) / 255
+    region_cutout = Image.open(args.region or args.new[1]).convert("RGBA")
+    x0, y0 = locate(region_cutout, picture)
+    region_alpha = np.asarray(region_cutout)[..., 3].astype(np.float32) / 255
     region = np.zeros((height, width), np.uint8)
-    region[y0:y0 + alpha.shape[0], x0:x0 + alpha.shape[1]] = alpha > 0.5
+    region[y0:y0 + region_alpha.shape[0], x0:x0 + region_alpha.shape[1]] = region_alpha > 0.5
     grow = max(3, int(0.01 * max(width, height)))
     region = cv2.dilate(region, np.ones((grow, grow), np.uint8)) > 0
 
@@ -102,52 +109,58 @@ def main():
     mask = object_masks([picture])[0]
     full_cam, _ = fit_camera(ctx, meshes, picture, mask, ignore=region)
 
-    # The old region: every face of every part that the picture shows inside the cut-out, front and
-    # back (a part's own boundaries rarely match the cut-out, e.g. a "head" part with only the hair).
-    old_faces = []
-    for name, m in zip(names, meshes):
+    # The old region: every face of every part that the picture shows inside the region, front and back
+    in_region = []
+    for m in meshes:
         centers = m.verts[m.faces.long()].mean(1)
         u, v, _ = to_pixels(to_camera(centers, full_cam), full_cam, width, height)
         u = u.long().clamp(0, width - 1).cpu().numpy()
         v = v.long().clamp(0, height - 1).cpu().numpy()
-        old_faces.append(np.nonzero(region[v, u])[0])
-    total = sum(len(f) for f in old_faces)
-    print(f"    the region covers {total:,} faces in {sum(len(f) > 0 for f in old_faces)} parts")
-    old_points = np.concatenate([m.verts[m.faces.long()[f]].mean(1).cpu().numpy() for m, f in zip(meshes, old_faces) if len(f)])
+        in_region.append(np.nonzero(region[v, u])[0])
+    centers = [m.verts[m.faces.long()].mean(1).cpu().numpy() for m in meshes]
+    old_points = np.concatenate([c[f] for c, f in zip(centers, in_region) if len(f)])
+    print(f"    the region covers {len(old_points):,} faces")
 
-    print("2. Rough placement of the new part from its own camera...")
     new = Part(args.new[0])
-    crop_cam, _ = fit_camera(ctx, [new], cutout, alpha)
-    part_cam = crop_camera_to_picture(crop_cam, cutout.size, (x0, y0), picture.size)
-    placed = similarity(part_cam, full_cam, picture.size)(new.verts).cpu().numpy()
-    placed = placed + (old_points.mean(0) - placed.mean(0))  # depth: centre on the old region
+    target = old_points[np.random.default_rng(0).choice(len(old_points), min(20000, len(old_points)), replace=False)]
+    if args.region is None:
+        print("2. Rough placement of the new part from its own camera...")
+        cutout = Image.open(args.new[1]).convert("RGBA")
+        alpha = np.asarray(cutout)[..., 3].astype(np.float32) / 255
+        crop_cam, _ = fit_camera(ctx, [new], cutout, alpha)
+        part_cam = crop_camera_to_picture(crop_cam, cutout.size, (x0, y0), picture.size)
+        placed = similarity(part_cam, full_cam, picture.size)(new.verts).cpu().numpy()
+        starts = [placed + (old_points.mean(0) - placed.mean(0))]  # depth: centre on the old region
+    else:
+        # cut from another picture: no shared camera, so start from the region's centre and height,
+        # turned to each of 4 directions, and let ICP pick the best fit
+        print("2. Rough placement of the new part by size, from 4 directions...")
+        verts = new.verts.cpu().numpy()
+        starts = [rough_align(verts, old_points, math.radians(yaw)) for yaw in (0, 90, 180, 270)]
 
     print("3. Fine alignment onto the old region (ICP)...")
-    new_mesh = trimesh.Trimesh(placed, new.mesh.geometry.faces, process=False)
-    source, _ = trimesh.sample.sample_surface(new_mesh, 20000, seed=1)
-    target = old_points[np.random.default_rng(0).choice(len(old_points), min(20000, len(old_points)), replace=False)]
-    moved, error = icp(source, target)
-    scale, rotation, shift = similarity_fit(source, moved)
-    final = scale * new_mesh.vertices @ rotation.T + shift
+    best = None
+    for start in starts:
+        source, _ = trimesh.sample.sample_surface(trimesh.Trimesh(start, new.mesh.geometry.faces, process=False), 20000, seed=1)
+        moved, error = icp(source, target)
+        if best is None or error < best[0]:
+            scale, rotation, shift = similarity_fit(source, moved)
+            best = (error, scale * start @ rotation.T + shift)
+    error, final = best
     print(f"    remaining mean distance to the old region: {error / np.linalg.norm(np.ptp(target, 0)):.1%} of its size")
 
     piece = new.mesh.geometry.copy()
     piece.vertices = final
-    # keep the old model below the new part's lower end (e.g. the neck under a new head), reaching a
-    # bit into it (--overlap), so no gap opens where the new part ends
-    # The lowest point is measured near the part's vertical middle line: for a head that is the end
-    # of the neck, not the tips of hair hanging down at the sides.
-    up = 1  # glTF: +Y is up
-    middle = np.median(final[:, [0, 2]], axis=0)
-    width = np.ptp(final[:, [0, 2]], axis=0).max()
-    central = np.linalg.norm(final[:, [0, 2]] - middle, axis=1) < 0.2 * width
-    lowest = final[central, up].min() + args.overlap * np.ptp(final[:, up])
-    for k, (m, faces) in enumerate(zip(meshes, old_faces)):
-        if len(faces):
-            heights = m.verts[m.faces.long()[faces]].mean(1)[:, up].cpu().numpy()
-            old_faces[k] = faces[heights >= lowest]
+    # Remove only old surfaces lying close to the new part: the old version of the part itself. Things
+    # farther away stay, like the neck below a new head or a throne behind it.
+    surface, _ = trimesh.sample.sample_surface(trimesh.Trimesh(final, piece.faces, process=False), 300000, seed=2)
+    tree = cKDTree(surface)
+    limit = args.near * np.linalg.norm(np.ptp(final, 0))
+    old_faces = []
+    for c, f in zip(centers, in_region):
+        old_faces.append(f[tree.query(c[f])[0] < limit] if len(f) else f)
     total = sum(len(f) for f in old_faces)
-    if not args.keep_colors:
+    if not args.keep_colors and total:
         reference = np.concatenate([face_colors(scene.geometry[n], f) for n, f in zip(names, old_faces) if len(f)])
         match_colors(piece, reference)
 

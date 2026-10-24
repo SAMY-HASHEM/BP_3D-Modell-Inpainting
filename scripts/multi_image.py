@@ -4,6 +4,8 @@ Usage:
     source activate.sh
     python scripts/multi_image.py pictures/front.png pictures/back.png
     python scripts/multi_image.py pictures/front.png pictures/back.png --mode stochastic --resolution 1536
+    # colour pictures for everything, a grey clay render only for structure and shape:
+    python scripts/multi_image.py pictures/m40.jpg pictures/m41.jpg --shape-only pictures/m44_clay.jpg
 
 TRELLIS.2 was trained with one picture only. This is the training-free trick from TRELLIS v1
 (run_multi_image), moved to TRELLIS.2: every sampling step looks at the pictures through the same,
@@ -36,10 +38,11 @@ class MultiImageFlowModel(nn.Module):
     all n pictures (one row each), so we split it and combine the n answers into one.
     """
 
-    def __init__(self, model, mode):
+    def __init__(self, model, mode, rows=None):
         super().__init__()
         self.model = model
         self.mode = mode
+        self.rows = rows  # which pictures this model looks at (None: all)
         self.step = -1
         self.last_t = None
 
@@ -56,6 +59,9 @@ class MultiImageFlowModel(nn.Module):
         # picture, so one call is enough.
         if not cond.any():
             return self.model(x_t, t, cond[:1], **kwargs)
+        if self.rows is not None:
+            cond = cond[self.rows]
+            num_images = cond.shape[0]
 
         if self.mode == "multidiffusion":
             preds = [self.model(x_t, t, cond[i:i + 1], **kwargs) for i in range(num_images)]
@@ -74,8 +80,10 @@ class MultiImageFlowModel(nn.Module):
 
 
 @contextmanager
-def multi_image_mode(pipeline, images, mode):
-    """Inside this block, pipeline.run() uses all `images` instead of the one picture it gets."""
+def multi_image_mode(pipeline, images, mode, texture_count=None):
+    """Inside this block, pipeline.run() uses all `images` instead of the one picture it gets.
+    With texture_count, the texture stage only looks at the first texture_count pictures (the others
+    help with structure and shape only, e.g. grey clay renders)."""
     original_get_cond = pipeline.get_cond
     original_models = dict(pipeline.models)
 
@@ -86,7 +94,8 @@ def multi_image_mode(pipeline, images, mode):
     pipeline.get_cond = get_cond_for_all_images
     for name, model in original_models.items():
         if "flow_model" in name:
-            pipeline.models[name] = MultiImageFlowModel(model, mode)
+            rows = list(range(texture_count)) if texture_count and name.startswith("tex_") else None
+            pipeline.models[name] = MultiImageFlowModel(model, mode, rows)
     try:
         yield
     finally:
@@ -95,14 +104,14 @@ def multi_image_mode(pipeline, images, mode):
         pipeline.models.update(original_models)
 
 
-def generate_multi_image(pipeline, images, resolution, seed, mode, steps=DEFAULT_STEPS):
+def generate_multi_image(pipeline, images, resolution, seed, mode, steps=DEFAULT_STEPS, texture_count=None):
     """Like generate() in generate.py, but with several (already background-removed) pictures."""
     if mode == "stochastic" and len(images) > steps:
         print(f"Warning: {len(images)} pictures but only {steps} steps, so some pictures are never used.")
     torch.cuda.empty_cache()
     start = time.time()
     sampler_params = {"steps": steps}
-    with multi_image_mode(pipeline, images, mode):
+    with multi_image_mode(pipeline, images, mode, texture_count):
         mesh = pipeline.run(
             images[0], seed=seed, preprocess_image=False, pipeline_type=PIPELINE_TYPES[resolution],
             sparse_structure_sampler_params=sampler_params,
@@ -119,6 +128,8 @@ def main():
     parser.add_argument("--resolution", choices=PIPELINE_TYPES.keys(), default="1024")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS, help="sampling steps per stage")
+    parser.add_argument("--shape-only", nargs="+", default=[],
+                        help="pictures used only for structure and shape, not for colours (e.g. clay renders)")
     args = parser.parse_args()
     if len(args.images) < 2:
         parser.error("give at least two pictures (for one picture, use generate.py)")
@@ -126,7 +137,11 @@ def main():
         if not os.path.isfile(path):
             parser.error(f"picture not found: {path}")
 
+    texture_count = len(args.images) if args.shape_only else None
     name = f"{picture_name(args.images[0])}_multi{len(args.images)}_{args.mode}_{args.resolution}_seed{args.seed}"
+    if args.shape_only:
+        name = name.replace(f"_multi{len(args.images)}_", f"_multi{len(args.images)}+{len(args.shape_only)}shape_")
+        args.images = args.images + args.shape_only
     if args.steps != DEFAULT_STEPS:
         name += f"_steps{args.steps}"
     pipeline = load_pipeline()
@@ -140,7 +155,8 @@ def main():
         images.append(image)
 
     print(f"Generating from {len(images)} pictures ({args.mode}) at {args.resolution} with {args.steps} steps...")
-    mesh, gen_time = generate_multi_image(pipeline, images, args.resolution, args.seed, args.mode, args.steps)
+    mesh, gen_time = generate_multi_image(pipeline, images, args.resolution, args.seed, args.mode, args.steps,
+                                          texture_count)
     print(f"    generated in {gen_time:.0f} s, {mesh.faces.shape[0]:,} faces")
 
     print("Saving as .glb...")
