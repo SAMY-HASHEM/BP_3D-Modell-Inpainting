@@ -13,6 +13,7 @@ Use:     3D view sidebar (N key) > Inpaint tab.
 import json
 import os
 import urllib.request
+import zipfile
 
 import bpy
 import numpy as np
@@ -21,7 +22,7 @@ from mathutils import Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -333,6 +334,62 @@ def load_result(job, path):
     status["message"] = f"done: {new[0].name if new else path}"
 
 
+class INPAINT_OT_save_job(bpy.types.Operator):
+    bl_idname = "inpaint.save_job"
+    bl_label = "Save job for server"
+    bl_description = ("Pack the model, the marked area, the Picture and the settings into one .zip, "
+                      "to run on the uni GPU server with scripts/run_job.py")
+
+    def execute(self, context):
+        settings = context.scene.inpaint
+        picture = bpy.path.abspath(settings.picture)
+        if not os.path.isfile(picture):
+            self.report({"ERROR"}, "Choose the picture first (or make one from a prompt)")
+            return {"CANCELLED"}
+        area = area_points(self, context)
+        if area is None:
+            return {"CANCELLED"}
+        model, points, _, _ = area
+        folder = bpy.path.abspath(settings.folder)
+        path = export_model(context, model, folder)
+        name = bpy.path.clean_name(model.name)
+        area_file = os.path.join(folder, f"{name}_area.npy")
+        np.save(area_file, points)
+        picture_name = "picture" + os.path.splitext(picture)[1].lower()
+        job = {"model": "model.glb", "points": "area.npy", "picture": picture_name, "object": model.name,
+               "seed": settings.seed, "grow": settings.grow, "steps": settings.steps}
+        out = os.path.join(folder, f"{name}_job.zip")
+        with zipfile.ZipFile(out, "w") as z:  # stored, not compressed: the model is compressed already
+            z.write(path, "model.glb")
+            z.write(area_file, "area.npy")
+            z.write(picture, picture_name)
+            z.writestr("job.json", json.dumps(job, indent=2))
+        status["message"] = f"job saved: {os.path.basename(out)}"
+        self.report({"INFO"}, f"Saved {out}: upload it to the server and run scripts/run_job.py")
+        return {"FINISHED"}
+
+
+class INPAINT_OT_load_result(bpy.types.Operator):
+    bl_idname = "inpaint.load_result"
+    bl_label = "Load result"
+    bl_description = "Load a result .glb (e.g. downloaded from the server) next to the hidden original"
+
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(default="*.glb", options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        self.filepath = bpy.path.abspath(context.scene.inpaint.folder)
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        model = target_model(context)
+        name = os.path.splitext(os.path.basename(self.filepath))[0]
+        seed = name.rsplit("_seed", 1)[1] if "_seed" in name else "server"
+        load_result({"object": model.name if model else name, "seed": seed}, self.filepath)
+        return {"FINISHED"}
+
+
 class INPAINT_OT_show_picture(bpy.types.Operator):
     bl_idname = "inpaint.show_picture"
     bl_label = "Show big"
@@ -406,10 +463,16 @@ class INPAINT_PT_panel(bpy.types.Panel):
         box.prop(settings, "steps")
         box.operator(INPAINT_OT_regenerate.bl_idname, text="2. Regenerate area", icon="PLAY")
 
+        box = layout.box()
+        box.label(text="D. Heavy work on the uni server", icon="NETWORK_DRIVE")
+        box.operator(INPAINT_OT_save_job.bl_idname, icon="PACKAGE")
+        box.operator(INPAINT_OT_load_result.bl_idname, icon="IMPORT")
+
         layout.prop(settings, "folder")
 
 
 classes = (InpaintSettings, INPAINT_OT_add_box, INPAINT_OT_make_picture, INPAINT_OT_regenerate,
+           INPAINT_OT_save_job, INPAINT_OT_load_result,
            INPAINT_OT_show_picture, INPAINT_OT_check, INPAINT_PT_panel)
 
 
