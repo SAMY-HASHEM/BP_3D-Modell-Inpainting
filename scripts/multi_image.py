@@ -105,19 +105,20 @@ def multi_image_mode(pipeline, images, mode, texture_count=None):
 
 
 def generate_multi_image(pipeline, images, resolution, seed, mode, steps=DEFAULT_STEPS, texture_count=None,
-                         max_tokens=None):
+                         max_tokens=None, guidance=None):
     """Like generate() in generate.py, but with several (already background-removed) pictures."""
     if mode == "stochastic" and len(images) > steps:
         print(f"Warning: {len(images)} pictures but only {steps} steps, so some pictures are never used.")
     torch.cuda.empty_cache()
     start = time.time()
     sampler_params = {"steps": steps}
+    shape_params = {**sampler_params, "guidance_strength": guidance} if guidance is not None else sampler_params
     extra = {"max_num_tokens": max_tokens} if max_tokens else {}  # see generate.generate()
     with multi_image_mode(pipeline, images, mode, texture_count):
         mesh = pipeline.run(
             images[0], seed=seed, preprocess_image=False, pipeline_type=PIPELINE_TYPES[resolution],
-            sparse_structure_sampler_params=sampler_params,
-            shape_slat_sampler_params=sampler_params,
+            sparse_structure_sampler_params=shape_params,
+            shape_slat_sampler_params=shape_params,
             tex_slat_sampler_params=sampler_params, **extra,
         )[0]
     return mesh, time.time() - start
@@ -137,6 +138,8 @@ def main():
                              "GPU memory: the resolution then drops a little instead")
     parser.add_argument("--faces", type=int, default=1_000_000,
                         help="faces in the saved model (default 1,000,000); more keeps finer detail, e.g. 4000000")
+    parser.add_argument("--guidance", type=float,
+                        help="how strictly the shape follows the pictures (TRELLIS.2 default 7.5)")
     args = parser.parse_args()
     if len(args.images) < 2:
         parser.error("give at least two pictures (for one picture, use generate.py)")
@@ -151,6 +154,8 @@ def main():
         args.images = args.images + args.shape_only
     if args.steps != DEFAULT_STEPS:
         name += f"_steps{args.steps}"
+    if args.guidance is not None:
+        name += f"_guidance{args.guidance:g}"
     if args.max_tokens:
         name += f"_tokens{args.max_tokens}"
     if args.faces != 1_000_000:
@@ -167,7 +172,7 @@ def main():
 
     print(f"Generating from {len(images)} pictures ({args.mode}) at {args.resolution} with {args.steps} steps...")
     mesh, gen_time = generate_multi_image(pipeline, images, args.resolution, args.seed, args.mode, args.steps,
-                                          texture_count, args.max_tokens)
+                                          texture_count, args.max_tokens, args.guidance)
     print(f"    generated in {gen_time:.0f} s, {mesh.faces.shape[0]:,} faces")
 
     print("Saving as .glb...")
