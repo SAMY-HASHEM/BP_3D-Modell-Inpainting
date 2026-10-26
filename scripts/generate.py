@@ -93,7 +93,8 @@ def prepare_image(pipeline, image_path, name):
     return image
 
 
-def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=None, texture_guidance=None):
+def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=None, texture_guidance=None,
+             max_tokens=None):
     """Returns the generated mesh and the generation time in seconds."""
     torch.cuda.empty_cache()
     start = time.time()
@@ -106,11 +107,14 @@ def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=No
     texture_params = {"steps": steps}
     if texture_guidance is not None:
         texture_params["guidance_strength"] = texture_guidance
+    # At 1024/1536, TRELLIS.2 lowers the resolution in steps of 128 until the fine stage has fewer
+    # pieces (tokens) than this; fewer tokens = less GPU memory when the model is decoded.
+    extra = {"max_num_tokens": max_tokens} if max_tokens else {}
     mesh = pipeline.run(
         image, seed=seed, preprocess_image=False, pipeline_type=PIPELINE_TYPES[resolution],
         sparse_structure_sampler_params=shape_params,
         shape_slat_sampler_params=shape_params,
-        tex_slat_sampler_params=texture_params,
+        tex_slat_sampler_params=texture_params, **extra,
     )[0]
     return mesh, time.time() - start
 
@@ -145,6 +149,9 @@ def main():
                         help="how strictly the shape follows the picture (TRELLIS.2 default 7.5; too high gives artifacts)")
     parser.add_argument("--texture-guidance", type=float,
                         help="how strictly the colours follow the picture (TRELLIS.2 default 1.0 = off; try 2-4)")
+    parser.add_argument("--max-tokens", type=int,
+                        help="limit for the fine stage (TRELLIS.2 default 49152); lower it when a big object runs "
+                             "out of GPU memory at 1536: the resolution then drops a little instead")
     args = parser.parse_args()
     for path in args.images:
         if not os.path.isfile(path):
@@ -183,13 +190,15 @@ def make_model(pipeline, path, resolution, args):
         name += f"_guidance{args.guidance:g}"
     if args.texture_guidance is not None:
         name += f"_texguidance{args.texture_guidance:g}"
+    if args.max_tokens:
+        name += f"_tokens{args.max_tokens}"
 
     print("Removing the background...")
     image = prepare_image(pipeline, path, name)
 
     print(f"Generating the 3D model at {resolution} with {args.steps} steps per stage...")
     mesh, gen_time = generate(pipeline, image, resolution, args.seed, args.steps,
-                              args.guidance, args.texture_guidance)
+                              args.guidance, args.texture_guidance, args.max_tokens)
     print(f"    generated in {gen_time:.0f} s, {mesh.faces.shape[0]:,} faces")
 
     print("Saving as .glb...")
