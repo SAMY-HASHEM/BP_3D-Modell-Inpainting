@@ -70,8 +70,23 @@ def fix_face_directions(mesh):
     faces = np.array(mesh.faces)
     faces[flip] = faces[flip][:, ::-1]
     mesh.faces = faces
+    mesh.vertex_normals = smooth_normals(mesh)  # changing the faces dropped them; without, Blender shades flat
     torch.cuda.empty_cache()
     return flip.mean()
+
+
+def smooth_normals(mesh):
+    """Vertex normals averaged over all faces at the same position, also across texture seams (where
+    the mesh is cut into separate vertices), so the seams don't show as lines in the shading."""
+    _, spot = np.unique(np.round(mesh.vertices, 6), axis=0, return_inverse=True)
+    spot = spot.ravel()
+    tri = mesh.vertices[mesh.faces]
+    face_normals = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])  # longer for bigger faces
+    total = np.zeros((spot.max() + 1, 3))
+    for corner in range(3):
+        np.add.at(total, spot[mesh.faces[:, corner]], face_normals)
+    normals = total[spot]
+    return normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-12)
 
 
 def main():

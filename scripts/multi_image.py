@@ -135,6 +135,8 @@ def main():
     parser.add_argument("--max-tokens", type=int,
                         help="limit for the fine stage (TRELLIS.2 default 49152); lower it when 1536 runs out of "
                              "GPU memory: the resolution then drops a little instead")
+    parser.add_argument("--faces", type=int, default=1_000_000,
+                        help="faces in the saved model (default 1,000,000); more keeps finer detail, e.g. 4000000")
     args = parser.parse_args()
     if len(args.images) < 2:
         parser.error("give at least two pictures (for one picture, use generate.py)")
@@ -151,6 +153,8 @@ def main():
         name += f"_steps{args.steps}"
     if args.max_tokens:
         name += f"_tokens{args.max_tokens}"
+    if args.faces != 1_000_000:
+        name += f"_faces{args.faces // 1000}k"
     pipeline = load_pipeline()
 
     print("Removing the backgrounds...")
@@ -169,7 +173,7 @@ def main():
     print("Saving as .glb...")
     start = time.time()
     glb_path = os.path.join(OUTPUT_DIR, f"{name}.glb")
-    save_glb(mesh, args.resolution, glb_path)
+    save_glb(mesh, args.resolution, glb_path, faces=args.faces)
     print(f"    saved in {time.time() - start:.0f} s")
     print(f"Done: {glb_path}")
 

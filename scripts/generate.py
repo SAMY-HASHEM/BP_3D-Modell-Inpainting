@@ -121,17 +121,17 @@ def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=No
     return mesh, time.time() - start
 
 
-def save_glb(mesh, resolution, glb_path, remesh=None):
+def save_glb(mesh, resolution, glb_path, remesh=None, faces=1_000_000):
     # Remeshing rebuilds the mesh from the full voxel grid. At 1536 that gives ~51M faces,
     # which runs out of memory, so there we simplify the generated mesh directly instead.
     if remesh is None:
         remesh = resolution != "1536"
-    mesh.simplify(16777216 if remesh else 4_000_000)
+    mesh.simplify(16777216 if remesh else max(4_000_000, faces))
     torch.cuda.empty_cache()
     glb = o_voxel.postprocess.to_glb(
         vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs, coords=mesh.coords,
         attr_layout=mesh.layout, voxel_size=mesh.voxel_size, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-        decimation_target=1000000, texture_size=4096, remesh=remesh, remesh_band=1, remesh_project=0,
+        decimation_target=faces, texture_size=4096, remesh=remesh, remesh_band=1, remesh_project=0,
         verbose=True,  # print each step and show progress bars (UV unwrapping can take minutes)
     )
     if not remesh:
@@ -157,6 +157,8 @@ def main():
     parser.add_argument("--max-tokens", type=int,
                         help="limit for the fine stage (TRELLIS.2 default 49152); lower it when a big object runs "
                              "out of GPU memory at 1536: the resolution then drops a little instead")
+    parser.add_argument("--faces", type=int, default=1_000_000,
+                        help="faces in the saved model (default 1,000,000); more keeps finer detail, e.g. 4000000")
     args = parser.parse_args()
     for path in args.images:
         if not os.path.isfile(path):
@@ -197,6 +199,8 @@ def make_model(pipeline, path, resolution, args):
         name += f"_texguidance{args.texture_guidance:g}"
     if args.max_tokens:
         name += f"_tokens{args.max_tokens}"
+    if args.faces != 1_000_000:
+        name += f"_faces{args.faces // 1000}k"
 
     print("Removing the background...")
     image = prepare_image(pipeline, path, name)
@@ -209,7 +213,7 @@ def make_model(pipeline, path, resolution, args):
     print("Saving as .glb...")
     start = time.time()
     glb_path = os.path.join(OUTPUT_DIR, f"{name}.glb")
-    save_glb(mesh, resolution, glb_path)
+    save_glb(mesh, resolution, glb_path, faces=args.faces)
     del mesh
     print(f"    saved in {time.time() - start:.0f} s")
     print(f"Done: {glb_path}")
