@@ -29,6 +29,8 @@ import o_voxel
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.representations.mesh import base as mesh_base
 
+from fix_normals import fix_face_directions
+
 PIPELINE_TYPES = {"512": "512", "1024": "1024_cascade", "1536": "1536_cascade"}
 DEFAULT_STEPS = 12  # TRELLIS.2's default number of sampling steps per stage
 OUTPUT_DIR = os.path.join(PROJECT_DIR, "outputs")
@@ -132,6 +134,9 @@ def save_glb(mesh, resolution, glb_path, remesh=None):
         decimation_target=1000000, texture_size=4096, remesh=remesh, remesh_band=1, remesh_project=0,
         verbose=True,  # print each step and show progress bars (UV unwrapping can take minutes)
     )
+    if not remesh:
+        # TRELLIS.2's own mesh has patches facing inward, which Blender shades as dark blotches
+        print(f"Turning the faces outward... (flipped {fix_face_directions(glb):.0%})")
     glb.export(glb_path, extension_webp=True)
 
 
