@@ -80,71 +80,11 @@ chmod 700 ~                                                   # other users can'
 rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/*   # empty JupyterLab's trash
 ```
 
-## 8. Outside the uni network (from home): jobs through the Sciebo cloud
+## 8. Blender inpainting with the server
 
-The server can't be reached from outside, but it and every PC can reach the Sciebo cloud. A worker
-on the server watches the cloud folder `inpainting-jobs/` and runs every job that arrives there.
+Two ways, each with its own step-by-step guide:
 
-```
-PC (Blender / cloud.py)          Sciebo cloud                    HCI server (A40)
- "Send to uni server"  ──job──►  inpainting-jobs/  ◄──watches──  cloud_worker.py
- panel shows progress  ◄status─  <job>.status      ◄──writes───  runs it on the freest GPU
- result loads by itself ◄─glb──  <job>__<file>.glb ◄─uploads───  done
-```
-
-**Once on the server** (VDI → JupyterLab terminal):
-
-```
-cd ~/projects/bp_samy_hashem && git pull
-python3 scripts/cloud.py setup                     # Sciebo app password "inpainting-server"
-source activate.sh
-nohup python -u scripts/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
-tail -n 5 outputs/cloud_worker.log                 # "Watching the cloud folder ..."
-```
-
-**On a PC**, Blender: Edit → Preferences → Add-ons → TRELLIS.2 Inpainting → enter the Sciebo login
-(app password) → *Save and test the cloud login*. Then the Inpaint tab's **Send to uni server** works.
-Without Blender (`python3 scripts/cloud.py setup` once):
-
-```
-python3 scripts/cloud.py generate front.png back.png --resolution 1024 --steps 25 --mirror   # pictures -> model
-python3 scripts/cloud.py send outputs/blender/tavern_job.zip                                 # a Blender job
-python3 scripts/cloud.py status                    # queued / running (GPU, progress) / done / failed
-python3 scripts/cloud.py fetch                     # results -> outputs/cloud/
-```
-
-Is the worker still running? `ps -u $USER -o pid,etime,args | grep cloud_worker`. Restart it after a
-`git pull` that changed `cloud_worker.py`.
-
-## 9. Inside the uni network: Blender talks directly to the server
-
-On campus (or for anyone in the uni network) JupyterLab opens without the VDI, and the server's port
-can be reached directly. This is the original add-on way, just with the server on the A40:
-
-```
-your PC (Blender)                                   HCI server (A40)
- browser: nc.hcigroup.de (JupyterLab)  ──────────►  terminal: inpaint_server.py --host 0.0.0.0
- Blender, Connection "Inside the network" ──job──►  regenerates on the freest GPU (TRELLIS.2 stays loaded)
- result loads by itself                ◄─result──
-```
-
-**On the server** (JupyterLab terminal; leave it open while you work):
-
-```
-cd ~/projects/bp_samy_hashem && source activate.sh
-python scripts/inpaint_server.py --host 0.0.0.0              # another port if 8765 is taken: --port 8770
-```
-
-It prints the GPU it uses and a **token**. Everyone uses their own account and their own server.
-
-**In Blender** (once): Edit → Preferences → Add-ons → TRELLIS.2 Inpainting → *Server address*
-`nc.hcigroup.de:8765` and the *Server token*. Then in the Inpaint tab: Connection **Inside the
-network** → **2. Regenerate area**.
-
-Safety: every request needs the token; jobs that pass file paths (and *Make picture from prompt*) only
-work on a server running for its own computer (`127.0.0.1`, the default).
-
-| Where you are | Connection in Blender | What runs on the server |
+| Where your PC is | Guide | In Blender, Connection |
 |---|---|---|
-| in the uni network | Inside the network | `inpaint_server.py --host 0.0.0.0` (while you work) |
-| anywhere else | Outside (cloud) | `cloud_worker.py` (keeps running) |
+| in the uni network | [docs/how-to-inside-network.md](docs/how-to-inside-network.md) | Inside the network |
+| anywhere else (home) | [docs/how-to-outside-network.md](docs/how-to-outside-network.md) | Outside (cloud) |
