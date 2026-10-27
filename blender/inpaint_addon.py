@@ -26,22 +26,38 @@ from mathutils import Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 4, 0),
+    "version": (1, 5, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
     "category": "3D View",
 }
 
-SERVER = "http://127.0.0.1:8765"
+LOCAL_TOKEN = os.path.expanduser("~/.config/inpainting3d/server_token")  # made by inpaint_server.py
 BOX = "InpaintBox"
 status = {"server": "not checked", "message": "", "job": None}
 
 
+def server():
+    """The inpaint server's address and request headers (with its token), from the add-on preferences."""
+    prefs = bpy.context.preferences.addons[__name__].preferences
+    address = prefs.server.strip().removeprefix("http://").rstrip("/") or "127.0.0.1:8765"
+    token = prefs.token.strip()
+    if not token and address.split(":")[0] in ("127.0.0.1", "localhost") and os.path.isfile(LOCAL_TOKEN):
+        with open(LOCAL_TOKEN) as f:  # a server on this computer: its token is right here
+            token = f.read().strip()
+    return f"http://{address}", {"X-Token": token}
+
+
+def is_local():
+    return server()[0].split("//")[1].split(":")[0] in ("127.0.0.1", "localhost")
+
+
 def ask(path, data=None, timeout=1.0):
     """JSON request to the inpaint server; None if it isn't running."""
-    request = urllib.request.Request(SERVER + path, data=json.dumps(data).encode() if data is not None else None,
-                                     headers={"Content-Type": "application/json"})
+    url, headers = server()
+    request = urllib.request.Request(url + path, data=json.dumps(data).encode() if data is not None else None,
+                                     headers={"Content-Type": "application/json", **headers})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read())
@@ -177,6 +193,13 @@ class InpaintSettings(bpy.types.PropertyGroup):
                                 description="Grow the marked area by this many voxels (of 64 per side)")
     steps: bpy.props.IntProperty(name="Steps", default=12, min=4, max=50, description="Sampling steps per stage")
     model: bpy.props.PointerProperty(name="Model", type=bpy.types.Object, description="The model being changed")
+    connection: bpy.props.EnumProperty(
+        name="Connection",
+        items=[("DIRECT", "Inside the network", "Directly to the inpaint server: on this computer, or on the uni "
+                                                "GPU server from inside the uni network (address in the add-on preferences)"),
+               ("CLOUD", "Outside (cloud)", "Through the Sciebo cloud to the uni GPU server, from anywhere "
+                                            "(cloud_worker.py must run there)")],
+        default="DIRECT")
     folder: bpy.props.StringProperty(name="Work folder", subtype="DIR_PATH",
                                      default=os.path.expanduser("~/inpainting-3D/outputs/blender"),
                                      description="Where the model, the area, the pictures and the results are saved")
@@ -223,6 +246,9 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
         if not settings.prompt.strip():
             self.report({"ERROR"}, "Write a prompt first")
             return {"CANCELLED"}
+        if settings.connection != "DIRECT" or not is_local():
+            self.report({"ERROR"}, "Making a picture needs an inpaint server on this computer (with ComfyUI)")
+            return {"CANCELLED"}
         reference = bpy.path.abspath(settings.reference) if settings.reference else ""
         if reference and not os.path.isfile(reference):
             self.report({"ERROR"}, "The reference picture doesn't exist")
@@ -249,33 +275,79 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
 class INPAINT_OT_regenerate(bpy.types.Operator):
     bl_idname = "inpaint.regenerate"
     bl_label = "Regenerate area"
-    bl_description = "Send the model and the marked area to TRELLIS.2 and regenerate that area after the Picture"
+    bl_description = ("Pack the model, the marked area and the Picture, send them the chosen way "
+                      "(inside the network: directly; outside: through the cloud) and load the result")
 
     @classmethod
     def poll(cls, context):
-        return status["job"] is None
+        return status["job"] is None and remote["job"] is None
 
     def execute(self, context):
-        settings = context.scene.inpaint
-        picture = bpy.path.abspath(settings.picture)
-        if not os.path.isfile(picture):
-            self.report({"ERROR"}, "Choose the picture first (or make one from a prompt)")
-            return {"CANCELLED"}
+        if context.scene.inpaint.connection == "CLOUD":
+            return bpy.ops.inpaint.send_job()
         if not server_ready(self):
             return {"CANCELLED"}
-        area = area_points(self, context)
-        if area is None:
+        out = pack_job(self, context)
+        if out is None:
             return {"CANCELLED"}
-        model, points, count, has_boxes = area
-        folder = bpy.path.abspath(settings.folder)
-        self.report({"INFO"}, f"Exporting the model ({len(model.data.polygons):,} faces)...")
-        path = export_model(context, model, folder)
-        name = bpy.path.clean_name(model.name)
-        np.save(os.path.join(folder, f"{name}_area.npy"), points)
-        out = os.path.join(folder, f"{name}_inpaint_seed{settings.seed}.glb")
-        return start(self, "/inpaint", {"model": path, "picture": picture, "points": os.path.join(folder, f"{name}_area.npy"),
-                                        "out": out, "seed": settings.seed, "grow": settings.grow, "steps": settings.steps},
-                     {"kind": "inpaint", "object": model.name, "seed": settings.seed})
+        url, headers = server()
+        remote.update(job="?", message="sending the job to the server...", error=None, results=None,
+                      object=target_model(context).name, seed=context.scene.inpaint.seed)
+
+        def upload():
+            with open(out, "rb") as f:
+                request = urllib.request.Request(url + "/job", data=f.read(), method="POST",
+                                                 headers={"Content-Type": "application/zip", **headers})
+            with urllib.request.urlopen(request, timeout=600) as response:
+                remote["job"] = json.loads(response.read())["job"]
+        in_background(upload)
+        bpy.app.timers.register(follow_direct, first_interval=2.0)
+        return {"FINISHED"}
+
+
+def follow_direct():
+    """Timer for a job sent directly: progress from /status; when it's done, fetch and load the result."""
+    if remote["busy"] is not None:
+        return 2.0  # still sending or fetching
+    if remote["error"]:
+        remote.update(message="failed: " + remote["error"], job=None)
+        redraw()
+        return None
+    if remote["results"] is not None:
+        load_result({"object": remote["object"], "seed": remote["seed"]}, remote["results"][0])
+        remote.update(message=f"done: {os.path.basename(remote['results'][0])}", job=None)
+        redraw()
+        return None
+    state = ask("/status", timeout=10)  # saving the model keeps the server busy: answers can be slow
+    if state is None:
+        remote["silent"] = remote.get("silent", 0) + 1
+        if remote["silent"] < 6:
+            return 10.0
+        remote.update(message="lost the server", job=None)
+        redraw()
+        return None
+    remote["silent"] = 0
+    remote["message"] = state["message"][:120]
+    if state["job"] != remote["job"] or state["busy"]:
+        redraw()
+        return 2.0
+    if state["error"]:
+        remote.update(message="failed: " + state["error"], job=None)
+        redraw()
+        return None
+    url, headers = server()
+    folder = bpy.path.abspath(bpy.context.scene.inpaint.folder)
+    path = os.path.join(folder, f"{remote['object']}_{remote['job']}.glb")
+    remote["message"] = "fetching the result..."
+
+    def fetch():
+        request = urllib.request.Request(f"{url}/result?job={remote['job']}", headers=headers)
+        with urllib.request.urlopen(request, timeout=600) as response, open(path, "wb") as f:
+            f.write(response.read())
+        remote["results"] = [path]
+    in_background(fetch)
+    redraw()
+    return 2.0
 
 
 def follow_job():
@@ -386,7 +458,7 @@ class INPAINT_OT_save_job(bpy.types.Operator):
 
 CLOUD_CONFIG = os.path.expanduser("~/.config/inpainting3d/cloud.json")
 CLOUD_FOLDER = "inpainting-jobs"
-remote = {"job": None, "message": "", "busy": None, "error": None, "results": None, "object": None}
+remote = {"job": None, "message": "", "busy": None, "error": None, "results": None, "object": None, "seed": None}
 
 
 def cloud(method, name, data=None, timeout=600, config=None):
@@ -415,9 +487,20 @@ class InpaintPreferences(bpy.types.AddonPreferences):
                                        description="A Sciebo app password, not your uni password")
     folder: bpy.props.StringProperty(name="Job folder", default=CLOUD_FOLDER,
                                      description="The cloud folder the uni server watches (e.g. one shared with you)")
+    server: bpy.props.StringProperty(name="Server address", default="127.0.0.1:8765",
+                                     description="Inside the network: the inpaint server, e.g. nc.hcigroup.de:8765; "
+                                                 "127.0.0.1:8765 = this computer")
+    token: bpy.props.StringProperty(name="Server token", subtype="PASSWORD",
+                                    description="Printed by inpaint_server.py at its start (not needed on this computer)")
 
     def draw(self, context):
         layout = self.layout
+        box = layout.box()
+        box.label(text="Inside the uni network: the inpaint server directly", icon="LINKED")
+        box.prop(self, "server")
+        box.prop(self, "token")
+        layout = layout.box()
+        layout.label(text="Outside the network: the Sciebo cloud", icon="WORLD")
         if os.path.isfile(CLOUD_CONFIG):
             with open(CLOUD_CONFIG) as f:
                 saved = json.load(f)
@@ -589,8 +672,14 @@ class INPAINT_OT_check(bpy.types.Operator):
     bl_description = "Ask whether the inpaint server is running"
 
     def execute(self, context):
-        state = ask("/status")
-        status["server"] = "not running" if state is None else ("busy" if state["busy"] else "ready")
+        if context.scene.inpaint.connection == "CLOUD":
+            status["server"] = "cloud login saved" if os.path.isfile(CLOUD_CONFIG) else "no cloud login (preferences)"
+            return {"FINISHED"}
+        state = ask("/status", timeout=5)
+        if state is not None and "error" in state and "busy" not in state:
+            status["server"] = state["error"]  # e.g. wrong token
+        else:
+            status["server"] = "not running" if state is None else ("busy" if state["busy"] else "ready")
         return {"FINISHED"}
 
 
@@ -634,13 +723,15 @@ class INPAINT_PT_panel(bpy.types.Panel):
         row.prop(settings, "seed")
         row.prop(settings, "grow")
         box.prop(settings, "steps")
+        box.prop(settings, "connection", expand=True)
+        if settings.connection == "DIRECT":
+            box.label(text=f"Server: {server()[0].split('//')[1]} (add-on preferences)")
         box.operator(INPAINT_OT_regenerate.bl_idname, text="2. Regenerate area", icon="PLAY")
-
-        box = layout.box()
-        box.label(text="D. Heavy work on the uni server", icon="NETWORK_DRIVE")
-        box.operator(INPAINT_OT_send_job.bl_idname, icon="EXPORT")
         if remote["message"]:
             box.label(text=remote["message"])
+
+        box = layout.box()
+        box.label(text="D. Job files", icon="PACKAGE")
         row = box.row()
         row.operator(INPAINT_OT_save_job.bl_idname, text="Save job only", icon="PACKAGE")
         row.operator(INPAINT_OT_load_result.bl_idname, icon="IMPORT")

@@ -80,7 +80,7 @@ chmod 700 ~                                                   # other users can'
 rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/*   # empty JupyterLab's trash
 ```
 
-## 8. From home without the VDI: jobs through the Sciebo cloud
+## 8. Outside the uni network (from home): jobs through the Sciebo cloud
 
 The server can't be reached from outside, but it and every PC can reach the Sciebo cloud. A worker
 on the server watches the cloud folder `inpainting-jobs/` and runs every job that arrives there.
@@ -113,9 +113,38 @@ python3 scripts/cloud.py status                    # queued / running (GPU, prog
 python3 scripts/cloud.py fetch                     # results -> outputs/cloud/
 ```
 
-**Someone else** (e.g. the professor): share the Sciebo folder `inpainting-jobs` with them (with edit
-rights). They install the add-on, enter *their own* Sciebo app password and, as job folder, the path
-under which the shared folder appears in their Sciebo. Their jobs then run on the same worker.
-
 Is the worker still running? `ps -u $USER -o pid,etime,args | grep cloud_worker`. Restart it after a
 `git pull` that changed `cloud_worker.py`.
+
+## 9. Inside the uni network: Blender talks directly to the server
+
+On campus (or for anyone in the uni network) JupyterLab opens without the VDI, and the server's port
+can be reached directly. This is the original add-on way, just with the server on the A40:
+
+```
+your PC (Blender)                                   HCI server (A40)
+ browser: nc.hcigroup.de (JupyterLab)  ──────────►  terminal: inpaint_server.py --host 0.0.0.0
+ Blender, Connection "Inside the network" ──job──►  regenerates on the freest GPU (TRELLIS.2 stays loaded)
+ result loads by itself                ◄─result──
+```
+
+**On the server** (JupyterLab terminal; leave it open while you work):
+
+```
+cd ~/projects/bp_samy_hashem && source activate.sh
+python scripts/inpaint_server.py --host 0.0.0.0              # another port if 8765 is taken: --port 8770
+```
+
+It prints the GPU it uses and a **token**. Everyone uses their own account and their own server.
+
+**In Blender** (once): Edit → Preferences → Add-ons → TRELLIS.2 Inpainting → *Server address*
+`nc.hcigroup.de:8765` and the *Server token*. Then in the Inpaint tab: Connection **Inside the
+network** → **2. Regenerate area**.
+
+Safety: every request needs the token; jobs that pass file paths (and *Make picture from prompt*) only
+work on a server running for its own computer (`127.0.0.1`, the default).
+
+| Where you are | Connection in Blender | What runs on the server |
+|---|---|---|
+| in the uni network | Inside the network | `inpaint_server.py --host 0.0.0.0` (while you work) |
+| anywhere else | Outside (cloud) | `cloud_worker.py` (keeps running) |
