@@ -79,3 +79,43 @@ running commands (in `nvtop`, `ps`). Only project work goes there.
 chmod 700 ~                                                   # other users can't open your files
 rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/*   # empty JupyterLab's trash
 ```
+
+## 8. From home without the VDI: jobs through the Sciebo cloud
+
+The server can't be reached from outside, but it and every PC can reach the Sciebo cloud. A worker
+on the server watches the cloud folder `inpainting-jobs/` and runs every job that arrives there.
+
+```
+PC (Blender / cloud.py)          Sciebo cloud                    HCI server (A40)
+ "Send to uni server"  ──job──►  inpainting-jobs/  ◄──watches──  cloud_worker.py
+ panel shows progress  ◄status─  <job>.status      ◄──writes───  runs it on the freest GPU
+ result loads by itself ◄─glb──  <job>__<file>.glb ◄─uploads───  done
+```
+
+**Once on the server** (VDI → JupyterLab terminal):
+
+```
+cd ~/projects/bp_samy_hashem && git pull
+python3 scripts/cloud.py setup                     # Sciebo app password "inpainting-server"
+source activate.sh
+nohup python -u scripts/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
+tail -n 5 outputs/cloud_worker.log                 # "Watching the cloud folder ..."
+```
+
+**On a PC**, Blender: Edit → Preferences → Add-ons → TRELLIS.2 Inpainting → enter the Sciebo login
+(app password) → *Save and test the cloud login*. Then the Inpaint tab's **Send to uni server** works.
+Without Blender (`python3 scripts/cloud.py setup` once):
+
+```
+python3 scripts/cloud.py generate front.png back.png --resolution 1024 --steps 25 --mirror   # pictures -> model
+python3 scripts/cloud.py send outputs/blender/tavern_job.zip                                 # a Blender job
+python3 scripts/cloud.py status                    # queued / running (GPU, progress) / done / failed
+python3 scripts/cloud.py fetch                     # results -> outputs/cloud/
+```
+
+**Someone else** (e.g. the professor): share the Sciebo folder `inpainting-jobs` with them (with edit
+rights). They install the add-on, enter *their own* Sciebo app password and, as job folder, the path
+under which the shared folder appears in their Sciebo. Their jobs then run on the same worker.
+
+Is the worker still running? `ps -u $USER -o pid,etime,args | grep cloud_worker`. Restart it after a
+`git pull` that changed `cloud_worker.py`.

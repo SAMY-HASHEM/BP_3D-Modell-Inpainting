@@ -26,7 +26,7 @@ from mathutils import Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 3, 0),
+    "version": (1, 4, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -389,15 +389,69 @@ CLOUD_FOLDER = "inpainting-jobs"
 remote = {"job": None, "message": "", "busy": None, "error": None, "results": None, "object": None}
 
 
-def cloud(method, name, data=None, timeout=600):
+def cloud(method, name, data=None, timeout=600, config=None):
     """One WebDAV request to the cloud folder (runs in a background thread, never in Blender's own)."""
-    with open(CLOUD_CONFIG) as f:
-        config = json.load(f)
+    if config is None:
+        with open(CLOUD_CONFIG) as f:
+            config = json.load(f)
     token = base64.b64encode(f"{config['user']}:{config['password']}".encode()).decode()
-    url = f"{config['url'].rstrip('/')}/{urllib.parse.quote(f'{CLOUD_FOLDER}/{name}')}"
-    request = urllib.request.Request(url, data=data, method=method, headers={"Authorization": f"Basic {token}"})
+    path = f"{config.get('folder', CLOUD_FOLDER)}/{name}"
+    url = f"{config['url'].rstrip('/')}/{urllib.parse.quote(path)}"
+    headers = {"Authorization": f"Basic {token}", **({"Depth": "0"} if method == "PROPFIND" else {})}
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
+
+
+class InpaintPreferences(bpy.types.AddonPreferences):
+    """The cloud login, filled in once (Edit > Preferences > Add-ons > TRELLIS.2 Inpainting). The password
+    is only kept in ~/.config/inpainting3d/cloud.json (readable only by you), not in Blender's settings."""
+    bl_idname = __name__
+
+    url: bpy.props.StringProperty(name="Cloud address",
+                                  default="https://uni-duisburg-essen.sciebo.de/remote.php/webdav")
+    user: bpy.props.StringProperty(name="Login name", description="From Sciebo: Sicherheit > App-Passwort")
+    password: bpy.props.StringProperty(name="App password", subtype="PASSWORD",
+                                       description="A Sciebo app password, not your uni password")
+    folder: bpy.props.StringProperty(name="Job folder", default=CLOUD_FOLDER,
+                                     description="The cloud folder the uni server watches (e.g. one shared with you)")
+
+    def draw(self, context):
+        layout = self.layout
+        if os.path.isfile(CLOUD_CONFIG):
+            with open(CLOUD_CONFIG) as f:
+                saved = json.load(f)
+            layout.label(text=f"Saved: {saved['user']}, folder {saved.get('folder', CLOUD_FOLDER)}", icon="CHECKMARK")
+        layout.label(text="Sciebo: avatar > Persönliche Einstellungen > Sicherheit > Neues App-Passwort erstellen")
+        for name in ("url", "user", "password", "folder"):
+            layout.prop(self, name)
+        layout.operator(INPAINT_OT_cloud_login.bl_idname, icon="LOCKED")
+
+
+class INPAINT_OT_cloud_login(bpy.types.Operator):
+    bl_idname = "inpaint.cloud_login"
+    bl_label = "Save and test the cloud login"
+    bl_description = "Test the login on the cloud folder and save it (readable only by you)"
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__name__].preferences
+        config = {"url": prefs.url.strip(), "user": prefs.user.strip(), "password": prefs.password.strip(),
+                  "folder": prefs.folder.strip().strip("/") or CLOUD_FOLDER}
+        try:
+            cloud("PROPFIND", "", config=config, timeout=20)  # the folder exists and the login works
+        except urllib.error.HTTPError as e:
+            self.report({"ERROR"}, "Wrong login name or app password" if e.code == 401 else
+                        f"The cloud folder '{config['folder']}' isn't there (HTTP {e.code})")
+            return {"CANCELLED"}
+        except OSError as e:
+            self.report({"ERROR"}, f"The cloud can't be reached: {e}")
+            return {"CANCELLED"}
+        os.makedirs(os.path.dirname(CLOUD_CONFIG), exist_ok=True)
+        with open(os.open(CLOUD_CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+            json.dump(config, f)
+        prefs.password = ""  # don't keep it in Blender's settings file
+        self.report({"INFO"}, f"Cloud login works and is saved for {config['user']}")
+        return {"FINISHED"}
 
 
 def in_background(work):
@@ -425,7 +479,7 @@ class INPAINT_OT_send_job(bpy.types.Operator):
 
     def execute(self, context):
         if not os.path.isfile(CLOUD_CONFIG):
-            self.report({"ERROR"}, "No cloud login yet: python3 scripts/cloud.py setup")
+            self.report({"ERROR"}, "No cloud login yet: Edit > Preferences > Add-ons > TRELLIS.2 Inpainting")
             return {"CANCELLED"}
         out = pack_job(self, context)
         if out is None:
@@ -595,7 +649,8 @@ class INPAINT_PT_panel(bpy.types.Panel):
 
 
 classes = (InpaintSettings, INPAINT_OT_add_box, INPAINT_OT_make_picture, INPAINT_OT_regenerate,
-           INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result,
+           INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result, InpaintPreferences,
+           INPAINT_OT_cloud_login,
            INPAINT_OT_show_picture, INPAINT_OT_check, INPAINT_PT_panel)
 
 

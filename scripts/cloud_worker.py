@@ -22,7 +22,7 @@ import time
 import traceback
 import zipfile
 
-from cloud import FOLDER, PROJECT_DIR, Cloud
+from cloud import PROJECT_DIR, Cloud
 from run_job import freest_gpu
 
 WORK = os.path.join(PROJECT_DIR, "outputs", "cloud_jobs")
@@ -125,7 +125,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="look once, run what is there, then stop")
     args = parser.parse_args()
     cloud = Cloud()
-    print(f"Watching the cloud folder {FOLDER}/ every {args.interval} s (stop with Ctrl+C)", flush=True)
+    print(f"Watching the cloud folder {cloud.folder}/ every {args.interval} s (stop with Ctrl+C)", flush=True)
     while True:
         try:
             for name in sorted(cloud.list()):

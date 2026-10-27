@@ -48,6 +48,7 @@ class Cloud:
             with open(CONFIG) as f:
                 config = json.load(f)
         self.url = config["url"].rstrip("/")
+        self.folder = config.get("folder", FOLDER)  # e.g. a folder someone shared with you
         token = base64.b64encode(f"{config['user']}:{config['password']}".encode()).decode()
         self.auth = {"Authorization": f"Basic {token}"}
 
@@ -57,33 +58,38 @@ class Cloud:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read()
 
-    def list(self, folder=FOLDER):
+    def list(self, folder=None):
         """Names of the files in a cloud folder."""
+        folder = folder or self.folder
         body = self.request("PROPFIND", folder + "/", headers={"Depth": "1"})
         names = []
         for href in ET.fromstring(body).iter("{DAV:}href"):
             name = urllib.parse.unquote(href.text.rstrip("/").rsplit("/", 1)[-1])
-            if name and name != folder:
+            if name and name != folder.rstrip("/").rsplit("/", 1)[-1]:
                 names.append(name)
         return names
 
-    def make_folder(self, folder=FOLDER):
+    def make_folder(self, folder=None):
+        folder = folder or self.folder
         try:
             self.request("MKCOL", folder + "/")
         except urllib.error.HTTPError as e:
             if e.code != 405:  # 405 = it exists already
                 raise
 
-    def upload(self, local, name, folder=FOLDER):
+    def upload(self, local, name, folder=None):
+        folder = folder or self.folder
         with open(local, "rb") as f:
             self.request("PUT", f"{folder}/{name}", data=f.read(), timeout=600)
 
-    def download(self, name, local, folder=FOLDER):
+    def download(self, name, local, folder=None):
+        folder = folder or self.folder
         data = self.request("GET", f"{folder}/{name}", timeout=600)
         with open(local, "wb") as f:
             f.write(data)
 
-    def read_status(self, job, folder=FOLDER):
+    def read_status(self, job, folder=None):
+        folder = folder or self.folder
         try:
             return json.loads(self.request("GET", f"{folder}/{job}.status"))
         except urllib.error.HTTPError as e:
@@ -91,7 +97,8 @@ class Cloud:
                 return None
             raise
 
-    def write_status(self, job, state, message="", results=None, folder=FOLDER):
+    def write_status(self, job, state, message="", results=None, folder=None):
+        folder = folder or self.folder
         status = {"state": state, "message": message, "results": results or [], "time": time.strftime("%H:%M:%S")}
         self.request("PUT", f"{folder}/{job}.status", data=json.dumps(status).encode())
 
@@ -105,7 +112,8 @@ def setup(args):
     url = input(f"WebDAV address [{DEFAULT_URL}]: ").strip() or DEFAULT_URL
     user = input("Login name (Anmeldename): ").strip()
     password = getpass.getpass("App password (not shown while typing): ").strip()
-    cloud = Cloud({"url": url, "user": user, "password": password})
+    folder = input(f"Cloud folder for the jobs [{FOLDER}] (someone shared theirs with you: its path): ").strip() or FOLDER
+    cloud = Cloud({"url": url, "user": user, "password": password, "folder": folder})
     try:
         cloud.make_folder()
         cloud.list()
@@ -113,8 +121,8 @@ def setup(args):
         raise SystemExit(f"The cloud refused the login ({e.code}). Check the login name and the app password.")
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     with open(os.open(CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:  # only you can read it
-        json.dump({"url": url, "user": user, "password": password}, f)
-    print(f"Works. Saved in {CONFIG} (readable only by you); the cloud folder {FOLDER}/ is ready.")
+        json.dump({"url": url, "user": user, "password": password, "folder": folder}, f)
+    print(f"Works. Saved in {CONFIG} (readable only by you); the cloud folder {folder}/ is ready.")
 
 
 def send_zip(cloud, path):
