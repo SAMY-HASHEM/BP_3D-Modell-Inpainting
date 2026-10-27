@@ -85,11 +85,17 @@ def is_box(obj):
 
 
 def target_model(context):
-    """The model to change: the active object, or the last model used when a box is active."""
+    """The model to change: the active object, or the last model used when a box is active. If that one
+    was deleted meanwhile (it is no longer in the scene), the biggest visible model is taken."""
     obj, settings = context.active_object, context.scene.inpaint
     if obj is not None and obj.type == "MESH" and not is_box(obj):
         settings.model = obj
-    return settings.model
+    model = settings.model
+    if model is None or context.view_layer.objects.get(model.name) is not model:
+        models = [o for o in context.view_layer.objects if o.type == "MESH" and not is_box(o) and o.visible_get()]
+        model = max(models, key=lambda o: len(o.data.polygons), default=None)
+        settings.model = model
+    return model
 
 
 def selected_points(obj):
