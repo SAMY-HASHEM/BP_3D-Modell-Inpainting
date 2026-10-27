@@ -23,7 +23,7 @@ import time
 from contextlib import contextmanager
 
 import torch
-from PIL import Image
+from PIL import Image, ImageOps
 from torch import nn
 
 from generate import DEFAULT_STEPS, OUTPUT_DIR, PIPELINE_TYPES, crop_to_object, load_pipeline, picture_name, save_glb
@@ -140,6 +140,9 @@ def main():
                         help="faces in the saved model (default 1,000,000); more keeps finer detail, e.g. 4000000")
     parser.add_argument("--guidance", type=float,
                         help="how strictly the shape follows the pictures (TRELLIS.2 default 7.5)")
+    parser.add_argument("--mirror", action="store_true",
+                        help="also use every picture flipped left-right: for objects that should be mirror-"
+                             "symmetric (a body, a vase); the average of both sides comes out symmetric")
     args = parser.parse_args()
     if len(args.images) < 2:
         parser.error("give at least two pictures (for one picture, use generate.py)")
@@ -156,6 +159,8 @@ def main():
         name += f"_steps{args.steps}"
     if args.guidance is not None:
         name += f"_guidance{args.guidance:g}"
+    if args.mirror:
+        name += "_mirror"
     if args.max_tokens:
         name += f"_tokens{args.max_tokens}"
     if args.faces != 1_000_000:
@@ -169,6 +174,14 @@ def main():
         image = pipeline.preprocess_image(crop_to_object(pipeline, Image.open(path)))
         image.save(os.path.join(OUTPUT_DIR, f"{name}_input{i}.png"))
         images.append(image)
+    if args.mirror:
+        # every picture also flipped: TRELLIS.2 places a flipped picture's object flipped too, so averaging
+        # the predictions of both makes the result mirror-symmetric (colour pictures stay first)
+        colour = texture_count or len(images)
+        flip = lambda pictures: [ImageOps.mirror(p) for p in pictures]
+        images = images[:colour] + flip(images[:colour]) + images[colour:] + flip(images[colour:])
+        if texture_count:
+            texture_count *= 2
 
     print(f"Generating from {len(images)} pictures ({args.mode}) at {args.resolution} with {args.steps} steps...")
     mesh, gen_time = generate_multi_image(pipeline, images, args.resolution, args.seed, args.mode, args.steps,
