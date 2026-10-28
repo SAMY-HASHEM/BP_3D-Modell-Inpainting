@@ -109,6 +109,20 @@ def gpu_memory():
     return dict(tuple(int(x) for x in line.split(",")) for line in lines)
 
 
+def code_is_current(branch, project=PROJECT_DIR):
+    """Whether the checkout already is on `branch` at its newest commit on GitHub: then a job asking for
+    it needs no switch and can start next to the running ones."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,59}", branch) or ".." in branch:
+        return False
+    git = lambda *a: subprocess.run(["git", "-C", project, *a], check=True, capture_output=True, text=True).stdout.strip()
+    try:
+        git("fetch", "-q", CODE_URL, f"+refs/heads/{branch}:refs/remotes/github/{branch}")
+        return (git("rev-parse", "--abbrev-ref", "HEAD") == branch
+                and git("rev-parse", "HEAD") == git("rev-parse", f"refs/remotes/github/{branch}"))
+    except subprocess.CalledProcessError:
+        return False
+
+
 def prepare(cloud, job_name):
     """Downloads a queued job; returns its folder, zip and job.json."""
     folder = os.path.join(WORK, job_name)
@@ -198,8 +212,8 @@ def free_gpus(running):
 
 
 def start_jobs(cloud, running):
-    """Starts the queued jobs on the free GPUs, one per GPU. A job that asks for a branch waits until
-    nothing else of ours runs (the code under the running jobs must not change)."""
+    """Starts the queued jobs on the free GPUs, one per GPU. A job that asks for new code of a branch
+    waits until nothing else of ours runs (the code under the running jobs must not change)."""
     for name in sorted(cloud.list()):
         job_name = name[:-4]
         if not name.endswith(".zip") or job_name in running:
@@ -213,10 +227,11 @@ def start_jobs(cloud, running):
         try:
             folder, zip_path, job = prepare(cloud, job_name)
             if job.get("code"):
-                if running:
+                if running and not code_is_current(job["code"]):
                     cloud.write_status(job_name, "queued", "waiting until the running jobs are done (new code)")
                     continue
-                switch_code(cloud, job_name, job)
+                if not running:
+                    switch_code(cloud, job_name, job)
         except Exception as e:
             traceback.print_exc()
             cloud.write_status(job_name, "failed", f"{type(e).__name__}: {e}"[:500])
