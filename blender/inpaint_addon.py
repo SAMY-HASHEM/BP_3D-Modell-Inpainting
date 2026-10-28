@@ -225,6 +225,10 @@ def start(operator, path, job, info):
     return {"FINISHED"}
 
 
+class InpaintClick(bpy.types.PropertyGroup):
+    point: bpy.props.FloatVectorProperty(name="Point", size=3, subtype="XYZ")
+
+
 class InpaintSettings(bpy.types.PropertyGroup):
     picture: bpy.props.StringProperty(name="Picture", subtype="FILE_PATH",
                                       description="Picture that guides the new area: the model's own picture, "
@@ -247,8 +251,7 @@ class InpaintSettings(bpy.types.PropertyGroup):
         default="DIRECT")
     part: bpy.props.StringProperty(name="Part", description="What to find in the space box, in English "
                                                             "(e.g. helmet, sword, left wing)")
-    click: bpy.props.FloatVectorProperty(name="Click", size=3, subtype="XYZ")
-    has_click: bpy.props.BoolProperty(name="Clicked", default=False)
+    clicks: bpy.props.CollectionProperty(type=InpaintClick, description="Spots on the part, for Find part")
     find_cpu: bpy.props.BoolProperty(name="CPU only", default=False,
                                      description="Run the mask AI without the GPU (slower: about 1-2 minutes)")
     box_frame: bpy.props.BoolProperty(
@@ -318,12 +321,12 @@ def set_box_corner(box, corner, position):
 def draw_boxes():
     """Every visible space box as see-through blue with bold edges, so its space can be seen without
     turning the view: stronger where the box is in front of the model, fainter behind it. And the point
-    the user clicked on for "Find part", as a red dot."""
+    the user clicked on for "Find part", as red dots."""
     settings = bpy.context.scene.inpaint
     boxes = [o for o in bpy.context.view_layer.objects if is_box(o) and o.visible_get()]
     model = bpy.data.objects.get(finder["part_model"] or "")
     part = model is not None and bpy.context.mode == "OBJECT" and model.visible_get() and len(finder["part"]) > 0
-    if not boxes and not settings.has_click and not part:
+    if not boxes and not settings.clicks and not part:
         return
     before = gpu.state.blend_get(), gpu.state.depth_test_get(), gpu.state.depth_mask_get()
     gpu.state.blend_set("ALPHA")
@@ -349,12 +352,12 @@ def draw_boxes():
         gpu.state.depth_test_set("NONE")
         edge.uniform_float("color", (*BOX_COLOR, 0.9))
         batch_for_shader(edge, "LINES", {"pos": corners}, indices=BOX_EDGES).draw(edge)
-    if settings.has_click:
+    if settings.clicks:
         gpu.state.depth_test_set("NONE")
         dot = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
         gpu.state.point_size_set(12.0)
         dot.uniform_float("color", (1.0, 0.15, 0.1, 1.0))
-        batch_for_shader(dot, "POINTS", {"pos": [tuple(settings.click)]}).draw(dot)
+        batch_for_shader(dot, "POINTS", {"pos": [tuple(c.point) for c in settings.clicks]}).draw(dot)
         gpu.state.point_size_set(1.0)
     gpu.state.blend_set(before[0])
     gpu.state.depth_test_set(before[1])
@@ -434,11 +437,14 @@ class INPAINT_GGT_box_sides(bpy.types.GizmoGroup):
 
 
 # ---------------------------------------------------------------- finding a part in the box (the mask AI)
-# Blender takes pictures of the space box from VIEWS, scripts/mask_ai.py (in its own environment, made by
-# install_mask.sh) finds the part in each, and every face in the box is voted on by the pictures that see it.
+# Blender takes pictures of the space box from the directions that show it best, scripts/mask_ai.py (in its
+# own environment, made by install_mask.sh) finds the part in each, and every face in the box is voted on
+# by the pictures that see it.
 
-VIEWS = [(yaw, 30) for yaw in range(0, 360, 60)] + [(yaw, -20) for yaw in range(30, 360, 120)] + [(0, 85)]
-PICTURE_SIZE = 1024
+VIEW_COUNT = 16      # pictures per search ...
+CANDIDATES = 64      # ... the best out of this many directions all around the box
+PICTURE_SIZE = 1024  # pixels of the pictures for the mask AI
+CHECK_SIZE = 256     # pixels of the depth-only pictures that find the best directions
 finder = {"process": None, "message": "", "model": None, "folder": None, "faces": None, "centers": None,
           "views": None, "log": [], "part_model": None, "part": None, "part_batch": None, "mode_before": None}
 
@@ -470,17 +476,15 @@ def inside_box(points, corners):
     return inside
 
 
-def project(points, view):
+def project(points, view, size=PICTURE_SIZE):
     """Pixel x, y (from the top left) and depth of world points in one picture (orthographic camera)."""
     m = view["world_to_camera"]
     p = points @ m[:3, :3].T + m[:3, 3]
-    return ((p[:, 0] / view["scale"] + 0.5) * PICTURE_SIZE, (0.5 - p[:, 1] / view["scale"]) * PICTURE_SIZE,
-            -p[:, 2])
+    return (p[:, 0] / view["scale"] + 0.5) * size, (0.5 - p[:, 1] / view["scale"]) * size, -p[:, 2]
 
 
-def front_depth(x, y, depth):
+def front_depth(x, y, depth, size=PICTURE_SIZE):
     """Depth of the nearest surface in every pixel (from the face centres; gaps closed by the neighbours)."""
-    size = PICTURE_SIZE
     inside = (x >= 0) & (x < size) & (y >= 0) & (y < size)
     z = np.full(size * size, np.inf)
     np.minimum.at(z, y[inside].astype(np.int64) * size + x[inside].astype(np.int64), depth[inside])
@@ -488,21 +492,60 @@ def front_depth(x, y, depth):
     return np.min([padded[dy:dy + size, dx:dx + size] for dy in range(3) for dx in range(3)], axis=0)
 
 
-def seen(x, y, depth, front, tolerance):
+def seen(x, y, depth, front, tolerance, size=PICTURE_SIZE):
     """Which points are seen in the picture (not hidden behind something nearer), and their pixels."""
-    xi = np.clip(x.astype(np.int64), 0, PICTURE_SIZE - 1)
-    yi = np.clip(y.astype(np.int64), 0, PICTURE_SIZE - 1)
-    inside = (x >= 0) & (x < PICTURE_SIZE) & (y >= 0) & (y < PICTURE_SIZE)
+    xi = np.clip(x.astype(np.int64), 0, size - 1)
+    yi = np.clip(y.astype(np.int64), 0, size - 1)
+    inside = (x >= 0) & (x < size) & (y >= 0) & (y < size)
     return inside & (depth <= front[yi, xi] + tolerance), xi, yi
 
 
-def take_pictures(context, model, corners, folder):
-    """Renders the model around the box corners from every direction in VIEWS (Workbench, with its
-    colours, orthographic, transparent background), restoring the scene's render settings afterwards."""
+def directions_around(count):
+    """`count` directions spread evenly over the sphere (a Fibonacci spiral from top to bottom)."""
+    i = np.arange(count) + 0.5
+    z = 1 - 2 * i / count
+    angle = np.pi * (1 + 5 ** 0.5) * i
+    return np.stack([np.sqrt(1 - z ** 2) * np.sin(angle), -np.sqrt(1 - z ** 2) * np.cos(angle), z], 1)
+
+
+def camera_for(direction, corners, distance):
+    """An orthographic camera looking at the box from `direction`, framing it tightly: its location, its
+    rotation and the view (world_to_camera, scale) for project()."""
+    toward = Vector(direction).normalized()
+    location = Vector(corners.mean(0)) + toward * distance
+    rotation = (-toward).to_track_quat("-Z", "Y")
+    world_to_camera = np.array((Matrix.Translation(location) @ rotation.to_matrix().to_4x4()).inverted())
+    seen_corners = corners @ world_to_camera[:3, :3].T
+    scale = 1.1 * 2 * float(np.abs(seen_corners[:, :2] - seen_corners[:, :2].mean(0)).max())
+    return location, rotation, {"world_to_camera": world_to_camera, "scale": scale}
+
+
+def best_directions(centers, faces, corners, distance):
+    """The VIEW_COUNT directions, out of CANDIDATES all around, that show the faces in the box best: one
+    after the other, each the one that sees the most of what the chosen ones saw least. So the pictures
+    show the part from all its sides, past whatever else of the model stands in front of it."""
+    rng = np.random.default_rng(0)
+    occluders = centers[::max(1, len(centers) // 1_000_000)]  # enough for depths at CHECK_SIZE
+    sample = centers[rng.choice(faces, min(len(faces), 50_000), replace=False)]
+    candidates = directions_around(CANDIDATES)
+    seen_by = np.zeros((len(candidates), len(sample)), np.float32)
+    for i, direction in enumerate(candidates):
+        view = camera_for(direction, corners, distance)[2]
+        front = front_depth(*project(occluders, view, CHECK_SIZE), CHECK_SIZE)
+        seen_by[i] = seen(*project(sample, view, CHECK_SIZE), front, 3 * view["scale"] / CHECK_SIZE, CHECK_SIZE)[0]
+    chosen, times = [], np.zeros(len(sample), np.float32)
+    for _ in range(VIEW_COUNT):
+        score = seen_by @ (1 / (1 + times))  # faces seen less often so far count more
+        score[chosen] = -1
+        chosen.append(int(score.argmax()))
+        times += seen_by[chosen[-1]]
+    return candidates[chosen]
+
+
+def take_pictures(context, model, corners, folder, directions, distance):
+    """Renders the model around the box corners from every direction (Workbench, with its colours,
+    orthographic, transparent background), restoring the scene's render settings afterwards."""
     scene = context.scene
-    center = Vector(corners.mean(0))
-    radius = float(np.linalg.norm(corners - corners.mean(0), axis=1).max()) * 1.15
-    distance = radius + 2 * max(model.dimensions)
     camera = bpy.data.objects.new("InpaintFindCamera", bpy.data.cameras.new("InpaintFindCamera"))
     camera.data.type = "ORTHO"
     camera.data.clip_start, camera.data.clip_end = distance * 1e-3, distance * 3
@@ -525,17 +568,13 @@ def take_pictures(context, model, corners, folder):
     try:
         for thing, name, value in changes:
             setattr(thing, name, value)
-        for i, (yaw, pitch) in enumerate(VIEWS):
-            yaw, pitch = np.radians(yaw), np.radians(pitch)
-            toward_camera = Vector((np.cos(pitch) * np.sin(yaw), -np.cos(pitch) * np.cos(yaw), np.sin(pitch)))
-            camera.location = center + toward_camera * distance
-            camera.rotation_euler = (-toward_camera).to_track_quat("-Z", "Y").to_euler()
-            world_to_camera = np.array(camera.matrix_basis.inverted())
-            seen_corners = corners @ world_to_camera[:3, :3].T  # framed tightly around the box, as seen from here
-            camera.data.ortho_scale = 1.1 * 2 * float(np.abs(seen_corners[:, :2] - seen_corners[:, :2].mean(0)).max())
+        for i, direction in enumerate(directions):
+            camera.location, rotation, view = camera_for(direction, corners, distance)
+            camera.rotation_euler = rotation.to_euler()
+            camera.data.ortho_scale = view["scale"]
             render.filepath = os.path.join(folder, f"view_{i:02d}.png")
             bpy.ops.render.render(write_still=True)
-            views.append({"name": f"view_{i:02d}", "world_to_camera": world_to_camera, "scale": camera.data.ortho_scale})
+            views.append({"name": f"view_{i:02d}", **view})
     finally:
         for thing, name, value in reversed(before):
             setattr(thing, name, value)
@@ -566,14 +605,16 @@ def select_faces(model, faces):
 class INPAINT_OT_pick_point(bpy.types.Operator):
     bl_idname = "inpaint.pick_point"
     bl_label = "Click on it"
-    bl_description = "Then click on the part in the 3D view (e.g. on the helmet), so the AI knows which one you mean"
+    bl_description = ("Then click on the part in the 3D view (e.g. on the helmet), on as many spots as you like: "
+                      "everything clicked counts as one part (e.g. the foot and the arm of a leg). Enter: done")
 
     def invoke(self, context, event):
         if target_model(context) is None:
             self.report({"ERROR"}, "Import the model first")
             return {"CANCELLED"}
         context.window.cursor_modal_set("EYEDROPPER")
-        context.workspace.status_text_set("Click on the part you mean (turning the view works as usual; Esc: cancel)")
+        context.workspace.status_text_set("Click on the part you mean, on as many spots as you like "
+                                          "(turning the view works as usual). Enter or right-click: done")
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
@@ -583,9 +624,9 @@ class INPAINT_OT_pick_point(bpy.types.Operator):
         redraw()
 
     def modal(self, context, event):
-        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+        if event.type in {"RET", "NUMPAD_ENTER", "ESC", "RIGHTMOUSE"} and event.value == "PRESS":
             self.finish(context)
-            return {"CANCELLED"}
+            return {"FINISHED"}
         if event.type != "LEFTMOUSE" or event.value != "PRESS":
             return {"PASS_THROUGH"}
         for area in context.window.screen.areas:
@@ -607,19 +648,18 @@ class INPAINT_OT_pick_point(bpy.types.Operator):
         if not hit:
             self.report({"WARNING"}, "That wasn't on the model: click on the part itself")
             return {"RUNNING_MODAL"}
-        settings = context.scene.inpaint
-        settings.click, settings.has_click = model.matrix_world @ location, True
-        self.finish(context)
-        return {"FINISHED"}
+        context.scene.inpaint.clicks.add().point = model.matrix_world @ location
+        redraw()
+        return {"RUNNING_MODAL"}  # more spots, until Enter
 
 
 class INPAINT_OT_clear_click(bpy.types.Operator):
     bl_idname = "inpaint.clear_click"
-    bl_label = "Forget the click"
+    bl_label = "Forget the clicks"
     bl_description = "Find the part by its word only"
 
     def execute(self, context):
-        context.scene.inpaint.has_click = False
+        context.scene.inpaint.clicks.clear()
         redraw()
         return {"FINISHED"}
 
@@ -627,7 +667,8 @@ class INPAINT_OT_clear_click(bpy.types.Operator):
 class INPAINT_OT_find_part(bpy.types.Operator):
     bl_idname = "inpaint.find_part"
     bl_label = "Find part in box"
-    bl_description = ("Take pictures of the space box from 10 sides, let the mask AI find the part in each "
+    bl_description = ("Take pictures of the space box from the 16 sides that show it best, let the mask AI "
+                      "find the part in each "
                       "(the word, and what you clicked on), and select the faces in the box most pictures agree on")
 
     @classmethod
@@ -647,7 +688,7 @@ class INPAINT_OT_find_part(bpy.types.Operator):
         if model is None or not boxes:
             self.report({"ERROR"}, "Import the model and put a space box around the part first")
             return {"CANCELLED"}
-        if not word and not settings.has_click:
+        if not word and not settings.clicks:
             self.report({"ERROR"}, "Type what to find (e.g. helmet), or click on it")
             return {"CANCELLED"}
         if context.mode != "OBJECT":
@@ -664,25 +705,27 @@ class INPAINT_OT_find_part(bpy.types.Operator):
         os.makedirs(folder, exist_ok=True)
         for name in os.listdir(folder):
             os.remove(os.path.join(folder, name))
-        views = take_pictures(context, model, np.concatenate(corners), folder)
-        click = np.array([settings.click]) if settings.has_click else None
-        faces, asked = np.flatnonzero(in_box), []
+        all_corners = np.concatenate(corners)
+        distance = float(np.linalg.norm(all_corners - all_corners.mean(0), axis=1).max()) + 2 * max(model.dimensions)
+        faces = np.flatnonzero(in_box)
+        directions = best_directions(centers, faces, all_corners, distance)
+        views = take_pictures(context, model, all_corners, folder, directions, distance)
+        clicked = np.array([tuple(c.point) for c in settings.clicks]).reshape(-1, 3)
+        asked = []
         for view in views:
             x, y, depth = project(centers, view)
             front = front_depth(x, y, depth)
             tolerance = 6 * view["scale"] / PICTURE_SIZE  # a few pixels: the surface itself, slanted
             view["seen"], view["x"], view["y"] = seen(x[faces], y[faces], depth[faces], front, tolerance)
-            clicks = []
-            if click is not None:
-                cx, cy, cdepth = project(click, view)
-                if seen(cx, cy, cdepth, front, tolerance)[0][0]:
-                    clicks = [[float(cx[0]), float(cy[0])]]
-            if word or clicks:  # a picture without the word and without the click can't tell anything
+            cx, cy, cdepth = project(clicked, view)
+            visible = seen(cx, cy, cdepth, front, tolerance)[0]
+            clicks = [[float(x_), float(y_)] for x_, y_ in zip(cx[visible], cy[visible])]
+            if word or clicks:  # a picture without the word and without a click can't tell anything
                 asked.append({"picture": view["name"] + ".png", "clicks": clicks})
             else:
                 os.remove(os.path.join(folder, view["name"] + ".png"))
         if not asked:
-            self.report({"ERROR"}, "The click can't be seen from around the box: click on the part again")
+            self.report({"ERROR"}, "The clicks can't be seen from around the box: click on the part again")
             return {"CANCELLED"}
         with open(os.path.join(folder, "views.json"), "w") as f:
             json.dump({"word": word, "views": asked}, f, indent=2)
@@ -775,38 +818,48 @@ def view3d_area():
 
 
 def vote(model, masks):
-    """Selects the faces in the box that at least half of the pictures seeing them show as the part, then
-    lets every face follow the majority around it (no speckles, no small holes)."""
+    """Selects the faces in the box that most pictures show as the part. The votes are pooled in 3D: every
+    face counts the yes and no votes of everything around it, so faces no picture sees well (inner sides,
+    crevices) follow their neighbours, and a single wrong picture is outvoted. Then every face follows the
+    majority around it (no speckles, no small holes)."""
     faces, centers = finder["faces"], finder["centers"]
-    yes = np.zeros(len(faces), np.int32)
-    seen_by = np.zeros(len(faces), np.int32)
+    yes = np.zeros(len(faces), np.float32)
+    seen_by = np.zeros(len(faces), np.float32)
     for view in finder["views"]:
         if view["name"] in masks:  # pictures where nothing was found don't vote
             seen_by += view["seen"]
             yes += view["seen"] & masks[view["name"]][view["y"], view["x"]]
-    part = (yes > 0) & (2 * yes >= seen_by)
     cell = np.ptp(centers, 0).max() / 80
-    part = majority_around(centers, part, cell)
+    part = np.zeros(len(faces), bool)
+    open_ = np.ones(len(faces), bool)  # not decided yet: no votes around at this size
+    for size in (cell, 2 * cell, 4 * cell, 8 * cell):
+        yes_around, seen_around = sum_around(centers, [yes, seen_by], size)
+        decided = open_ & (seen_around > 0)
+        part[decided] = 2 * yes_around[decided] > seen_around[decided]
+        open_ &= ~decided
+    total_around, part_around = sum_around(centers, [np.ones(len(faces), np.float32), part], cell)
+    part = 2 * part_around >= total_around
     chosen = np.zeros(len(model.data.polygons), bool)
     chosen[faces[part]] = True
     select_faces(model, chosen)
     return int(chosen.sum())
 
 
-def majority_around(points, chosen, cell):
-    """For every point: are most points in its 3x3x3 neighbourhood of cells chosen?"""
+def sum_around(points, values, cell):
+    """For every point, the sums of each of `values` over the points in its 3x3x3 neighbourhood of cells."""
     keys = np.floor((points - points.min(0)) / cell).astype(np.int64) + 1
     shape = keys.max(0) + 2
     index = np.ravel_multi_index(keys.T, shape)
-    total = np.bincount(index, minlength=shape.prod()).reshape(shape).astype(np.float32)
-    yes = np.bincount(index, weights=chosen, minlength=shape.prod()).reshape(shape).astype(np.float32)
-    around = [(slice(1 + dx, shape[0] - 1 + dx), slice(1 + dy, shape[1] - 1 + dy), slice(1 + dz, shape[2] - 1 + dz))
-              for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)]
     inner = tuple(slice(1, n - 1) for n in shape)
-    total_around, yes_around = np.zeros_like(total), np.zeros_like(yes)
-    total_around[inner] = sum(total[s] for s in around)
-    yes_around[inner] = sum(yes[s] for s in around)
-    return 2 * yes_around.ravel()[index] >= total_around.ravel()[index]
+    around = [tuple(slice(1 + d, n - 1 + d) for d, n in zip(offset, shape))
+              for offset in np.ndindex(3, 3, 3) for offset in [np.array(offset) - 1]]
+    sums = []
+    for value in values:
+        grid = np.bincount(index, weights=value, minlength=int(shape.prod())).reshape(shape)
+        total = np.zeros_like(grid)
+        total[inner] = sum(grid[s] for s in around)
+        sums.append(total.ravel()[index])
+    return sums
 
 
 class INPAINT_OT_show_found(bpy.types.Operator):
@@ -1316,8 +1369,8 @@ class INPAINT_PT_panel(bpy.types.Panel):
         box.prop(settings, "part")
         row = box.row(align=True)
         row.operator(INPAINT_OT_pick_point.bl_idname, icon="EYEDROPPER",
-                     text="Clicked on it (again)" if settings.has_click else "Click on it")
-        if settings.has_click:
+                     text=f"Clicked {len(settings.clicks)} spot(s): add more" if settings.clicks else "Click on it")
+        if settings.clicks:
             row.operator(INPAINT_OT_clear_click.bl_idname, text="", icon="X")
         box.operator(INPAINT_OT_find_part.bl_idname, icon="VIEWZOOM")
         box.prop(settings, "find_cpu")
@@ -1361,7 +1414,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
         layout.prop(settings, "folder")
 
 
-classes = (InpaintSettings, INPAINT_OT_add_box, INPAINT_GGT_box_sides, INPAINT_OT_pick_point,
+classes = (InpaintClick, InpaintSettings, INPAINT_OT_add_box, INPAINT_GGT_box_sides, INPAINT_OT_pick_point,
            INPAINT_OT_clear_click, INPAINT_OT_find_part, INPAINT_OT_show_found, INPAINT_OT_make_picture,
            INPAINT_OT_regenerate, INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result,
            InpaintPreferences, INPAINT_OT_cloud_login,

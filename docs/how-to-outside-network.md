@@ -66,7 +66,7 @@ The worker keeps running after you close the VDI.
 1. Import the model, mark the area: faces in Edit Mode and/or **Add space box** (blue, see-through;
    drag an arrow to move one side, a dot to pull one corner, G moves it, R turns it).
    **Only one part in the box** (e.g. the helmet, not the hair under it): type its name under
-   *Find a part in the box* (`helmet`), optionally **Click on it**, then **Find part in box**. About
+   *Find a part in the box* (`helmet`), optionally **Click on it** (several spots: Enter when done), then **Find part in box**. About
    15 s later its faces are selected and shown red (Tab to fix them by hand) and *Only the selected faces
    in the box* is ticked. Needs `./install_mask.sh` once on this PC (a mask AI, about 4 GB VRAM).
 2. **Picture**: the model's picture.

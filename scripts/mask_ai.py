@@ -9,7 +9,8 @@ GPU if there is one (about 4 GB of VRAM), else on the CPU.
     python scripts/mask_ai.py --download        # only download the models (into models/mask)
 
 views.json:  {"word": "helmet", "views": [{"picture": "view_00.png", "clicks": [[x, y], ...]}, ...]}
-             (clicks are pixels where the user's click is seen in that picture, if it is seen there)
+             (clicks are the pixels where the user's clicks are seen in that picture; all of them are
+             spots on the same part, e.g. the foot and the arm of one leg)
 Writes:      <folder>/masks.npz   one yes/no picture per view, named like its picture ("view_00"); a
                                   picture where nothing was found has none (it doesn't vote)
              <folder>/overview.jpg  all pictures with what was found in red
@@ -17,8 +18,8 @@ Writes:      <folder>/masks.npz   one yes/no picture per view, named like its pi
 How the part is found in one picture:
   1. Grounding DINO reads the word and puts boxes around what matches it (only boxes it is sure about,
      and not around nearly the whole picture: for "helmet" it also boxes the whole statue wearing it)
-  2. SAM 2.1 cuts out the exact outline in each box. A click keeps only the boxes it lies in; if it lies
-     in none, the thing under the click is cut out instead.
+  2. SAM 2.1 cuts out the exact outline in each box. Clicks keep only the boxes they lie in; the clicks
+     outside every box are cut out as one more thing (all of them together as one object).
 """
 import argparse
 import json
@@ -77,11 +78,12 @@ class PartFinder:
             inputs = self.sam_processor(images=picture, input_boxes=[[list(map(float, b)) for b in boxes]],
                                         return_tensors="pt")
             outputs = self.sam(**inputs.to(self.device), multimask_output=False)
-        else:  # one click can mean a small piece or the whole thing: take SAM's most confident of three
-            inputs = self.sam_processor(images=picture, input_points=[[[list(map(float, c))] for c in clicks]],
-                                        input_labels=[[[1] for _ in clicks]], return_tensors="pt")
-            outputs = self.sam(**inputs.to(self.device), multimask_output=True)
-            best = outputs.iou_scores.argmax(-1, keepdim=True)  # per click
+        else:  # all clicks as spots on one object
+            inputs = self.sam_processor(images=picture, input_points=[[[list(map(float, c)) for c in clicks]]],
+                                        input_labels=[[[1] * len(clicks)]], return_tensors="pt")
+            # one click can mean a small piece or the whole thing: then take SAM's most confident of three
+            outputs = self.sam(**inputs.to(self.device), multimask_output=len(clicks) == 1)
+            best = outputs.iou_scores.argmax(-1, keepdim=True)
             outputs.pred_masks = torch.take_along_dim(outputs.pred_masks, best[..., None, None], dim=2)
         masks = self.sam_processor.post_process_masks(outputs.pred_masks.cpu(), inputs["original_sizes"].cpu())[0]
         return masks.reshape(-1, *masks.shape[-2:]).any(0).numpy()
@@ -92,10 +94,15 @@ class PartFinder:
         if word:
             boxes, scores = self.boxes(picture, word)
         if clicks:
-            inside = [b for b in boxes if any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for x, y in clicks)]
+            within = lambda b, x, y: b[0] <= x <= b[2] and b[1] <= y <= b[3]
+            inside = [b for b in boxes if any(within(b, x, y) for x, y in clicks)]
+            outside = [c for c in clicks if not any(within(b, *c) for b in inside)]
+            mask = np.zeros(picture.size[::-1], bool)
             if inside:
-                return self.cut_out(picture, boxes=inside), f"{len(inside)} box(es) with the click"
-            return self.cut_out(picture, clicks=clicks), "the thing under the click"
+                mask |= self.cut_out(picture, boxes=inside)
+            if outside:
+                mask |= self.cut_out(picture, clicks=outside)
+            return mask, f"{len(inside)} box(es) with clicks, {len(outside)} click(s) outside them"
         if len(boxes):
             return self.cut_out(picture, boxes=boxes), f"{len(boxes)} box(es), best {scores[0]:.2f}"
         return None, "not found (this picture doesn't vote)"
