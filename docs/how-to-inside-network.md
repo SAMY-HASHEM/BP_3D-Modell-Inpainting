@@ -70,6 +70,10 @@ Wait about a minute until it says **Ready**.
 
 1. Import the model, mark the area: faces in Edit Mode and/or **Add space box** (blue, see-through;
    drag an arrow to move one side, a dot to pull one corner, G moves it, R turns it).
+   **Only one part in the box** (e.g. the helmet, not the hair under it): type its name under
+   *Find a part in the box* (`helmet`), optionally **Click on it**, then **Find part in box**. About
+   15 s later its faces are selected (Tab shows them, fix them there) and *Only the selected faces
+   in the box* is ticked. Needs `./install_mask.sh` once on this PC (a mask AI, about 4 GB VRAM).
 2. **Picture**: the model's picture.
 3. Connection: **Inside the network** → **2. Regenerate area**.
 4. The panel shows the progress (1/6 … 6/6); the result appears next to the hidden original.
