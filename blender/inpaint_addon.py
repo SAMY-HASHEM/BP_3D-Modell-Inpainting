@@ -1,7 +1,8 @@
 """Blender add-on: mark an area of a model, press a button, and TRELLIS.2 regenerates that area.
 
 The area is the selected faces (Edit Mode) and/or "space boxes": boxes that mark empty space where
-something new may grow (e.g. a statue on the ground). Optionally a prompt (and a reference picture)
+something new may grow (e.g. a statue on the ground). The boxes are drawn see-through blue, and the
+selected one has an arrow on each side: drag it to move that side. Optionally a prompt (and a reference picture)
 says what should be there: the server then first paints it into a picture of the model, seen from the
 current view, and TRELLIS.2 builds that picture's change in 3D.
 
@@ -20,13 +21,15 @@ import urllib.request
 import zipfile
 
 import bpy
+import gpu
 import numpy as np
-from mathutils import Vector
+from gpu_extras.batch import batch_for_shader
+from mathutils import Matrix, Vector
 
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 5, 0),
+    "version": (1, 6, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -35,7 +38,13 @@ bl_info = {
 
 LOCAL_TOKEN = os.path.expanduser("~/.config/inpainting3d/server_token")  # made by inpaint_server.py
 BOX = "InpaintBox"
+BOX_COLOR = (0.25, 0.65, 1.0)  # blue, so a box doesn't look like Blender's orange selection
+# a box's 8 corners in Blender's bound_box order: its 12 triangles and 12 edges
+BOX_TRIANGLES = [(0, 1, 2), (0, 2, 3), (4, 6, 5), (4, 7, 6), (0, 4, 5), (0, 5, 1),
+                 (3, 2, 6), (3, 6, 7), (0, 3, 7), (0, 7, 4), (1, 5, 6), (1, 6, 2)]
+BOX_EDGES = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
 status = {"server": "not checked", "message": "", "job": None}
+draw_handler = None
 
 
 def server():
@@ -214,7 +223,8 @@ class InpaintSettings(bpy.types.PropertyGroup):
 class INPAINT_OT_add_box(bpy.types.Operator):
     bl_idname = "inpaint.add_box"
     bl_label = "Add space box"
-    bl_description = "Add a box that marks empty space where something new may grow (move: G, size: S, turn: R)"
+    bl_description = ("Add a box that marks space where something new may grow "
+                      "(a side: drag its arrow; move: G, size: S, turn: R)")
 
     def execute(self, context):
         model = target_model(context)
@@ -233,8 +243,109 @@ class INPAINT_OT_add_box(bpy.types.Operator):
         box.display_type = "WIRE"
         box.show_in_front = True
         box.hide_render = True
-        self.report({"INFO"}, "Space box added: move it with G, size it with S (X/Y/Z for one direction)")
+        self.report({"INFO"}, "Space box added: drag its arrows to move a side, move it with G, turn it with R")
         return {"FINISHED"}
+
+
+def box_side(box, axis, side):
+    """One side of a space box (axis 0/1/2 = its X/Y/Z, side +1/-1), in world space: the centre of the
+    opposite side (which stays put while this one is dragged), the outward direction and the box's length.
+    Uses matrix_basis, which follows location/rotation/scale at once (space boxes have no parent)."""
+    corners = np.array(box.bound_box)
+    low, high = corners.min(0), corners.max(0)
+    fixed = (low + high) / 2
+    fixed[axis] = low[axis] if side > 0 else high[axis]
+    m = box.matrix_basis
+    along = m.to_3x3().col[axis]  # the box's axis, as long as its scale
+    return m @ Vector(fixed), along.normalized() * side, float((high[axis] - low[axis]) * along.length)
+
+
+def set_box_length(box, axis, side, length):
+    """Moves one side of a space box so the box gets `length` long; the opposite side stays where it is."""
+    fixed, _, old = box_side(box, axis, side)
+    if old <= 0:
+        return
+    scale = box.scale.copy()
+    scale[axis] *= max(length, old * 1e-3, 1e-4) / old
+    box.scale = scale
+    box.location = box.location + (fixed - box_side(box, axis, side)[0])
+
+
+def draw_boxes():
+    """Every visible space box as see-through blue with bold edges, so its space can be seen without
+    turning the view: stronger where the box is in front of the model, fainter behind it."""
+    boxes = [o for o in bpy.context.view_layer.objects if is_box(o) and o.visible_get()]
+    if not boxes:
+        return
+    fill = gpu.shader.from_builtin("UNIFORM_COLOR")
+    edge = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
+    edge.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
+    edge.uniform_float("lineWidth", 2.0)
+    before = gpu.state.blend_get(), gpu.state.depth_test_get(), gpu.state.depth_mask_get()
+    gpu.state.blend_set("ALPHA")
+    gpu.state.depth_mask_set(False)
+    for box in boxes:
+        corners = [box.matrix_world @ Vector(c) for c in box.bound_box]
+        strength = 1.5 if box.select_get() else 1.0
+        sides = batch_for_shader(fill, "TRIS", {"pos": corners}, indices=BOX_TRIANGLES)
+        for depth, alpha in (("NONE", 0.07), ("LESS_EQUAL", 0.15)):  # behind the model / in front of it
+            gpu.state.depth_test_set(depth)
+            fill.uniform_float("color", (*BOX_COLOR, alpha * strength))
+            sides.draw(fill)
+        gpu.state.depth_test_set("NONE")
+        edge.uniform_float("color", (*BOX_COLOR, 0.9))
+        batch_for_shader(edge, "LINES", {"pos": corners}, indices=BOX_EDGES).draw(edge)
+    gpu.state.blend_set(before[0])
+    gpu.state.depth_test_set(before[1])
+    gpu.state.depth_mask_set(before[2])
+
+
+class INPAINT_GGT_box_sides(bpy.types.GizmoGroup):
+    """An arrow on each of the six sides of the selected space box: dragging one moves that side only,
+    like the edge of a window (the opposite side stays where it is)."""
+    bl_idname = "INPAINT_GGT_box_sides"
+    bl_label = "Space box sides"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "WINDOW"
+    bl_options = {"3D", "PERSISTENT"}
+
+    @classmethod
+    def poll(cls, context):
+        box = context.active_object
+        return context.mode == "OBJECT" and is_box(box) and box.select_get() and box.visible_get()
+
+    def setup(self, context):
+        self.sides = []
+        for axis in range(3):
+            for side in (1, -1):
+                arrow = self.gizmos.new("GIZMO_GT_arrow_3d")
+                arrow.target_set_handler("offset", get=self.length_of(axis, side), set=self.resize(axis, side))
+                arrow.color, arrow.alpha = BOX_COLOR, 0.9
+                arrow.color_highlight, arrow.alpha_highlight = (1.0, 1.0, 1.0), 1.0
+                arrow.scale_basis = 0.7
+                self.sides.append((arrow, axis, side))
+
+    @staticmethod
+    def length_of(axis, side):
+        # the arrow sits at the opposite side, pushed out by the box's length: so it shows on its own side
+        def get():
+            box = bpy.context.active_object
+            return box_side(box, axis, side)[2] if is_box(box) else 0.0
+        return get
+
+    @staticmethod
+    def resize(axis, side):
+        def set(length):
+            box = bpy.context.active_object
+            if is_box(box):
+                set_box_length(box, axis, side, length)
+        return set
+
+    def draw_prepare(self, context):
+        box = context.active_object
+        for arrow, axis, side in self.sides:
+            fixed, outward, _ = box_side(box, axis, side)
+            arrow.matrix_basis = Matrix.Translation(fixed) @ outward.to_track_quat("Z", "Y").to_matrix().to_4x4()
 
 
 class INPAINT_OT_make_picture(bpy.types.Operator):
@@ -708,6 +819,8 @@ class INPAINT_PT_panel(bpy.types.Panel):
         box.label(text="A. Mark the area", icon="SELECT_SET")
         box.label(text="Faces: Edit Mode (Tab), select")
         box.operator(INPAINT_OT_add_box.bl_idname, icon="CUBE")
+        if is_box(context.active_object):
+            box.label(text="Drag the blue arrows to move a side")
         if settings.model is not None:
             box.label(text=f"Model: {settings.model.name}")
 
@@ -745,19 +858,25 @@ class INPAINT_PT_panel(bpy.types.Panel):
         layout.prop(settings, "folder")
 
 
-classes = (InpaintSettings, INPAINT_OT_add_box, INPAINT_OT_make_picture, INPAINT_OT_regenerate,
-           INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result, InpaintPreferences,
-           INPAINT_OT_cloud_login,
+classes = (InpaintSettings, INPAINT_OT_add_box, INPAINT_GGT_box_sides, INPAINT_OT_make_picture,
+           INPAINT_OT_regenerate, INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result,
+           InpaintPreferences, INPAINT_OT_cloud_login,
            INPAINT_OT_show_picture, INPAINT_OT_check, INPAINT_PT_panel)
 
 
 def register():
+    global draw_handler
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.inpaint = bpy.props.PointerProperty(type=InpaintSettings)
+    draw_handler = bpy.types.SpaceView3D.draw_handler_add(draw_boxes, (), "WINDOW", "POST_VIEW")
 
 
 def unregister():
+    global draw_handler
+    if draw_handler is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(draw_handler, "WINDOW")
+        draw_handler = None
     del bpy.types.Scene.inpaint
     for c in reversed(classes):
         bpy.utils.unregister_class(c)

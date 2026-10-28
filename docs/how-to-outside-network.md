@@ -63,7 +63,8 @@ The worker keeps running after you close the VDI.
 
 **In Blender** (Inpaint tab, N key):
 
-1. Import the model, mark the area: faces in Edit Mode and/or **Add space box**.
+1. Import the model, mark the area: faces in Edit Mode and/or **Add space box** (blue, see-through;
+   drag its arrows to move one side, G moves it, R turns it).
 2. **Picture**: the model's picture.
 3. Connection: **Outside (cloud)** → **2. Regenerate area**.
 4. The panel shows the progress (`queued` → `running: GPU 2: …` → `done`); the result is downloaded
