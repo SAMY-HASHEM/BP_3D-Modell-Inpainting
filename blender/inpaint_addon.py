@@ -2,7 +2,8 @@
 
 The area is the selected faces (Edit Mode) and/or "space boxes": boxes that mark empty space where
 something new may grow (e.g. a statue on the ground). The boxes are drawn see-through blue, and the
-selected one has an arrow on each side: drag it to move that side. Optionally a prompt (and a reference picture)
+selected one has an arrow on each side (drag it to move that side) and a dot on each corner (drag it
+to pull that corner anywhere, so a box can take any shape). Optionally a prompt (and a reference picture)
 says what should be there: the server then first paints it into a picture of the model, seen from the
 current view, and TRELLIS.2 builds that picture's change in 3D.
 
@@ -39,10 +40,14 @@ bl_info = {
 LOCAL_TOKEN = os.path.expanduser("~/.config/inpainting3d/server_token")  # made by inpaint_server.py
 BOX = "InpaintBox"
 BOX_COLOR = (0.25, 0.65, 1.0)  # blue, so a box doesn't look like Blender's orange selection
-# a box's 8 corners in Blender's bound_box order: its 12 triangles and 12 edges
+# a box's 8 corners in Blender's bound_box order: which side of each axis they are on (-1/+1), their
+# 12 triangles and 12 edges, and the 4 edges along each axis
+CORNER_SIGNS = np.array([(-1, -1, -1), (-1, -1, 1), (-1, 1, 1), (-1, 1, -1), (1, -1, -1), (1, -1, 1), (1, 1, 1), (1, 1, -1)])
 BOX_TRIANGLES = [(0, 1, 2), (0, 2, 3), (4, 6, 5), (4, 7, 6), (0, 4, 5), (0, 5, 1),
                  (3, 2, 6), (3, 6, 7), (0, 3, 7), (0, 7, 4), (1, 5, 6), (1, 6, 2)]
 BOX_EDGES = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
+EDGES_ALONG = [[(a, b) for a, b in BOX_EDGES if CORNER_SIGNS[a][axis] != CORNER_SIGNS[b][axis]] for axis in range(3)]
+CUBE_CORNERS = [0, 1, 3, 2, 4, 5, 7, 6]  # Blender's cube (Add > Cube) has its vertices in this order
 status = {"server": "not checked", "message": "", "job": None}
 draw_handler = None
 
@@ -130,17 +135,33 @@ def selected_points(obj):
     return local @ m[:3, :3].T + m[:3, 3], int(faces.sum())
 
 
+def box_corners(box):
+    """The box's 8 corners in world space, in bound_box order. Its corners can be pulled anywhere, so
+    the box needn't be rectangular. Uses matrix_basis, which follows location/rotation/scale at once
+    (space boxes have no parent)."""
+    m = box.matrix_basis
+    vertices = box.data.vertices
+    if len(vertices) != 8:  # changed by hand in Edit Mode: its bounding box
+        return [m @ Vector(c) for c in box.bound_box]
+    return [m @ vertices[i].co for i in CUBE_CORNERS]
+
+
 def box_points(model):
-    """Points filling every visible space box (world), about 2 per voxel of TRELLIS.2's 64 grid."""
+    """Points filling every visible space box (world), about 2 per voxel of TRELLIS.2's 64 grid. They are
+    blended between the 8 corners (trilinear), so a box with pulled corners is filled in its own shape."""
     size = max(model.dimensions)
     points = []
     for box in bpy.data.objects:
         if not is_box(box) or not box.visible_get():
             continue
-        m = np.array(box.matrix_world)
-        steps = [max(2, int(np.linalg.norm(m[:3, i]) * 2 / size * 128)) for i in range(3)]
-        grid = np.stack(np.meshgrid(*[np.linspace(-1, 1, k) for k in steps], indexing="ij"), -1).reshape(-1, 3)
-        points.append(grid @ m[:3, :3].T + m[:3, 3])
+        corners = np.array(box_corners(box))
+        grid = np.zeros((2, 2, 2, 3))  # corners by side: grid[x][y][z], 0 = low side, 1 = high side
+        for corner, signs in zip(corners, CORNER_SIGNS):
+            grid[tuple((signs + 1) // 2)] = corner
+        steps = [max(2, int(max(np.linalg.norm(corners[a] - corners[b]) for a, b in edges) / size * 128))
+                 for edges in EDGES_ALONG]
+        weights = [np.stack([1 - t, t], 1) for t in (np.linspace(0, 1, k) for k in steps)]
+        points.append(np.einsum("ia,jb,kc,abcd->ijkd", *weights, grid).reshape(-1, 3))
     return np.concatenate(points) if points else np.zeros((0, 3))
 
 
@@ -224,7 +245,7 @@ class INPAINT_OT_add_box(bpy.types.Operator):
     bl_idname = "inpaint.add_box"
     bl_label = "Add space box"
     bl_description = ("Add a box that marks space where something new may grow "
-                      "(a side: drag its arrow; move: G, size: S, turn: R)")
+                      "(a side: drag its arrow; a corner: drag its dot; move: G, size: S, turn: R)")
 
     def execute(self, context):
         model = target_model(context)
@@ -243,32 +264,36 @@ class INPAINT_OT_add_box(bpy.types.Operator):
         box.display_type = "WIRE"
         box.show_in_front = True
         box.hide_render = True
-        self.report({"INFO"}, "Space box added: drag its arrows to move a side, move it with G, turn it with R")
+        self.report({"INFO"}, "Space box added: drag an arrow to move a side, a dot to move a corner; "
+                              "G moves it, R turns it")
         return {"FINISHED"}
 
 
 def box_side(box, axis, side):
-    """One side of a space box (axis 0/1/2 = its X/Y/Z, side +1/-1), in world space: the centre of the
-    opposite side (which stays put while this one is dragged), the outward direction and the box's length.
-    Uses matrix_basis, which follows location/rotation/scale at once (space boxes have no parent)."""
-    corners = np.array(box.bound_box)
-    low, high = corners.min(0), corners.max(0)
-    fixed = (low + high) / 2
-    fixed[axis] = low[axis] if side > 0 else high[axis]
-    m = box.matrix_basis
-    along = m.to_3x3().col[axis]  # the box's axis, as long as its scale
-    return m @ Vector(fixed), along.normalized() * side, float((high[axis] - low[axis]) * along.length)
+    """One side of a space box (axis 0/1/2 = its X/Y/Z, side +1/-1), in world space: the middle of the
+    opposite side (which stays put while this one is dragged), the outward direction and their distance."""
+    corners = box_corners(box)
+    this = sum((c for c, s in zip(corners, CORNER_SIGNS) if s[axis] == side), Vector()) / 4
+    other = sum((c for c, s in zip(corners, CORNER_SIGNS) if s[axis] != side), Vector()) / 4
+    if (this - other).length < 1e-9:  # squashed flat: push out along the box's own axis
+        return other, box.matrix_basis.to_3x3().col[axis].normalized() * side, 0.0
+    return other, (this - other).normalized(), (this - other).length
 
 
 def set_box_length(box, axis, side, length):
-    """Moves one side of a space box so the box gets `length` long; the opposite side stays where it is."""
-    fixed, _, old = box_side(box, axis, side)
-    if old <= 0:
-        return
-    scale = box.scale.copy()
-    scale[axis] *= max(length, old * 1e-3, 1e-4) / old
-    box.scale = scale
-    box.location = box.location + (fixed - box_side(box, axis, side)[0])
+    """Moves one side of a space box (its 4 corners) to `length` from the opposite side, which stays put."""
+    _, outward, old = box_side(box, axis, side)
+    move = box.matrix_basis.inverted().to_3x3() @ (outward * (max(length, 1e-4) - old))
+    for i, signs in zip(CUBE_CORNERS, CORNER_SIGNS):
+        if signs[axis] == side:
+            box.data.vertices[i].co += move
+    box.data.update()
+
+
+def set_box_corner(box, corner, position):
+    """Puts one corner of a space box (bound_box order) at `position` (world)."""
+    box.data.vertices[CUBE_CORNERS[corner]].co = box.matrix_basis.inverted() @ Vector(position)
+    box.data.update()
 
 
 def draw_boxes():
@@ -285,7 +310,7 @@ def draw_boxes():
     gpu.state.blend_set("ALPHA")
     gpu.state.depth_mask_set(False)
     for box in boxes:
-        corners = [box.matrix_world @ Vector(c) for c in box.bound_box]
+        corners = box_corners(box)
         strength = 1.5 if box.select_get() else 1.0
         sides = batch_for_shader(fill, "TRIS", {"pos": corners}, indices=BOX_TRIANGLES)
         for depth, alpha in (("NONE", 0.07), ("LESS_EQUAL", 0.15)):  # behind the model / in front of it
@@ -302,7 +327,8 @@ def draw_boxes():
 
 class INPAINT_GGT_box_sides(bpy.types.GizmoGroup):
     """An arrow on each of the six sides of the selected space box: dragging one moves that side only,
-    like the edge of a window (the opposite side stays where it is)."""
+    like the edge of a window (the opposite side stays where it is). And a dot on each of its eight
+    corners: dragging one moves that corner anywhere (across the view), so the box can take any shape."""
     bl_idname = "INPAINT_GGT_box_sides"
     bl_label = "Space box sides"
     bl_space_type = "VIEW_3D"
@@ -312,7 +338,8 @@ class INPAINT_GGT_box_sides(bpy.types.GizmoGroup):
     @classmethod
     def poll(cls, context):
         box = context.active_object
-        return context.mode == "OBJECT" and is_box(box) and box.select_get() and box.visible_get()
+        return (context.mode == "OBJECT" and is_box(box) and box.select_get() and box.visible_get()
+                and len(box.data.vertices) == 8)
 
     def setup(self, context):
         self.sides = []
@@ -324,6 +351,28 @@ class INPAINT_GGT_box_sides(bpy.types.GizmoGroup):
                 arrow.color_highlight, arrow.alpha_highlight = (1.0, 1.0, 1.0), 1.0
                 arrow.scale_basis = 0.7
                 self.sides.append((arrow, axis, side))
+        for corner in range(8):
+            dot = self.gizmos.new("GIZMO_GT_move_3d")  # drawn at its offset: the corner's world position
+            dot.target_set_handler("offset", get=self.position_of(corner), set=self.move_corner(corner))
+            dot.draw_options = {"FILL", "ALIGN_VIEW"}
+            dot.color, dot.alpha = BOX_COLOR, 0.9
+            dot.color_highlight, dot.alpha_highlight = (1.0, 1.0, 1.0), 1.0
+            dot.scale_basis = 0.12
+
+    @staticmethod
+    def position_of(corner):
+        def get():
+            box = bpy.context.active_object
+            return tuple(box_corners(box)[corner]) if is_box(box) else (0.0, 0.0, 0.0)
+        return get
+
+    @staticmethod
+    def move_corner(corner):
+        def set(position):
+            box = bpy.context.active_object
+            if is_box(box):
+                set_box_corner(box, corner, position)
+        return set
 
     @staticmethod
     def length_of(axis, side):
@@ -820,7 +869,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
         box.label(text="Faces: Edit Mode (Tab), select")
         box.operator(INPAINT_OT_add_box.bl_idname, icon="CUBE")
         if is_box(context.active_object):
-            box.label(text="Drag the blue arrows to move a side")
+            box.label(text="Drag: arrow = a side, dot = a corner")
         if settings.model is not None:
             box.label(text=f"Model: {settings.model.name}")
 

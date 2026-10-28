@@ -69,7 +69,7 @@ Wait about a minute until it says **Ready**.
 **2. In Blender** (Inpaint tab, N key):
 
 1. Import the model, mark the area: faces in Edit Mode and/or **Add space box** (blue, see-through;
-   drag its arrows to move one side, G moves it, R turns it).
+   drag an arrow to move one side, a dot to pull one corner, G moves it, R turns it).
 2. **Picture**: the model's picture.
 3. Connection: **Inside the network** → **2. Regenerate area**.
 4. The panel shows the progress (1/6 … 6/6); the result appears next to the hidden original.
