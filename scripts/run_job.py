@@ -46,6 +46,7 @@ VARIANT_CHECKS = {
     "soft": lambda v: int(v) if 0 <= int(v) <= 6 else None,
     "swap": lambda v: bool(v),
     "solver": lambda v: v if v in ("midpoint", "euler") else None,
+    "inject": lambda v: float(v) if 0 <= float(v) <= 1 else None,
 }
 
 
@@ -74,6 +75,8 @@ def name(version):
         parts.append("noswap")
     if version.get("solver", "midpoint") != "midpoint":
         parts.append(version["solver"])
+    if version.get("inject", 1.0) != 1.0:
+        parts.append(f"inject{version['inject']:g}")
     return "-".join(parts)
 
 

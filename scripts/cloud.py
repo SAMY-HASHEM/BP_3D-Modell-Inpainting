@@ -188,7 +188,7 @@ def inpaint(args):
             version = {"method": method}
             for setting in settings:
                 key, _, value = setting.partition("=")
-                version[key] = int(value) if value.isdigit() else value
+                version[key] = int(value) if value.isdigit() else float(value) if value.replace(".", "", 1).isdigit() else value
             job["variants"].append(version)
     if args.seeds:
         job["seeds"] = args.seeds

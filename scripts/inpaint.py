@@ -270,7 +270,7 @@ def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
 
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
             method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True,
-            solver="midpoint"):
+            solver="midpoint", inject=1.0):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
     method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
@@ -280,7 +280,8 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     the width of the soft edge in voxels (0: hard).
     picture_mask_path: the 2D mask of what changed in the picture; source_path is then the original's
     render from the same view, and with `swap` TRELLIS.2 sees the original picture outside the mask.
-    solver: "midpoint" (second order, as VoxHammer) or "euler" (half the evaluations, faster)."""
+    solver: "midpoint" (second order, as VoxHammer) or "euler" (half the evaluations, faster).
+    inject: the keys and values are injected at times t <= inject only (1: always, as VoxHammer)."""
     assert method in METHODS and start in ("inverted", "random") and solver in ("midpoint", "euler")
     step = getattr(inversion, solver)
     start_time = time.time()
@@ -343,7 +344,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
             weight = inversion.soft_weight(inversion.distance_to(cell_mask, width).flatten()[cells], width)
             kept = inversion.Kept(cells, cells, weight)
             z = follow_original(sampler, flow, params, steps, cond_512, source_512, ss_known, kept,
-                                start=None if start == "inverted" else noise, progress=progress, step=step)
+                                start=None if start == "inverted" else noise, progress=progress, step=step, inject=inject)
         with OnGpu(pipeline.models["sparse_structure_decoder"]) as decoder:
             new_occupied = decoder(z)[0, 0] > 0
         occupied = torch.where(mask, new_occupied, occupied[0, 0] > 0)
@@ -370,7 +371,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         else:
             kept, original = kept_tokens(coords, inside, distance, soft, shape_known.coords, shape_feats)
             shape = follow_original(sampler, flow, params, steps, cond_1024, source_1024, original, kept,
-                                    start=noise, progress=progress, step=step)
+                                    start=noise, progress=progress, step=step, inject=inject)
         shape_norm = shape
         shape = shape * std + mean
 
@@ -392,7 +393,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
             original_shape, has = lookup(original.coords, shape_known.coords, shape_feats)  # its shape, as the model needs it
             original_shape = original_shape * has[:, None]
             tex = follow_original(sampler, flow, params, steps, cond_1024, source_1024, original, kept,
-                                  start=noise, progress=progress, step=step, concat_cond=shape_norm,
+                                  start=noise, progress=progress, step=step, inject=inject, concat_cond=shape_norm,
                                   original_kwargs={"concat_cond": original.replace(original_shape)})
         tex = tex * tstd + tmean
 
@@ -425,7 +426,7 @@ def kept_tokens(coords, inside, distance, soft, known_coords, known_feats):
 
 
 def follow_original(sampler, flow, params, steps, cond, source_cond, original, kept, start, progress,
-                    original_kwargs=None, step=inversion.midpoint, **model_kwargs):
+                    original_kwargs=None, step=inversion.midpoint, inject=1.0, **model_kwargs):
     """One stage with inversion: invert the original's latent (with the original's picture, without
     guidance), then regenerate from `start` (None: the original's noise) along it, with the kept tokens'
     keys and values injected. Returns the new latent."""
@@ -447,7 +448,7 @@ def follow_original(sampler, flow, params, steps, cond, source_cond, original, k
         with inversion.KVInjection(flow, kept, offload) as injection:
             return inversion.regenerate(edit, start, times, path, kept, injection,
                                         record=lambda t: source(path.at(t), t), on_step=progress("step"),
-                                        step=step)
+                                        step=step, inject_below=inject)
 
 
 def main():

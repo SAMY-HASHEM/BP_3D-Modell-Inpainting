@@ -213,11 +213,15 @@ def invert(velocity, x0, times, on_step=None, step=midpoint):
 
 
 @torch.no_grad()
-def regenerate(velocity, start, times, path, kept, injection, record, on_step=None, step=midpoint):
+def regenerate(velocity, start, times, path, kept, injection, record, on_step=None, step=midpoint, inject_below=1.0):
     """Regenerates from `start` (t = 1) through `times`, with the kept tokens on the original's `path`
     and their keys and values injected: before every evaluation at time t, record(t) sends the
-    original's latent at t through the model with injection.mode = "record"."""
+    original's latent at t through the model with injection.mode = "record". With inject_below < 1 the
+    keys and values are injected only from that time on (the early, rough steps are left free, so the
+    area can take a new shape)."""
     def injected(x, t):
+        if t > inject_below + 1e-9:
+            return velocity(x, t)
         injection.mode = "record"
         record(t)
         injection.mode = "inject"
