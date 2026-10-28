@@ -105,6 +105,8 @@ source activate.sh && nohup python -u scripts/cloud_worker.py > outputs/cloud_wo
 ## Good to know
 
 - **Which GPU?** The worker takes the GPU with the least memory in use, for every job anew.
+- **New code without logging in:** `cloud.py generate … --code main` (or another branch) makes the worker
+  fetch that branch's newest code from GitHub before the job, and restart itself if the worker changed.
 - **Safety:** the worker only runs our own scripts with checked settings, never commands from the
   cloud. An app password only opens your Sciebo; revoke it any time in Sciebo → Sicherheit.
 - **Make picture from prompt** only works with a server on your own PC (it needs ComfyUI there).

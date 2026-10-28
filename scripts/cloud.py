@@ -11,6 +11,9 @@ Usage:
     python3 scripts/cloud.py send outputs/blender/tavern_job.zip          # a job from Blender
     python3 scripts/cloud.py generate pictures/torso/torso-front.png pictures/torso/torso-back.png \\
         --resolution 1024 --steps 25 --mirror --faces 4000000              # picture(s) -> model
+    python3 scripts/cloud.py inpaint outputs/robot.glb pictures/robot.png --box -0.4 -0.5 -0.4 -0.1 0 0 \
+        --seed 2 --steps 25                                 # regenerate an area, without Blender
+    python3 scripts/cloud.py generate front.png --code voxhammer   # with the newest code of a branch (GitHub)
     python3 scripts/cloud.py status                         # all jobs and how far they are
     python3 scripts/cloud.py fetch                          # download finished results to outputs/cloud/
 
@@ -149,10 +152,43 @@ def generate(args):
     with zipfile.ZipFile(path, "w") as z:
         for local, packed in zip(args.pictures, pictures):
             z.write(local, packed)
-        z.writestr("job.json", json.dumps({"kind": "generate", "name": name, "pictures": pictures, "options": options}, indent=2))
+        z.writestr("job.json", json.dumps({"kind": "generate", "name": name, "pictures": pictures, "options": options,
+                                           **({"code": args.code} if args.code else {})}, indent=2))
     cloud = Cloud()
     job = send_zip(cloud, path)
     print(f"Sent as {job} ({len(pictures)} picture(s), {options}). Follow it with:  python3 scripts/cloud.py status")
+
+
+def inpaint(args):
+    """Packs a model, an area (a box in the model's coordinates, or a Blender area .npy) and a picture into
+    the same job .zip that Blender's add-on makes, and sends it."""
+    import numpy as np  # only this command needs them (TRELLIS.2 environment)
+    import trimesh
+    if args.area:
+        points = np.load(args.area)
+    elif args.box:  # filled with points, about 2 per voxel of TRELLIS.2's 64 grid
+        size = np.ptp(trimesh.load(args.model).bounds, 0).max()
+        low, high = np.minimum(args.box[:3], args.box[3:]), np.maximum(args.box[:3], args.box[3:])
+        axes = [np.linspace(low[i], high[i], max(2, int((high[i] - low[i]) / size * 128))) for i in range(3)]
+        points = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
+    else:
+        raise SystemExit("give the area: --box X0 Y0 Z0 X1 Y1 Z1 (model coordinates) or --area file.npy")
+    name = os.path.splitext(os.path.basename(args.model))[0][:40]
+    folder = os.path.join(PROJECT_DIR, "outputs", "cloud")
+    os.makedirs(folder, exist_ok=True)
+    area_file, path = os.path.join(folder, f"{name}_area.npy"), os.path.join(folder, f"{name}_job.zip")
+    np.save(area_file, points)
+    picture = "picture" + os.path.splitext(args.picture)[1].lower()
+    job = {"model": "model.glb", "points": "area.npy", "picture": picture, "object": name,
+           "seed": args.seed, "grow": args.grow, "steps": args.steps, **({"code": args.code} if args.code else {})}
+    with zipfile.ZipFile(path, "w") as z:
+        z.write(args.model, "model.glb")
+        z.write(area_file, "area.npy")
+        z.write(args.picture, picture)
+        z.writestr("job.json", json.dumps(job, indent=2))
+    cloud = Cloud()
+    sent = send_zip(cloud, path)
+    print(f"Sent as {sent} (seed {args.seed}, grow {args.grow}, {args.steps} steps). Follow it with:  python3 scripts/cloud.py status")
 
 
 def status(args):
@@ -198,7 +234,19 @@ def main():
     p.add_argument("--faces", type=int)
     p.add_argument("--mirror", action="store_true")
     p.add_argument("--mode", choices=["multidiffusion", "stochastic"])
+    p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
     p.set_defaults(run=generate)
+    p = sub.add_parser("inpaint", help="send an inpainting job without Blender (TRELLIS.2 environment)")
+    p.add_argument("model")
+    p.add_argument("picture", help="picture that guides the new area")
+    p.add_argument("--box", type=float, nargs=6, metavar=("X0", "Y0", "Z0", "X1", "Y1", "Z1"),
+                   help="the area as a box in the model's coordinates (glTF: Y up)")
+    p.add_argument("--area", help="or the area .npy of a Blender job")
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--grow", type=int, default=2)
+    p.add_argument("--steps", type=int, default=25)
+    p.set_defaults(run=inpaint)
+    p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
     sub.add_parser("status", help="list the jobs and how far they are").set_defaults(run=status)
     p = sub.add_parser("fetch", help="download finished results to outputs/cloud/")
     p.add_argument("job", nargs="?", help="only this job (default: all)")

@@ -6,6 +6,11 @@ progress line is written to <job>.status, and the finished model(s) are uploaded
 Only our own scripts run, with checked settings: run_job.py for inpainting jobs from Blender,
 generate.py (one picture) or multi_image.py (several) for picture -> model jobs.
 
+A job can ask for the newest code of a branch ("code": "main" in its job.json, from cloud.py --code):
+the worker then brings this checkout to that branch's newest commit from the project's public GitHub
+repository (fast-forward only; code never comes from the cloud folder), and restarts itself first if
+its own file changed. So new code can be tested on the server without logging in there.
+
 Usage (TRELLIS.2 environment, on the server, after python3 scripts/cloud.py setup there):
     source activate.sh
     nohup python -u scripts/cloud_worker.py > outputs/cloud_worker.log 2>&1 &     # keeps running
@@ -26,6 +31,7 @@ from cloud import PROJECT_DIR, Cloud
 from run_job import freest_gpu
 
 WORK = os.path.join(PROJECT_DIR, "outputs", "cloud_jobs")
+CODE_URL = "https://github.com/SAMY-HASHEM/BP_3D-Modell-Inpainting.git"  # public: no login needed
 # the settings a picture -> model job may use, with their checks, and which script knows them
 CHECKS = {
     "resolution": lambda v: str(v) if str(v) in ("512", "1024", "1536") else None,
@@ -69,6 +75,27 @@ def command_for(job, folder, zip_path, gpu):
     return command
 
 
+def use_code(branch, project=PROJECT_DIR):
+    """Brings the checkout to the newest commit of `branch` on GitHub (fast-forward only). Returns that
+    commit ("<hash> <subject>") and whether this worker's own file changed (then it must restart)."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,59}", branch) or ".." in branch:
+        raise ValueError(f"not a branch name: {branch}")
+    me = os.path.join(project, "scripts", "cloud_worker.py")
+    with open(me, "rb") as f:
+        before = f.read()
+    git = lambda *a: subprocess.run(["git", "-C", project, *a], check=True, capture_output=True, text=True).stdout.strip()
+    try:
+        git("fetch", "-q", CODE_URL, f"+refs/heads/{branch}:refs/remotes/github/{branch}")
+        if git("rev-parse", "--abbrev-ref", "HEAD") == branch:
+            git("merge", "-q", "--ff-only", f"refs/remotes/github/{branch}")
+        else:
+            git("checkout", "-q", "-B", branch, f"refs/remotes/github/{branch}")
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"couldn't get the code of {branch}: {e.stderr.strip()[-300:]}")
+    with open(me, "rb") as f:
+        return git("log", "-1", "--format=%h %s"), f.read() != before
+
+
 def run(cloud, job_name):
     folder = os.path.join(WORK, job_name)
     os.makedirs(folder, exist_ok=True)
@@ -79,6 +106,13 @@ def run(cloud, job_name):
         job = json.loads(z.read("job.json"))
         if job.get("kind") == "generate":
             z.extractall(folder)  # zipfile drops '..' and absolute paths
+    if job.get("code"):
+        commit, changed = use_code(job["code"])
+        print(f"[{time.strftime('%H:%M')}] code: {job['code']} at {commit}", flush=True)
+        if changed:  # this worker itself is new: start again with it, the job is still waiting
+            cloud.write_status(job_name, "queued", f"the worker restarts with the new code ({commit})")
+            os.execv(sys.executable, [sys.executable, "-u", os.path.abspath(__file__), *sys.argv[1:]])
+        cloud.write_status(job_name, "running", f"code: {job['code']} at {commit}")
     gpu = freest_gpu()
     command = command_for(job, folder, zip_path, gpu)
     print(f"[{time.strftime('%H:%M')}] {job_name} on GPU {gpu}: {' '.join(command[2:])}", flush=True)
