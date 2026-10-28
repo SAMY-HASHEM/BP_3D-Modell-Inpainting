@@ -174,6 +174,11 @@ def midpoint(velocity, x, t, t_next):
     return x + dt * velocity(x + (dt / 2) * velocity(x, t), t + dt / 2)
 
 
+def euler(velocity, x, t, t_next):
+    """One first-order step (as TRELLIS.2's own sampler): half the model evaluations of midpoint()."""
+    return x + (t_next - t) * velocity(x, t)
+
+
 class Path:
     """The original's latent at every time of the schedule (from invert()), and between two of them."""
 
@@ -193,14 +198,14 @@ class Path:
 
 
 @torch.no_grad()
-def invert(velocity, x0, times, on_step=None):
-    """The original's path from its latent x0 (t = 0) to noise (t = 1), by midpoint steps backwards
-    through the schedule `times` (1 ... 0)."""
+def invert(velocity, x0, times, on_step=None, step=midpoint):
+    """The original's path from its latent x0 (t = 0) to noise (t = 1), by steps backwards through
+    the schedule `times` (1 ... 0)."""
     path, x = Path(), x0
     backwards = times[::-1]
     path.add(backwards[0], x)
     for i, (t, t_next) in enumerate(zip(backwards[:-1], backwards[1:])):
-        x = midpoint(velocity, x, t, t_next)
+        x = step(velocity, x, t, t_next)
         path.add(t_next, x)
         if on_step:
             on_step(i + 1)
@@ -208,7 +213,7 @@ def invert(velocity, x0, times, on_step=None):
 
 
 @torch.no_grad()
-def regenerate(velocity, start, times, path, kept, injection, record, on_step=None):
+def regenerate(velocity, start, times, path, kept, injection, record, on_step=None, step=midpoint):
     """Regenerates from `start` (t = 1) through `times`, with the kept tokens on the original's `path`
     and their keys and values injected: before every evaluation at time t, record(t) sends the
     original's latent at t through the model with injection.mode = "record"."""
@@ -227,8 +232,11 @@ def regenerate(velocity, start, times, path, kept, injection, record, on_step=No
     for i, (t, t_next) in enumerate(zip(times[:-1], times[1:])):
         x = kept_on_path(x, t)
         dt = t_next - t
-        middle = kept_on_path(x + (dt / 2) * injected(x, t), t + dt / 2)
-        x = x + dt * injected(middle, t + dt / 2)
+        if step is euler:
+            x = x + dt * injected(x, t)
+        else:
+            middle = kept_on_path(x + (dt / 2) * injected(x, t), t + dt / 2)
+            x = x + dt * injected(middle, t + dt / 2)
         if on_step:
             on_step(i + 1)
     return kept_on_path(x, times[-1])
