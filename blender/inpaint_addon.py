@@ -321,12 +321,20 @@ def draw_boxes():
     the user clicked on for "Find part", as a red dot."""
     settings = bpy.context.scene.inpaint
     boxes = [o for o in bpy.context.view_layer.objects if is_box(o) and o.visible_get()]
-    if not boxes and not settings.has_click:
+    model = bpy.data.objects.get(finder["part_model"] or "")
+    part = model is not None and bpy.context.mode == "OBJECT" and model.visible_get() and len(finder["part"]) > 0
+    if not boxes and not settings.has_click and not part:
         return
     before = gpu.state.blend_get(), gpu.state.depth_test_get(), gpu.state.depth_mask_get()
     gpu.state.blend_set("ALPHA")
     gpu.state.depth_mask_set(False)
     fill = gpu.shader.from_builtin("UNIFORM_COLOR")
+    if part:  # the found part, red on the model
+        if finder["part_batch"] is None:
+            finder["part_batch"] = batch_for_shader(fill, "TRIS", {"pos": finder["part"]})
+        gpu.state.depth_test_set("LESS_EQUAL")
+        fill.uniform_float("color", (1.0, 0.15, 0.1, 0.6))
+        finder["part_batch"].draw(fill)
     edge = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
     edge.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
     edge.uniform_float("lineWidth", 2.0)
@@ -432,7 +440,7 @@ class INPAINT_GGT_box_sides(bpy.types.GizmoGroup):
 VIEWS = [(yaw, 30) for yaw in range(0, 360, 60)] + [(yaw, -20) for yaw in range(30, 360, 120)] + [(0, 85)]
 PICTURE_SIZE = 1024
 finder = {"process": None, "message": "", "model": None, "folder": None, "faces": None, "centers": None,
-          "views": None, "log": []}
+          "views": None, "log": [], "part_model": None, "part": None, "part_batch": None, "mode_before": None}
 
 
 def mask_ai():
@@ -713,17 +721,47 @@ def follow_find():
             bpy.ops.object.mode_set(mode="OBJECT")
     found = vote(model, np.load(masks_file))
     bpy.context.scene.inpaint.box_frame = True
-    finder["message"] = f"found {found:,} faces: shown selected (fix them here if needed)"
-    if view is not None and model.visible_get():
-        with bpy.context.temp_override(**view):  # show them: the model in Edit Mode, faces selected
-            for o in bpy.context.view_layer.objects:
-                o.select_set(False)
-            model.select_set(True)
-            bpy.context.view_layer.objects.active = model
-            bpy.context.tool_settings.mesh_select_mode = (False, False, True)
-            bpy.ops.object.mode_set(mode="EDIT")
+    finder["message"] = f"found {found:,} faces: red (Tab to fix them by hand)"
+    for o in bpy.context.view_layer.objects:  # the model active, so Tab opens it (not the box)
+        o.select_set(False)
+    model.select_set(True)
+    bpy.context.view_layer.objects.active = model
+    show_part(model)
     redraw()
     return None
+
+
+def show_part(model):
+    """Remembers the model's selected faces as red triangles, drawn by draw_boxes() in Object Mode (in Edit
+    Mode, a model with millions of faces is all black edges). Slightly lifted off the surface, so they
+    don't flicker with it."""
+    mesh = model.data
+    mesh.calc_loop_triangles()
+    selected = np.zeros(len(mesh.polygons), bool)
+    mesh.polygons.foreach_get("select", selected)
+    owner = np.zeros(len(mesh.loop_triangles), np.int32)
+    mesh.loop_triangles.foreach_get("polygon_index", owner)
+    corners = np.zeros(len(mesh.loop_triangles) * 3, np.int32)
+    mesh.loop_triangles.foreach_get("vertices", corners)
+    corners = corners.reshape(-1, 3)[selected[owner]]
+    co = np.zeros(len(mesh.vertices) * 3, np.float32)
+    mesh.vertices.foreach_get("co", co)
+    m = np.array(model.matrix_world, np.float32)
+    triangles = (co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3])[corners]  # (n, 3 corners, xyz)
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-12)
+    triangles += normals[:, None] * (2e-4 * max(model.dimensions))
+    finder.update(part_model=model.name, part=triangles.reshape(-1, 3), part_batch=None)
+
+
+@bpy.app.handlers.persistent
+def after_change(scene, depsgraph):
+    """Back in Object Mode after fixing the found part by hand: show the new selection in red."""
+    model = bpy.data.objects.get(finder["part_model"] or "")
+    mode = bpy.context.mode
+    if model is not None and mode == "OBJECT" and finder["mode_before"] == "EDIT_MESH":
+        show_part(model)
+    finder["mode_before"] = mode
 
 
 def view3d_area():
@@ -1336,10 +1374,13 @@ def register():
         bpy.utils.register_class(c)
     bpy.types.Scene.inpaint = bpy.props.PointerProperty(type=InpaintSettings)
     draw_handler = bpy.types.SpaceView3D.draw_handler_add(draw_boxes, (), "WINDOW", "POST_VIEW")
+    bpy.app.handlers.depsgraph_update_post.append(after_change)
 
 
 def unregister():
     global draw_handler
+    if after_change in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(after_change)
     if draw_handler is not None:
         bpy.types.SpaceView3D.draw_handler_remove(draw_handler, "WINDOW")
         draw_handler = None
