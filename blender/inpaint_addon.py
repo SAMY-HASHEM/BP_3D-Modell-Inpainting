@@ -707,10 +707,32 @@ def follow_find():
         finder["message"] = "mask AI failed: " + " / ".join(finder["log"][-2:])[:150]
         redraw()
         return None
+    view = view3d_area()
+    if view is not None and bpy.context.mode != "OBJECT":
+        with bpy.context.temp_override(**view):  # leaving Edit Mode would overwrite the new selection
+            bpy.ops.object.mode_set(mode="OBJECT")
     found = vote(model, np.load(masks_file))
     bpy.context.scene.inpaint.box_frame = True
-    finder["message"] = f"found {found:,} faces (Tab: see and fix them)"
+    finder["message"] = f"found {found:,} faces: shown selected (fix them here if needed)"
+    if view is not None and model.visible_get():
+        with bpy.context.temp_override(**view):  # show them: the model in Edit Mode, faces selected
+            for o in bpy.context.view_layer.objects:
+                o.select_set(False)
+            model.select_set(True)
+            bpy.context.view_layer.objects.active = model
+            bpy.context.tool_settings.mesh_select_mode = (False, False, True)
+            bpy.ops.object.mode_set(mode="EDIT")
     redraw()
+    return None
+
+
+def view3d_area():
+    """A window, 3D view and its main region, for operators started from a timer (None without a window)."""
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "VIEW_3D":
+                region = next(r for r in area.regions if r.type == "WINDOW")
+                return {"window": window, "area": area, "region": region}
     return None
 
 
