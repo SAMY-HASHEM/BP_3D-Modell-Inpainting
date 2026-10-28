@@ -31,6 +31,7 @@ import os
 import time
 
 import generate  # sets the environment variables and patches hole filling before TRELLIS.2 loads
+import inversion
 
 import numpy as np
 import o_voxel
@@ -143,13 +144,18 @@ def keys(coords):
     return (c[:, 0] * GRID + c[:, 1]) * GRID + c[:, 2]
 
 
-def lookup(coords, known_coords, known_feats):
-    """For every voxel in `coords`: the known features at the same voxel, and whether there are any."""
+def positions(coords, known_coords):
+    """For every voxel in `coords`: its position in `known_coords`, and whether it is there at all."""
     k, kk = keys(coords), keys(known_coords)
     order = torch.argsort(kk)
     pos = torch.searchsorted(kk[order], k).clamp(max=len(kk) - 1)
-    found = kk[order][pos] == k
-    return known_feats[order][pos], found
+    return order[pos], kk[order][pos] == k
+
+
+def lookup(coords, known_coords, known_feats):
+    """For every voxel in `coords`: the known features at the same voxel, and whether there are any."""
+    position, found = positions(coords, known_coords)
+    return known_feats[position], found
 
 
 # ---------------------------------------------------------------- sampling with a fixed known part
@@ -214,10 +220,20 @@ def box_points(box, size):
     return np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
 
 
-def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print):
+METHODS = ("repaint", "inversion")
+
+
+def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
+            method="repaint", source_path=None, start="inverted", soft=0):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
-    `report` gets a short text for every stage and step."""
-    start = time.time()
+    `report` gets a short text for every stage and step.
+    method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
+    the original's own path, with its keys and values injected (inversion.py). For "inversion":
+    source_path is a picture of the original model (default: the picture itself), start is where the
+    structure of the area starts ("inverted": the original's noise, "random": new noise), and soft is
+    the width of the soft edge in voxels (0: hard)."""
+    assert method in METHODS and start in ("inverted", "random")
+    start_time = time.time()
     device = pipeline.device
     mesh = load_model(model_path)
     place = Placement(mesh.vertices)
@@ -239,25 +255,37 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
 
     points = np.asarray(points, float).reshape(-1, 3)
     mask = voxel_mask(place.to_cube(points) if len(points) else points, grow if len(points) else 0)
-    report(f"2/6 Mask: {int(mask.sum()):,} of {GRID ** 3:,} voxels will be regenerated")
+    report(f"2/6 Mask: {int(mask.sum()):,} of {GRID ** 3:,} voxels will be regenerated ({method})")
 
     image = generate.prepare_image(pipeline, picture_path, "inpaint")
+    source = generate.prepare_image(pipeline, source_path, "inpaint_source") if source_path else image
     torch.manual_seed(seed)
     with torch.no_grad():
         cond_512 = pipeline.get_cond([image], 512)
         cond_1024 = pipeline.get_cond([image], 1024)
+        source_512 = pipeline.get_cond([source], 512) if source_path else cond_512
+        source_1024 = pipeline.get_cond([source], 1024) if source_path else cond_1024
 
         stage = "3/6 Structure"
         report(stage)
-        progress = lambda i: report(f"{stage}: step {i}/{steps}")
+        progress = lambda what: lambda i: report(f"{stage}: {what} {i}/{steps}")
+        sampler = pipeline.sparse_structure_sampler
+        params = {**pipeline.sparse_structure_sampler_params, "steps": steps}
         flow = pipeline.models["sparse_structure_flow_model"]
         noise = torch.randn(1, flow.in_channels, flow.resolution, flow.resolution, flow.resolution, device=device)
         cell = GRID // flow.resolution
         cell_mask = F.max_pool3d(mask[None, None].float(), cell, cell)[0, 0] > 0
-        with KeepKnown(pipeline.sparse_structure_sampler, ~cell_mask[None, None], ss_known, noise, progress), OnGpu(flow):
-            z = pipeline.sparse_structure_sampler.sample(
-                flow, noise, **cond_512, **{**pipeline.sparse_structure_sampler_params, "steps": steps},
-                verbose=True, tqdm_desc="Sampling sparse structure").samples
+        if method == "repaint":
+            with KeepKnown(sampler, ~cell_mask[None, None], ss_known, noise, progress("step")), OnGpu(flow):
+                z = sampler.sample(flow, noise, **cond_512, **params, verbose=True,
+                                   tqdm_desc="Sampling sparse structure").samples
+        else:
+            cells = torch.nonzero(~cell_mask.flatten()).squeeze(1)  # the kept cells, in the model's token order
+            width = -(-soft // cell)  # the soft edge in cells
+            weight = inversion.soft_weight(inversion.distance_to(cell_mask, width).flatten()[cells], width)
+            kept = inversion.Kept(cells, cells, weight)
+            z = follow_original(sampler, flow, params, steps, cond_512, source_512, ss_known, kept,
+                                start=None if start == "inverted" else noise, progress=progress)
         with OnGpu(pipeline.models["sparse_structure_decoder"]) as decoder:
             new_occupied = decoder(z)[0, 0] > 0
         occupied = torch.where(mask, new_occupied, occupied[0, 0] > 0)
@@ -265,36 +293,55 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         coords = torch.cat([torch.zeros_like(coords[:, :1]), coords], 1)
         inside = mask[coords[:, 1].long(), coords[:, 2].long(), coords[:, 3].long()]
         print(f"    {len(coords):,} voxels, {int(inside.sum()):,} of them new or regenerated")
+        if method == "inversion":
+            distance = inversion.distance_to(mask, soft)[coords[:, 1].long(), coords[:, 2].long(), coords[:, 3].long()]
 
         stage = "4/6 Shape"
         report(stage)
+        sampler = pipeline.shape_slat_sampler
+        params = {**pipeline.shape_slat_sampler_params, "steps": steps}
         mean, std = normalization(pipeline.shape_slat_normalization, device)
         flow = pipeline.models["shape_slat_flow_model_1024"]
-        x0, found = lookup(coords, shape_known.coords, (shape_known.feats.float() - mean) / std)
+        shape_feats = (shape_known.feats.float() - mean) / std
         noise = SparseTensor(feats=torch.randn(len(coords), flow.in_channels, device=device), coords=coords)
-        with KeepKnown(pipeline.shape_slat_sampler, (found & ~inside)[:, None], x0, noise.feats, progress), OnGpu(flow):
-            shape = pipeline.shape_slat_sampler.sample(
-                flow, noise, **cond_1024, **{**pipeline.shape_slat_sampler_params, "steps": steps},
-                verbose=True, tqdm_desc="Sampling shape SLat").samples
+        if method == "repaint":
+            x0, found = lookup(coords, shape_known.coords, shape_feats)
+            with KeepKnown(sampler, (found & ~inside)[:, None], x0, noise.feats, progress("step")), OnGpu(flow):
+                shape = sampler.sample(flow, noise, **cond_1024, **params, verbose=True,
+                                       tqdm_desc="Sampling shape SLat").samples
+        else:
+            kept, original = kept_tokens(coords, inside, distance, soft, shape_known.coords, shape_feats)
+            shape = follow_original(sampler, flow, params, steps, cond_1024, source_1024, original, kept,
+                                    start=noise, progress=progress)
         shape_norm = shape
         shape = shape * std + mean
 
         stage = "5/6 Colours"
         report(stage)
+        sampler = pipeline.tex_slat_sampler
+        params = {**pipeline.tex_slat_sampler_params, "steps": steps}
         tmean, tstd = normalization(pipeline.tex_slat_normalization, device)
         flow = pipeline.models["tex_slat_flow_model_1024"]
-        x0, found = lookup(coords, tex_known.coords, (tex_known.feats.float() - tmean) / tstd)
+        tex_feats = (tex_known.feats.float() - tmean) / tstd
         noise = shape_norm.replace(torch.randn(len(coords), flow.in_channels - shape_norm.feats.shape[1], device=device))
-        with KeepKnown(pipeline.tex_slat_sampler, (found & ~inside)[:, None], x0, noise.feats, progress), OnGpu(flow):
-            tex = pipeline.tex_slat_sampler.sample(
-                flow, noise, concat_cond=shape_norm, **cond_1024, **{**pipeline.tex_slat_sampler_params, "steps": steps},
-                verbose=True, tqdm_desc="Sampling texture SLat").samples
+        if method == "repaint":
+            x0, found = lookup(coords, tex_known.coords, tex_feats)
+            with KeepKnown(sampler, (found & ~inside)[:, None], x0, noise.feats, progress("step")), OnGpu(flow):
+                tex = sampler.sample(flow, noise, concat_cond=shape_norm, **cond_1024, **params, verbose=True,
+                                     tqdm_desc="Sampling texture SLat").samples
+        else:
+            kept, original = kept_tokens(coords, inside, distance, soft, tex_known.coords, tex_feats)
+            original_shape, has = lookup(original.coords, shape_known.coords, shape_feats)  # its shape, as the model needs it
+            original_shape = original_shape * has[:, None]
+            tex = follow_original(sampler, flow, params, steps, cond_1024, source_1024, original, kept,
+                                  start=noise, progress=progress, concat_cond=shape_norm,
+                                  original_kwargs={"concat_cond": original.replace(original_shape)})
         tex = tex * tstd + tmean
 
         report("6/6 Decoding and saving (takes a few minutes)")
         result = pipeline.decode_latent(shape, tex, RESOLUTION)[0]
     # the export needs most of the GPU: drop everything else first
-    del shape, tex, shape_norm, x0, noise, z, shape_known, tex_known, ss_known, cond_512, cond_1024
+    del shape, tex, shape_norm, noise, z, shape_known, tex_known, ss_known, cond_512, cond_1024, source_512, source_1024
     gc.collect()
     torch.cuda.empty_cache()
     print(f"    {len(result.faces):,} faces; GPU memory still in use: {torch.cuda.memory_allocated() / 2**30:.1f} GB")
@@ -304,8 +351,44 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     scene = trimesh.load(out)
     scene.apply_transform(place.from_cube_matrix())
     scene.export(out, extension_webp=True)
-    report(f"Done in {time.time() - start:.0f} s")
+    report(f"Done in {time.time() - start_time:.0f} s")
     return out
+
+
+def kept_tokens(coords, inside, distance, soft, known_coords, known_feats):
+    """For inversion in the shape and colour stages: the kept tokens (voxels of the original outside the
+    area) as a map between the edited latent and the original's latent of just these voxels, which is
+    what gets inverted (as VoxHammer does)."""
+    position, found = positions(coords, known_coords)
+    target = torch.nonzero(found & ~inside).squeeze(1)
+    original = SparseTensor(feats=known_feats[position[target]], coords=coords[target])
+    weight = inversion.soft_weight(distance[target], soft)
+    return inversion.Kept(target, torch.arange(len(target), device=coords.device), weight), original
+
+
+def follow_original(sampler, flow, params, steps, cond, source_cond, original, kept, start, progress,
+                    original_kwargs=None, **model_kwargs):
+    """One stage with inversion: invert the original's latent (with the original's picture, without
+    guidance), then regenerate from `start` (None: the original's noise) along it, with the kept tokens'
+    keys and values injected. Returns the new latent."""
+    original_kwargs = original_kwargs or {}
+    times = inversion.schedule(steps, params["rescale_t"])
+    unguided = {"guidance_strength": 1.0, "guidance_interval": [0.0, 1.0], "guidance_rescale": 0.0}
+    with OnGpu(flow):
+        source = inversion.Velocity(sampler, flow, source_cond["cond"], source_cond["neg_cond"], unguided,
+                                    **original_kwargs)
+        path = inversion.invert(source, original, times, progress("inverting"))
+        edit = inversion.Velocity(sampler, flow, cond["cond"], cond["neg_cond"], params, **model_kwargs)
+        if start is None:
+            start = path.at(1.0)
+        # the kept tokens' keys and values of all layers: on the GPU if they fit well, else in the RAM
+        size = len(kept.target) * len(flow.blocks) * 2 * flow.model_channels * 2
+        offload = size > 0.35 * torch.cuda.mem_get_info()[0]
+        print(f"    inversion: {len(kept.target):,} kept tokens, keys and values {size / 2**30:.1f} GB "
+              f"({'RAM' if offload else 'GPU'})")
+        with inversion.KVInjection(flow, kept, offload) as injection:
+            return inversion.regenerate(edit, start, times, path, kept, injection,
+                                        record=lambda t: source(path.at(t), t), on_step=progress("step"))
 
 
 def main():
@@ -318,6 +401,13 @@ def main():
     parser.add_argument("--grow", type=int, default=2, help="grow the mask by this many voxels of 64 (default 2)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--steps", type=int, default=generate.DEFAULT_STEPS)
+    parser.add_argument("--method", choices=METHODS, default="repaint",
+                        help="repaint: the rest kept with fresh noise; inversion: on the original's own path, "
+                             "with its keys and values injected (inversion.py)")
+    parser.add_argument("--source", help="inversion: a picture of the original model (default: the picture)")
+    parser.add_argument("--start", choices=["inverted", "random"], default="inverted",
+                        help="inversion: where the area's structure starts (the original's noise or new noise)")
+    parser.add_argument("--soft", type=int, default=0, help="inversion: soft edge in voxels (default 0: hard)")
     parser.add_argument("--out", help="output file (default: <model>_inpaint_seed<N>.glb)")
     args = parser.parse_args()
 
@@ -330,7 +420,8 @@ def main():
         size = np.ptp(load_model(args.model).vertices, 0).max()
         points.append(box_points(np.array(args.box), size))
     out = args.out or os.path.splitext(args.model)[0] + f"_inpaint_seed{args.seed}.glb"
-    inpaint(pipeline, args.model, args.picture, np.concatenate(points), out, args.grow, args.seed, args.steps)
+    inpaint(pipeline, args.model, args.picture, np.concatenate(points), out, args.grow, args.seed, args.steps,
+            method=args.method, source_path=args.source, start=args.start, soft=args.soft)
     print(out)
 
 

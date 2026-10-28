@@ -181,14 +181,31 @@ def inpaint(args):
     picture = "picture" + os.path.splitext(args.picture)[1].lower()
     job = {"model": "model.glb", "points": "area.npy", "picture": picture, "object": name,
            "seed": args.seed, "grow": args.grow, "steps": args.steps, **({"code": args.code} if args.code else {})}
+    if args.variant:  # e.g. "inversion,start=random,soft=2"
+        job["variants"] = []
+        for text in args.variant:
+            method, *settings = text.split(",")
+            version = {"method": method}
+            for setting in settings:
+                key, _, value = setting.partition("=")
+                version[key] = int(value) if value.isdigit() else value
+            job["variants"].append(version)
+    if args.seeds:
+        job["seeds"] = args.seeds
+    source = "source" + os.path.splitext(args.source)[1].lower() if args.source else None
+    if source:
+        job["source"] = source
     with zipfile.ZipFile(path, "w") as z:
         z.write(args.model, "model.glb")
         z.write(area_file, "area.npy")
         z.write(args.picture, picture)
+        if source:
+            z.write(args.source, source)
         z.writestr("job.json", json.dumps(job, indent=2))
     cloud = Cloud()
     sent = send_zip(cloud, path)
-    print(f"Sent as {sent} (seed {args.seed}, grow {args.grow}, {args.steps} steps). Follow it with:  python3 scripts/cloud.py status")
+    print(f"Sent as {sent} ({job.get('variants', 'repaint')}, seeds {job.get('seeds', [args.seed])}, grow {args.grow}, "
+          f"{args.steps} steps). Follow it with:  python3 scripts/cloud.py status")
 
 
 def status(args):
@@ -245,6 +262,10 @@ def main():
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--grow", type=int, default=2)
     p.add_argument("--steps", type=int, default=25)
+    p.add_argument("--seeds", type=int, nargs="+", help="several versions with these seeds")
+    p.add_argument("--variant", action="append", metavar="METHOD[,KEY=VALUE...]",
+                   help="a version to make, e.g. repaint or inversion,start=random,soft=2 (repeat to compare)")
+    p.add_argument("--source", help="inversion: a picture of the original model (default: the picture)")
     p.set_defaults(run=inpaint)
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
     sub.add_parser("status", help="list the jobs and how far they are").set_defaults(run=status)
