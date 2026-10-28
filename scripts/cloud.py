@@ -25,6 +25,7 @@ import base64
 import getpass
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -173,7 +174,7 @@ def inpaint(args):
         points = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
     else:
         raise SystemExit("give the area: --box X0 Y0 Z0 X1 Y1 Z1 (model coordinates) or --area file.npy")
-    name = os.path.splitext(os.path.basename(args.model))[0][:40]
+    name = re.sub("_+", "_", os.path.splitext(os.path.basename(args.model))[0][:40])  # "__" marks results
     folder = os.path.join(PROJECT_DIR, "outputs", "cloud")
     os.makedirs(folder, exist_ok=True)
     area_file, path = os.path.join(folder, f"{name}_area.npy"), os.path.join(folder, f"{name}_job.zip")
@@ -229,7 +230,7 @@ def fetch(args):
     out = os.path.join(PROJECT_DIR, "outputs", "cloud")
     os.makedirs(out, exist_ok=True)
     for name in cloud.list():
-        if "__" in name and (args.job is None or name.startswith(args.job)):
+        if "__" in name and name.endswith(".glb") and (args.job is None or name.startswith(args.job + "__")):
             local = os.path.join(out, name)
             if not os.path.exists(local):
                 print(f"downloading {name}...")
