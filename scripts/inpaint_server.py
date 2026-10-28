@@ -94,9 +94,17 @@ def run_package(pipeline, folder):
     seed, grow, steps = int(job.get("seed", 42)), int(job.get("grow", 2)), int(job.get("steps", generate.DEFAULT_STEPS))
     if not (0 <= grow <= 8 and 1 <= steps <= 100):
         raise ValueError("grow or steps out of range")
+    method = job.get("method", "repaint")
+    if method not in ("repaint", "inversion"):
+        raise ValueError(f"unknown method: {method}")
+    extra = {k: os.path.join(folder, os.path.basename(job[k])) for k in ("source", "picture_mask") if job.get(k)}
+    for p in extra.values():
+        if not os.path.isfile(p):
+            raise ValueError(f"the job has no {os.path.basename(p)}")
     out = os.path.join(folder, f"{os.path.basename(folder)}_seed{seed}.glb")
     return inpaint(pipeline, paths["model"], paths["picture"], np.load(paths["points"]), out,
-                   grow=grow, seed=seed, steps=steps, report=report)
+                   grow=grow, seed=seed, steps=steps, report=report, method=method,
+                   source_path=extra.get("source"), picture_mask_path=extra.get("picture_mask"))
 
 
 LOCAL_JOBS = {"/inpaint": run_inpaint, "/picture": run_picture}

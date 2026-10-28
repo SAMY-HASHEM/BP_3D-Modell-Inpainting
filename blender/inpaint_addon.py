@@ -241,6 +241,12 @@ class InpaintSettings(bpy.types.PropertyGroup):
     grow: bpy.props.IntProperty(name="Grow", default=2, min=0, max=8,
                                 description="Grow the marked area by this many voxels (of 64 per side)")
     steps: bpy.props.IntProperty(name="Steps", default=12, min=4, max=50, description="Sampling steps per stage")
+    method: bpy.props.EnumProperty(
+        name="Method",
+        items=[("repaint", "Repaint", "The rest is kept with fresh noise at every step (fast)"),
+               ("inversion", "Inversion", "The rest follows the original's own path and the new area attends to "
+                                          "exactly the original around it: joins better, about 3x slower")],
+        default="repaint")
     model: bpy.props.PointerProperty(name="Model", type=bpy.types.Object, description="The model being changed")
     connection: bpy.props.EnumProperty(
         name="Connection",
@@ -1085,12 +1091,19 @@ def pack_job(operator, context):
     np.save(area_file, points)
     picture_name = "picture" + os.path.splitext(picture)[1].lower()
     job = {"model": "model.glb", "points": "area.npy", "picture": picture_name, "object": model.name,
-           "seed": settings.seed, "grow": settings.grow, "steps": settings.steps}
+           "seed": settings.seed, "grow": settings.grow, "steps": settings.steps, "method": settings.method}
+    # a picture made from a prompt comes with the render before the edit and the edit's 2D mask
+    before, picture_mask = (os.path.splitext(picture)[0] + end for end in ("_before.png", "_mask.png"))
+    if os.path.isfile(before) and os.path.isfile(picture_mask):
+        job.update(source="source.png", picture_mask="picture_mask.png")
     out = os.path.join(folder, f"{name}_job.zip")
     with zipfile.ZipFile(out, "w") as z:  # stored, not compressed: the model is compressed already
         z.write(path, "model.glb")
         z.write(area_file, "area.npy")
         z.write(picture, picture_name)
+        if "source" in job:
+            z.write(before, "source.png")
+            z.write(picture_mask, "picture_mask.png")
         z.writestr("job.json", json.dumps(job, indent=2))
     return out
 
@@ -1398,6 +1411,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
         row.prop(settings, "seed")
         row.prop(settings, "grow")
         box.prop(settings, "steps")
+        box.prop(settings, "method")
         box.prop(settings, "connection", expand=True)
         if settings.connection == "DIRECT":
             box.label(text=f"Server: {server()[0].split('//')[1]} (add-on preferences)")

@@ -178,7 +178,8 @@ def comfy_edit(image, prompt, seed, reference=None, report=print):
 # ---------------------------------------------------------------- all together
 
 def make_picture(model_path, points, out, prompt, yaw, pitch, seed=1, reference_path=None, report=print):
-    """Writes the edited picture to `out` and a before/after preview next to it; returns `out`."""
+    """Writes the edited picture to `out`, a before/after preview, the render before the edit
+    (<out>_before.png) and the 2D mask of the edit (<out>_mask.png) next to it; returns `out`."""
     report("Picturing the model from the Blender view...")
     ctx = dr.RasterizeCudaContext()
     meshes = load(model_path)
@@ -204,6 +205,9 @@ def make_picture(model_path, points, out, prompt, yaw, pitch, seed=1, reference_
     region = cv2.GaussianBlur(region, (0, 0), grow)[..., None]
     result = (edited * region + picture * (1 - region)).astype(np.uint8)
     Image.fromarray(result).save(out)
+    base = os.path.splitext(out)[0]  # for the inversion method: the original's render and the 2D mask
+    Image.fromarray(picture).save(base + "_before.png")
+    Image.fromarray(((region[..., 0] > 0.5) * 255).astype(np.uint8)).save(base + "_mask.png")
     preview = np.concatenate([marked, result], 1)
     Image.fromarray(preview).resize((SIZE, SIZE // 2)).save(os.path.splitext(out)[0] + "_preview.jpg")
     report("Picture ready")
