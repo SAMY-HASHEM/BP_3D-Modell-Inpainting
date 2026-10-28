@@ -15,7 +15,9 @@ taken, so jobs don't land on a GPU someone else is using.
 
 A job can also ask for several versions at once ("variants" in its job.json, e.g. both methods to
 compare them: [{"method": "repaint"}, {"method": "inversion", "start": "random"}]), several "seeds",
-and bring a "source" picture of the original model for the inversion method. Every version is then
+and bring a "source" picture of the original model for the inversion method; with a "picture_mask"
+(the 2D mask of the edit, the source then being the original's render of the same view), TRELLIS.2
+sees the original picture outside the mask ("swap": false turns that off). Every version is then
 written as <job>_<version>_seed<N>.glb.
 """
 import argparse
@@ -42,6 +44,7 @@ VARIANT_CHECKS = {
     "method": lambda v: v if v in ("repaint", "inversion") else None,
     "start": lambda v: v if v in ("inverted", "random") else None,
     "soft": lambda v: int(v) if 0 <= int(v) <= 6 else None,
+    "swap": lambda v: bool(v),
 }
 
 
@@ -66,6 +69,8 @@ def name(version):
         parts.append(version["start"])
     if version.get("soft"):
         parts.append(f"soft{version['soft']}")
+    if version.get("swap") is False:
+        parts.append("noswap")
     return "-".join(parts)
 
 
@@ -96,15 +101,18 @@ def main():
         versions = variants(job)
         seeds = args.seeds or [int(s) for s in job.get("seeds", [job["seed"]])]
         source = os.path.join(folder, os.path.basename(job["source"])) if job.get("source") else None
-        if source and not os.path.isfile(source):
-            raise ValueError("the job's source picture is missing")
+        picture_mask = os.path.join(folder, os.path.basename(job["picture_mask"])) if job.get("picture_mask") else None
+        for path in (source, picture_mask):
+            if path and not os.path.isfile(path):
+                raise ValueError(f"the job's {os.path.basename(path)} is missing")
         pipeline = generate.load_pipeline()
         points = np.load(os.path.join(folder, job["points"]))
         for version in versions:
             for seed in seeds:
                 out = f"{base}_{name(version)}_seed{seed}.glb" if "variants" in job else f"{base}_seed{seed}.glb"
                 inpaint(pipeline, os.path.join(folder, job["model"]), os.path.join(folder, job["picture"]), points,
-                        out, grow=job["grow"], seed=seed, steps=job["steps"], source_path=source, **version)
+                        out, grow=job["grow"], seed=seed, steps=job["steps"], source_path=source,
+                        picture_mask_path=picture_mask, **version)
                 print(f"Result: {out}")
 
 

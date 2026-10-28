@@ -223,15 +223,62 @@ def box_points(box, size):
 METHODS = ("repaint", "inversion")
 
 
+def remove_background(pipeline, image):
+    if pipeline.low_vram:
+        pipeline.rembg_model.to(pipeline.device)
+    rgba = pipeline.rembg_model(image)
+    if pipeline.low_vram:
+        pipeline.rembg_model.cpu()
+    return np.asarray(rgba)
+
+
+def picture_pair(pipeline, picture_path, source_path, mask_path):
+    """The edited picture and the original's render of the same view, prepared for TRELLIS.2 with one
+    and the same crop (as preprocess_image does it, around both objects together), and the 2D mask of
+    the change, cropped alike. Saved as inpaint_input.png and inpaint_source_input.png for checking."""
+    edited = Image.open(picture_path).convert("RGB")
+    scale = min(1, 1024 / max(edited.size))
+    size = (round(edited.width * scale), round(edited.height * scale))
+    edited = edited.resize(size, Image.LANCZOS)
+    source = Image.open(source_path).convert("RGB").resize(size, Image.LANCZOS)
+    mask = Image.open(mask_path).convert("L").resize(size, Image.NEAREST)
+    rgba = [remove_background(pipeline, image) for image in (edited, source)]
+    ys, xs = np.nonzero(np.maximum(rgba[0][..., 3], rgba[1][..., 3]) > 0.8 * 255)
+    center, side = ((xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2), int(max(np.ptp(xs), np.ptp(ys)))
+    box = (int(center[0]) - side // 2, int(center[1]) - side // 2, int(center[0]) + side // 2, int(center[1]) + side // 2)
+    pictures = []
+    for image, name in zip(rgba, ("inpaint", "inpaint_source")):
+        crop = np.asarray(Image.fromarray(image).crop(box)).astype(np.float32) / 255
+        picture = Image.fromarray((crop[..., :3] * crop[..., 3:4] * 255).astype(np.uint8))
+        picture.save(os.path.join(generate.OUTPUT_DIR, f"{name}_input.png"))
+        pictures.append(picture)
+    return pictures[0], pictures[1], mask.crop(box)
+
+
+def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
+    """The picture condition with the edited picture's tokens inside the 2D mask (and its global tokens:
+    class and registers), and the original's outside it (VoxHammer's swap of the cross-attention keys
+    and values: in TRELLIS.2 they depend on each picture token alone, so swapping the tokens is the same)."""
+    grid = resolution // patch
+    tokens = cond["cond"].shape[1]
+    assert 0 <= tokens - grid * grid <= 8, f"unexpected picture tokens: {tokens} for a {grid}x{grid} grid"
+    inside = np.asarray(picture_mask.resize((grid * patch, grid * patch), Image.NEAREST)) > 127
+    inside = inside.reshape(grid, patch, grid, patch).any(axis=(1, 3)).reshape(-1)
+    new = torch.cat([torch.ones(tokens - grid * grid, dtype=torch.bool), torch.from_numpy(inside)]).to(cond["cond"].device)
+    return {"cond": torch.where(new[None, :, None], cond["cond"], source_cond["cond"]), "neg_cond": cond["neg_cond"]}
+
+
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
-            method="repaint", source_path=None, start="inverted", soft=0):
+            method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
     method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
     the original's own path, with its keys and values injected (inversion.py). For "inversion":
     source_path is a picture of the original model (default: the picture itself), start is where the
     structure of the area starts ("inverted": the original's noise, "random": new noise), and soft is
-    the width of the soft edge in voxels (0: hard)."""
+    the width of the soft edge in voxels (0: hard).
+    picture_mask_path: the 2D mask of what changed in the picture; source_path is then the original's
+    render from the same view, and with `swap` TRELLIS.2 sees the original picture outside the mask."""
     assert method in METHODS and start in ("inverted", "random")
     start_time = time.time()
     device = pipeline.device
@@ -257,14 +304,22 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     mask = voxel_mask(place.to_cube(points) if len(points) else points, grow if len(points) else 0)
     report(f"2/6 Mask: {int(mask.sum()):,} of {GRID ** 3:,} voxels will be regenerated ({method})")
 
-    image = generate.prepare_image(pipeline, picture_path, "inpaint")
-    source = generate.prepare_image(pipeline, source_path, "inpaint_source") if source_path else image
+    if picture_mask_path:
+        assert source_path, "a picture mask needs the original's render of the same view (source)"
+        image, source, picture_mask = picture_pair(pipeline, picture_path, source_path, picture_mask_path)
+    else:
+        image = generate.prepare_image(pipeline, picture_path, "inpaint")
+        source = generate.prepare_image(pipeline, source_path, "inpaint_source") if source_path else image
     torch.manual_seed(seed)
     with torch.no_grad():
         cond_512 = pipeline.get_cond([image], 512)
         cond_1024 = pipeline.get_cond([image], 1024)
         source_512 = pipeline.get_cond([source], 512) if source_path else cond_512
         source_1024 = pipeline.get_cond([source], 1024) if source_path else cond_1024
+        if picture_mask_path and swap:
+            cond_512 = mixed_cond(cond_512, source_512, picture_mask, 512)
+            cond_1024 = mixed_cond(cond_1024, source_1024, picture_mask, 1024)
+            report("    picture: the edited one inside the 2D mask, the original's render outside")
 
         stage = "3/6 Structure"
         report(stage)

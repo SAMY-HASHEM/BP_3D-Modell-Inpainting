@@ -195,12 +195,16 @@ def inpaint(args):
     source = "source" + os.path.splitext(args.source)[1].lower() if args.source else None
     if source:
         job["source"] = source
+    if args.picture_mask:
+        job["picture_mask"] = "picture_mask.png"
     with zipfile.ZipFile(path, "w") as z:
         z.write(args.model, "model.glb")
         z.write(area_file, "area.npy")
         z.write(args.picture, picture)
         if source:
             z.write(args.source, source)
+        if args.picture_mask:
+            z.write(args.picture_mask, "picture_mask.png")
         z.writestr("job.json", json.dumps(job, indent=2))
     cloud = Cloud()
     sent = send_zip(cloud, path)
@@ -266,6 +270,8 @@ def main():
     p.add_argument("--variant", action="append", metavar="METHOD[,KEY=VALUE...]",
                    help="a version to make, e.g. repaint or inversion,start=random,soft=2 (repeat to compare)")
     p.add_argument("--source", help="inversion: a picture of the original model (default: the picture)")
+    p.add_argument("--picture-mask", dest="picture_mask",
+                   help="the 2D mask of the edit (white = changed); --source is then the original's render of that view")
     p.set_defaults(run=inpaint)
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
     sub.add_parser("status", help="list the jobs and how far they are").set_defaults(run=status)
