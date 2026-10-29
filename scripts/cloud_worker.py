@@ -30,6 +30,7 @@ import time
 import traceback
 import zipfile
 
+import cloud
 from cloud import PROJECT_DIR, Cloud
 
 WORK = os.path.join(PROJECT_DIR, "outputs", "cloud_jobs")
@@ -86,7 +87,8 @@ def use_code(branch, project=PROJECT_DIR):
     me = os.path.join(project, "scripts", "cloud_worker.py")
     with open(me, "rb") as f:
         before = f.read()
-    git = lambda *a: subprocess.run(["git", "-C", project, *a], check=True, capture_output=True, text=True).stdout.strip()
+    git = lambda *a: subprocess.run(["git", "-C", project, *a], check=True, capture_output=True, text=True,
+                                    env=git_env()).stdout.strip()
     try:
         git("fetch", "-q", CODE_URL, f"+refs/heads/{branch}:refs/remotes/github/{branch}")
         if git("rev-parse", "--abbrev-ref", "HEAD") == branch:
@@ -109,12 +111,20 @@ def gpu_memory():
     return dict(tuple(int(x) for x in line.split(",")) for line in lines)
 
 
+def git_env():
+    """The environment for git: without the proxy once the cloud connection found it down."""
+    if cloud.DIRECT is None:
+        return None
+    return {k: v for k, v in os.environ.items() if k.lower() not in ("http_proxy", "https_proxy")}
+
+
 def code_is_current(branch, project=PROJECT_DIR):
     """Whether the checkout already is on `branch` at its newest commit on GitHub: then a job asking for
     it needs no switch and can start next to the running ones."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,59}", branch) or ".." in branch:
         return False
-    git = lambda *a: subprocess.run(["git", "-C", project, *a], check=True, capture_output=True, text=True).stdout.strip()
+    git = lambda *a: subprocess.run(["git", "-C", project, *a], check=True, capture_output=True, text=True,
+                                    env=git_env()).stdout.strip()
     try:
         git("fetch", "-q", CODE_URL, f"+refs/heads/{branch}:refs/remotes/github/{branch}")
         return (git("rev-parse", "--abbrev-ref", "HEAD") == branch

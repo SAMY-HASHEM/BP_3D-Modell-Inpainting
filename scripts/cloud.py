@@ -44,6 +44,14 @@ GENERATE_OPTIONS = {"resolution": str, "steps": int, "seed": int, "guidance": fl
 
 # ---------------------------------------------------------------- talking to the cloud (WebDAV)
 
+DIRECT = None  # an opener without proxy, once the proxy refused
+
+
+def use_direct():
+    global DIRECT
+    DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 class Cloud:
     def __init__(self, config=None):
         if config is None:
@@ -59,8 +67,16 @@ class Cloud:
     def request(self, method, path, data=None, headers=None, timeout=60):
         url = f"{self.url}/{urllib.parse.quote(path)}"
         request = urllib.request.Request(url, data=data, method=method, headers={**self.auth, **(headers or {})})
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
+        try:
+            with (DIRECT.open if DIRECT else urllib.request.urlopen)(request, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.URLError as e:
+            # a proxy that is down (as JupyterLab's on the uni server sometimes): go out directly instead
+            if DIRECT or not isinstance(e.reason, ConnectionRefusedError) or not urllib.request.getproxies():
+                raise
+            print("    the proxy refuses: going to the cloud directly from now on", flush=True)
+            use_direct()
+            return self.request(method, path, data, headers, timeout)
 
     def list(self, folder=None):
         """Names of the files in a cloud folder."""
