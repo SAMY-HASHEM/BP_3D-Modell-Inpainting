@@ -7,11 +7,11 @@ version of that region and inserts the part in its place.
 
 Usage:
     source activate.sh
-    python scripts/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
+    python scripts/regenerate/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
         --part outputs/boot-right_1536_seed42.glb pictures/yeonhee/parts/boot-right.png \\
         --part outputs/boot-left_1536_seed42.glb pictures/yeonhee/parts/boot-left.png
     # all cut-outs of a folder (from cut_parts.py), each with its newest model from outputs/:
-    python scripts/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
+    python scripts/regenerate/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
         --parts-dir pictures/yeonhee/parts-auto
 
 Each part picture must be a cut-out (RGBA, transparent background) taken pixel for pixel from the
@@ -24,6 +24,7 @@ Steps:
     4. delete the full model's faces in that region (inside the part's outline and depth range)
     5. save <model>_parts.glb (one mesh per part) and <model>_parts_check.png (picture | before | after)
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import glob
 import os

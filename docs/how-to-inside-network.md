@@ -61,7 +61,7 @@ server, readable only by you), so this is needed only once.
 
 ```
 cd ~/projects/bp_samy_hashem && source activate.sh
-python scripts/inpaint_server.py --host 0.0.0.0
+python scripts/server/inpaint_server.py --host 0.0.0.0
 ```
 
 Wait about a minute until it says **Ready**.

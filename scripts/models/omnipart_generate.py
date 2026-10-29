@@ -2,7 +2,7 @@
 
 Runs in OmniPart's own conda environment (torch 2.4 / CUDA 12.1), not in inpainting-3d-modelling:
     source conda/etc/profile.d/conda.sh && conda activate omnipart
-    python scripts/omnipart_generate.py pictures/anatomy/front_rgba.png pictures/anatomy/front_mask.exr
+    python scripts/models/omnipart_generate.py pictures/anatomy/front_rgba.png pictures/anatomy/front_mask.exr
 
 The picture is an RGBA PNG and the mask an .exr with one part number per pixel (0 = background), as
 make_part_mask.py writes them. Output in outputs/omnipart/<picture name>/:
@@ -18,7 +18,7 @@ import argparse
 import os
 import sys
 
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OMNIPART_DIR = os.path.join(PROJECT_DIR, "OmniPart")
 os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "models"))
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"

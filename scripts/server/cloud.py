@@ -7,15 +7,15 @@ there, cloud_worker.py on the server runs it and puts the result next to it.
 Only Python's standard library is used, so this runs with any python3 (and inside Blender).
 
 Usage:
-    python3 scripts/cloud.py setup                          # once, on the PC and once on the server
-    python3 scripts/cloud.py send outputs/blender/tavern_job.zip          # a job from Blender
-    python3 scripts/cloud.py generate pictures/torso/torso-front.png pictures/torso/torso-back.png \\
+    python3 scripts/server/cloud.py setup                          # once, on the PC and once on the server
+    python3 scripts/server/cloud.py send outputs/blender/tavern_job.zip          # a job from Blender
+    python3 scripts/server/cloud.py generate pictures/torso/torso-front.png pictures/torso/torso-back.png \\
         --resolution 1024 --steps 25 --mirror --faces 4000000              # picture(s) -> model
-    python3 scripts/cloud.py inpaint outputs/robot.glb pictures/robot.png --box -0.4 -0.5 -0.4 -0.1 0 0 \
+    python3 scripts/server/cloud.py inpaint outputs/robot.glb pictures/robot.png --box -0.4 -0.5 -0.4 -0.1 0 0 \
         --seed 2 --steps 25                                 # regenerate an area, without Blender
-    python3 scripts/cloud.py generate front.png --code voxhammer   # with the newest code of a branch (GitHub)
-    python3 scripts/cloud.py status                         # all jobs and how far they are
-    python3 scripts/cloud.py fetch                          # download finished results to outputs/cloud/
+    python3 scripts/server/cloud.py generate front.png --code voxhammer   # with the newest code of a branch (GitHub)
+    python3 scripts/server/cloud.py status                         # all jobs and how far they are
+    python3 scripts/server/cloud.py fetch                          # download finished results to outputs/cloud/
 
 In the cloud: <job>.zip (the job), <job>.status (written by the worker: queued, running, done or
 failed, with a message), <job>__<file>.glb (the results).
@@ -34,7 +34,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG = os.path.expanduser("~/.config/inpainting3d/cloud.json")
 DEFAULT_URL = "https://uni-duisburg-essen.sciebo.de/remote.php/webdav"
 FOLDER = "inpainting-jobs"
@@ -56,7 +56,7 @@ class Cloud:
     def __init__(self, config=None):
         if config is None:
             if not os.path.isfile(CONFIG):
-                raise SystemExit(f"No cloud login yet: run  python3 scripts/cloud.py setup")
+                raise SystemExit(f"No cloud login yet: run  python3 scripts/server/cloud.py setup")
             with open(CONFIG) as f:
                 config = json.load(f)
         self.url = config["url"].rstrip("/")
@@ -156,7 +156,7 @@ def send_zip(cloud, path):
 def send(args):
     cloud = Cloud()
     job = send_zip(cloud, args.job)
-    print(f"Sent as {job}. Follow it with:  python3 scripts/cloud.py status")
+    print(f"Sent as {job}. Follow it with:  python3 scripts/server/cloud.py status")
 
 
 def generate(args):
@@ -173,7 +173,7 @@ def generate(args):
                                            **({"code": args.code} if args.code else {})}, indent=2))
     cloud = Cloud()
     job = send_zip(cloud, path)
-    print(f"Sent as {job} ({len(pictures)} picture(s), {options}). Follow it with:  python3 scripts/cloud.py status")
+    print(f"Sent as {job} ({len(pictures)} picture(s), {options}). Follow it with:  python3 scripts/server/cloud.py status")
 
 
 def inpaint(args):
@@ -226,7 +226,7 @@ def inpaint(args):
     cloud = Cloud()
     sent = send_zip(cloud, path)
     print(f"Sent as {sent} ({job.get('variants', 'repaint')}, seeds {job.get('seeds', [args.seed])}, grow {args.grow}, "
-          f"{args.steps} steps). Follow it with:  python3 scripts/cloud.py status")
+          f"{args.steps} steps). Follow it with:  python3 scripts/server/cloud.py status")
 
 
 def status(args):

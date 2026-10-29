@@ -7,7 +7,7 @@ and OmniPart's parts.
 
 Usage (in the TRELLIS.2 environment):
     source activate.sh
-    python scripts/transfer_parts.py outputs/front_1536_seed42.glb outputs/omnipart/front_rgba/mesh_segment.glb
+    python scripts/mask/transfer_parts.py outputs/front_1536_seed42.glb outputs/omnipart/front_rgba/mesh_segment.glb
 
 Writes <TRELLIS.2 model>_parts.glb (one mesh per part, named part-1, part-2, ...) and
 <TRELLIS.2 model>_parts_check.png (the TRELLIS.2 model coloured by part, from 4 sides).

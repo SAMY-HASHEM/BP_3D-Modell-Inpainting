@@ -100,7 +100,7 @@ the result, each step guided by the picture. The settings below change how these
 - **Ours:** `multi_image.py`, class `MultiImageFlowModel`: every step, the model predicts once per picture;
   *multidiffusion* averages these predictions, *stochastic* uses one picture per step in turn. No camera
   angles are needed: TRELLIS.2 places every object the same way, whatever the view.
-- `scripts/video_views.py` takes such pictures from a turntable video.
+- `scripts/models/video_views.py` takes such pictures from a turntable video.
 
 ## Recommended
 

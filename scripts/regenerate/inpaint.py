@@ -8,9 +8,9 @@ This is the RePaint idea (Lugmayr et al. 2022) applied to TRELLIS.2's 3D latents
 
 Usage (TRELLIS.2 environment):
     source activate.sh
-    python scripts/inpaint.py outputs/tavern_1536_seed42.glb pictures/house/tavern.jpg --select chimney.glb
-    python scripts/inpaint.py outputs/tavern_1536_seed42.glb pictures/house/tavern.jpg --box 0.1 0.3 -0.2 0.3 0.6 0.1
-    python scripts/inpaint.py outputs/tavern_1536_seed42.glb pictures/house/tavern.jpg   # no mask: only reconstruct
+    python scripts/regenerate/inpaint.py outputs/tavern_1536_seed42.glb pictures/house/tavern.jpg --select chimney.glb
+    python scripts/regenerate/inpaint.py outputs/tavern_1536_seed42.glb pictures/house/tavern.jpg --box 0.1 0.3 -0.2 0.3 0.6 0.1
+    python scripts/regenerate/inpaint.py outputs/tavern_1536_seed42.glb pictures/house/tavern.jpg   # no mask: only reconstruct
 
 The mask is given in the model's own coordinates: --select is a mesh of the faces to regenerate (e.g.
 exported from Blender), --box two corners. The picture guides the new area; another picture or seed
@@ -24,6 +24,7 @@ Steps:
     4. shape and colours: generate the latents on these voxels, keeping the old voxels outside the mask
     5. decode, export like generate.py, and move the result back to the model's place and size
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import gc
 import io

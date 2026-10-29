@@ -7,7 +7,7 @@
 #
 # Afterwards:
 #   source conda/etc/profile.d/conda.sh && conda activate omnipart
-#   python scripts/omnipart_generate.py picture_rgba.png picture_mask.exr
+#   python scripts/models/omnipart_generate.py picture_rgba.png picture_mask.exr
 #
 # OmniPart's requirements.txt is incomplete; the fixes below are what it needed on Fedora 44 + RTX 3090.
 set -e

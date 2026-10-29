@@ -11,8 +11,8 @@ faces agree with their neighbours), so a whole patch is flipped when its faces v
 
 Usage (TRELLIS.2 environment):
     source activate.sh
-    python scripts/fix_normals.py outputs/model.glb                  # writes outputs/model_fixed.glb
-    python scripts/fix_normals.py outputs/model.glb --out fixed.glb
+    python scripts/models/fix_normals.py outputs/model.glb                  # writes outputs/model_fixed.glb
+    python scripts/models/fix_normals.py outputs/model.glb --out fixed.glb
 generate.py and inpaint.py do this by themselves when they save (since this script exists).
 """
 import argparse

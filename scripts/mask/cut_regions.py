@@ -9,13 +9,14 @@ Pieces that don't touch become separate parts (e.g. two boots in one box: boot-1
 
 Usage:
     source activate.sh
-    python scripts/cut_regions.py pictures/obsession/clean.png \\
+    python scripts/mask/cut_regions.py pictures/obsession/clean.png \\
         --part hair 880 380 1600 1060 hair \\
         --part boot 980 2640 1520 3680 notskin
 
 Writes <picture folder>/parts/<name>.png (RGBA cut-outs for generate.py and insert_part.py)
 and overview.jpg to check them.
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import os
 

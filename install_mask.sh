@@ -31,6 +31,6 @@ conda activate "$ENV_NAME"
 pip install -q $TORCH --index-url https://download.pytorch.org/whl/cu128
 pip install -q "$TRANSFORMERS" pillow numpy
 
-python "$PROJECT_DIR/scripts/mask_ai.py" --download
+python "$PROJECT_DIR/scripts/mask/mask_ai.py" --download
 echo
 echo "Done. The Blender add-on finds this environment by itself (add-on preferences: Find part)."

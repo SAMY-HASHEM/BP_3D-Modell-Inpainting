@@ -6,13 +6,13 @@ that they show. The shape stays as it is. The angle of each picture is found aut
 
 Usage:
     source activate.sh
-    python scripts/project_texture.py outputs/full_1536_seed42.glb pictures/4/full.jpg
-    python scripts/project_texture.py outputs/front_multi4_multidiffusion_1536_seed42.glb \\
+    python scripts/tools/project_texture.py outputs/full_1536_seed42.glb pictures/4/full.jpg
+    python scripts/tools/project_texture.py outputs/front_multi4_multidiffusion_1536_seed42.glb \\
         pictures/yeonhee/front.png pictures/yeonhee/front-left.png pictures/yeonhee/side-right.png
-    python scripts/project_texture.py outputs/full_1536_seed42.glb pictures/4/full.jpg \\
+    python scripts/tools/project_texture.py outputs/full_1536_seed42.glb pictures/4/full.jpg \\
         --closeups pictures/4/closeup-upper.jpg
     # a model from insert_part.py (body + separately generated parts) works the same way:
-    python scripts/project_texture.py outputs/head_1536_seed42_parts.glb pictures/head/head.png
+    python scripts/tools/project_texture.py outputs/head_1536_seed42_parts.glb pictures/head/head.png
 
 All pictures must show the object in the same pose. Where several pictures see the same spot,
 the one that looks at it most directly wins. Close-ups must be crops (or zoomed renders) of the
@@ -24,6 +24,7 @@ Steps:
     3. for every texel of the texture that a camera sees, take the colour from that picture
     4. save <model>_projected.glb and <model>_projected_check.png (per picture: picture | before | after)
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import math
 import os

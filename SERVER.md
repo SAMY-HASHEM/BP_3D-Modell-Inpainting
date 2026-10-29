@@ -37,7 +37,7 @@ A job started normally stops when the VDI or the browser closes. With `nohup ...
 on the server, and its output goes into a log file:
 
 ```
-nohup python scripts/generate.py pictures/tavern.jpg --resolution 1536 > outputs/tavern.log 2>&1 &
+nohup python scripts/models/generate.py pictures/tavern.jpg --resolution 1536 > outputs/tavern.log 2>&1 &
 tail -f outputs/tavern.log      # watch it (Ctrl+C only stops watching, not the job)
 ```
 
@@ -56,7 +56,7 @@ kill 12345                                     # stop the job with that number
    with the ⬆ button.
 3. Terminal:
    ```
-   nohup python scripts/run_job.py outputs/uploads/tavern_job.zip --seeds 1 2 3 > outputs/uploads/run.log 2>&1 &
+   nohup python scripts/server/run_job.py outputs/uploads/tavern_job.zip --seeds 1 2 3 > outputs/uploads/run.log 2>&1 &
    tail -f outputs/uploads/run.log
    ```
    `--seeds 1 2 3` makes three versions in one go; without it, the seed from Blender is used.

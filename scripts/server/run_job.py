@@ -6,9 +6,9 @@ JupyterLab, run this, download the result.
 
 Usage (TRELLIS.2 environment):
     source activate.sh
-    python scripts/run_job.py uploads/tavern_job.zip                 # the job's own seed
-    python scripts/run_job.py uploads/tavern_job.zip --seeds 1 2 3   # several versions, TRELLIS.2 loaded once
-    python scripts/run_job.py uploads/tavern_job.zip --gpu 2         # this GPU instead of the freest one
+    python scripts/server/run_job.py uploads/tavern_job.zip                 # the job's own seed
+    python scripts/server/run_job.py uploads/tavern_job.zip --seeds 1 2 3   # several versions, TRELLIS.2 loaded once
+    python scripts/server/run_job.py uploads/tavern_job.zip --gpu 2         # this GPU instead of the freest one
 
 Writes <job>_seed<N>.glb next to the zip. Without --gpu, the GPU with the least memory in use is
 taken, so jobs don't land on a GPU someone else is using.

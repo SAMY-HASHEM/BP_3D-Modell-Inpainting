@@ -5,12 +5,12 @@ something new may grow (e.g. a statue on the ground). The boxes are drawn see-th
 selected one has an arrow on each side (drag it to move that side) and a dot on each corner (drag it
 to pull that corner anywhere, so a box can take any shape). "Find part in box" selects only one part
 inside the box (e.g. the helmet, by its name and/or a click on it) with a mask AI on this computer
-(scripts/mask_ai.py, installed by install_mask.sh); Box = "Selected faces + empty space" then regenerates
+(scripts/mask/mask_ai.py, installed by install_mask.sh); Box = "Selected faces + empty space" then regenerates
 that part and the empty space in the box and keeps every other surface exactly. Optionally a prompt (and a reference picture)
 says what should be there: the server then first paints it into a picture of the model, seen from the
 current view, and TRELLIS.2 builds that picture's change in 3D.
 
-The work is done by scripts/inpaint_server.py, which must be running in the TRELLIS.2 environment.
+The work is done by scripts/server/inpaint_server.py, which must be running in the TRELLIS.2 environment.
 
 Install: Edit > Preferences > Add-ons > (arrow at the top right) > Install from Disk... > this file.
 Use:     3D view sidebar (N key) > Inpaint tab.
@@ -245,7 +245,7 @@ def export_model(context, model, folder):
 def server_ready(operator):
     server = ask("/status")
     if server is None:
-        operator.report({"ERROR"}, "The inpaint server isn't running: python scripts/inpaint_server.py")
+        operator.report({"ERROR"}, "The inpaint server isn't running: python scripts/server/inpaint_server.py")
         return False
     if server["busy"]:
         operator.report({"ERROR"}, "The server is busy with another job")
@@ -487,7 +487,7 @@ class INPAINT_GGT_box_sides(bpy.types.GizmoGroup):
 
 
 # ---------------------------------------------------------------- finding a part in the box (the mask AI)
-# Blender takes pictures of the space box from the directions that show it best, scripts/mask_ai.py (in its
+# Blender takes pictures of the space box from the directions that show it best, scripts/mask/mask_ai.py (in its
 # own environment, made by install_mask.sh) finds the part in each, and every face in the box is voted on
 # by the pictures that see it.
 
@@ -503,7 +503,7 @@ def mask_ai():
     """The mask AI's Python and script, in the project folder from the add-on preferences."""
     project = os.path.expanduser(bpy.context.preferences.addons[__name__].preferences.project)
     return (os.path.join(project, "conda", "envs", "mask-ai", "bin", "python"),
-            os.path.join(project, "scripts", "mask_ai.py"))
+            os.path.join(project, "scripts", "mask", "mask_ai.py"))
 
 
 def face_centers(model):
@@ -1156,19 +1156,19 @@ class INPAINT_OT_save_job(bpy.types.Operator):
     bl_idname = "inpaint.save_job"
     bl_label = "Save job for server"
     bl_description = ("Pack the model, the marked area, the Picture and the settings into one .zip, "
-                      "to run on the uni GPU server with scripts/run_job.py")
+                      "to run on the uni GPU server with scripts/server/run_job.py")
 
     def execute(self, context):
         out = pack_job(self, context)
         if out is None:
             return {"CANCELLED"}
         status["message"] = f"job saved: {os.path.basename(out)}"
-        self.report({"INFO"}, f"Saved {out}: upload it to the server and run scripts/run_job.py")
+        self.report({"INFO"}, f"Saved {out}: upload it to the server and run scripts/server/run_job.py")
         return {"FINISHED"}
 
 
 # ---------------------------------------------------------------- the uni server through the Sciebo cloud
-# scripts/cloud.py setup saves the cloud login; scripts/cloud_worker.py on the server runs the jobs.
+# scripts/server/cloud.py setup saves the cloud login; scripts/server/cloud_worker.py on the server runs the jobs.
 
 CLOUD_CONFIG = os.path.expanduser("~/.config/inpainting3d/cloud.json")
 CLOUD_FOLDER = "inpainting-jobs"

@@ -5,8 +5,8 @@ sides, this script finds the part in each picture, and Blender turns the masks i
 face is voted on by the pictures that see it). Runs in its own environment (./install_mask.sh), on the
 GPU if there is one (about 4 GB of VRAM), else on the CPU.
 
-    python scripts/mask_ai.py <folder>          # a folder with views.json and the pictures it names
-    python scripts/mask_ai.py --download        # only download the models (into models/mask)
+    python scripts/mask/mask_ai.py <folder>          # a folder with views.json and the pictures it names
+    python scripts/mask/mask_ai.py --download        # only download the models (into models/mask)
 
 views.json:  {"word": "helmet", "views": [{"picture": "view_00.png", "clicks": [[x, y], ...]}, ...]}
              (clicks are the pixels where the user's clicks are seen in that picture; all of them are
@@ -30,7 +30,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MODELS_DIR = os.path.join(PROJECT_DIR, "models", "mask")
 DINO = "IDEA-Research/grounding-dino-base"
 SAM = "facebook/sam2.1-hiera-large"

@@ -3,9 +3,9 @@
 Rows are resolutions, columns are step counts (or seeds, if all models have the same steps).
 
 Usage (runs Blender for you, see compare_in_blender.sh):
-    ./scripts/compare_in_blender.sh outputs/<picture>
-    ./scripts/compare_in_blender.sh outputs/<picture> --render
-    ./scripts/compare_in_blender.sh outputs/<picture> --render --back   # the backs of the models
+    ./scripts/tools/compare_in_blender.sh outputs/<picture>
+    ./scripts/tools/compare_in_blender.sh outputs/<picture> --render
+    ./scripts/tools/compare_in_blender.sh outputs/<picture> --render --back   # the backs of the models
 
 Saves outputs/<picture>/comparison.blend (open it in Blender) and, with --render, comparison.png
 (comparison_back.* with --back).

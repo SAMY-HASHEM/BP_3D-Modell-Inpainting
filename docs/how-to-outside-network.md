@@ -43,15 +43,15 @@ Copy them with the 📋 buttons straight into the fields below — **never as a 
 
 → **Save and test the cloud login**. It checks the login, saves it in
 `~/.config/inpainting3d/cloud.json` (readable only by you) and empties the password field.
-(Without Blender: `python3 scripts/cloud.py setup` does the same.)
+(Without Blender: `python3 scripts/server/cloud.py setup` does the same.)
 
 **4. The server** (VDI → browser → nc.hcigroup.de → JupyterLab → File → New → Terminal):
 
 ```
 cd ~/projects/bp_samy_hashem && git pull
-python3 scripts/cloud.py setup                   # the inpainting-server app password
+python3 scripts/server/cloud.py setup                   # the inpainting-server app password
 source activate.sh
-nohup python -u scripts/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
+nohup python -u scripts/server/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
 tail -n 5 outputs/cloud_worker.log               # "Watching the cloud folder inpainting-jobs/ every 30 s"
 ```
 
@@ -82,10 +82,10 @@ The worker keeps running after you close the VDI.
 **Without Blender** (a terminal on your PC, in `~/inpainting-3D`):
 
 ```
-python3 scripts/cloud.py generate front.png back.png --resolution 1024 --steps 25 --mirror   # picture(s) -> model
-python3 scripts/cloud.py send outputs/blender/<name>_job.zip                                 # a saved Blender job
-python3 scripts/cloud.py status                  # every job: queued / running / done / failed
-python3 scripts/cloud.py fetch                   # finished models -> outputs/cloud/
+python3 scripts/server/cloud.py generate front.png back.png --resolution 1024 --steps 25 --mirror   # picture(s) -> model
+python3 scripts/server/cloud.py send outputs/blender/<name>_job.zip                                 # a saved Blender job
+python3 scripts/server/cloud.py status                  # every job: queued / running / done / failed
+python3 scripts/server/cloud.py fetch                   # finished models -> outputs/cloud/
 ```
 
 ---
@@ -104,7 +104,7 @@ python3 scripts/cloud.py fetch                   # finished models -> outputs/cl
 
 ```
 pkill -u $USER -f cloud_worker.py
-source activate.sh && nohup python -u scripts/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
+source activate.sh && nohup python -u scripts/server/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
 ```
 
 ## Good to know

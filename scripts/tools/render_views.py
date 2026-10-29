@@ -2,8 +2,8 @@
 
 Usage (TRELLIS.2 environment):
     source activate.sh
-    python scripts/render_views.py compare.jpg outputs/a.glb outputs/b.glb
-    python scripts/render_views.py parts.jpg outputs/yeonhee_parts18.glb --by-part   # one colour per part
+    python scripts/tools/render_views.py compare.jpg outputs/a.glb outputs/b.glb
+    python scripts/tools/render_views.py parts.jpg outputs/yeonhee_parts18.glb --by-part   # one colour per part
 
 Lit with a simple light from the front-top; textures are shown if the meshes have them.
 """

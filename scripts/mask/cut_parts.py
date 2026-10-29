@@ -7,10 +7,10 @@ parts (e.g. left and right boot).
 
 Usage:
     source activate.sh
-    python scripts/cut_parts.py pictures/yeonhee/parts-colors.png pictures/yeonhee/parts-front.png
-    python scripts/cut_parts.py colors.png picture.png --out pictures/yeonhee/parts --min-size 0.01
+    python scripts/mask/cut_parts.py pictures/yeonhee/parts-colors.png pictures/yeonhee/parts-front.png
+    python scripts/mask/cut_parts.py colors.png picture.png --out pictures/yeonhee/parts --min-size 0.01
     # no colour render: a part that already has its own colour (here turquoise hair) in the picture itself
-    python scripts/cut_parts.py pictures/head/head.png pictures/head/head.png --only teal --min-saturation 80 --close 25
+    python scripts/mask/cut_parts.py pictures/head/head.png pictures/head/head.png --only teal --min-saturation 80 --close 25
 
 Writes <out>/<colour>-<n>.png (numbered left to right) and <out>/overview.jpg to check the parts.
 
@@ -21,6 +21,7 @@ Steps:
     4. fine-align each part on the edges of the picture (the two renders differ by a few pixels)
     5. save each part as a cut-out of the picture, with a transparent background
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import os
 

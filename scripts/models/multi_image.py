@@ -2,10 +2,10 @@
 
 Usage:
     source activate.sh
-    python scripts/multi_image.py pictures/front.png pictures/back.png
-    python scripts/multi_image.py pictures/front.png pictures/back.png --mode stochastic --resolution 1536
+    python scripts/models/multi_image.py pictures/front.png pictures/back.png
+    python scripts/models/multi_image.py pictures/front.png pictures/back.png --mode stochastic --resolution 1536
     # colour pictures for everything, a grey clay render only for structure and shape:
-    python scripts/multi_image.py pictures/m40.jpg pictures/m41.jpg --shape-only pictures/m44_clay.jpg
+    python scripts/models/multi_image.py pictures/m40.jpg pictures/m41.jpg --shape-only pictures/m44_clay.jpg
 
 TRELLIS.2 was trained with one picture only. This is the training-free trick from TRELLIS v1
 (run_multi_image), moved to TRELLIS.2: every sampling step looks at the pictures through the same,

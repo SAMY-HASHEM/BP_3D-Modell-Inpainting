@@ -134,4 +134,4 @@ fi
 echo
 echo "Done. Start working with:"
 echo "  source activate.sh"
-echo "  python scripts/generate.py pictures/<your picture>"
+echo "  python scripts/models/generate.py pictures/<your picture>"

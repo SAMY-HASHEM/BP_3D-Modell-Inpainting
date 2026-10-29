@@ -7,7 +7,7 @@ whole 3D grid, e.g. a head at 1536 instead of the few voxels it had in the full 
 
 Usage (TRELLIS.2 environment):
     source activate.sh
-    python scripts/replace_part.py outputs/yeonhee_parts18.glb pictures/yeonhee/parts-front-clean.png \\
+    python scripts/regenerate/replace_part.py outputs/yeonhee_parts18.glb pictures/yeonhee/parts-front-clean.png \\
         --with outputs/head_1536_seed42.glb pictures/yeonhee/head.png
 
 The region is what the cut-out covers in the picture (front and back, in whichever parts it lies); of
@@ -22,6 +22,7 @@ Steps:
     4. remove the old surfaces close to the new part (its old version); farther ones stay (neck, throne)
     5. match its colours to the removed old surfaces' colours, add the new part; the rest is untouched
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import math
 import os

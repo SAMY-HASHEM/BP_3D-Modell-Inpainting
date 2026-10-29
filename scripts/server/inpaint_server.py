@@ -12,9 +12,9 @@ goes into Blender's add-on preferences. TRELLIS.2 is loaded once (about a minute
 
 Usage (TRELLIS.2 environment, leave it running in its own terminal):
     source activate.sh
-    python scripts/inpaint_server.py                         # only this computer
-    python scripts/inpaint_server.py --host 0.0.0.0          # the uni network (on the GPU server)
-    python scripts/inpaint_server.py --host 0.0.0.0 --port 8770 --gpu 1
+    python scripts/server/inpaint_server.py                         # only this computer
+    python scripts/server/inpaint_server.py --host 0.0.0.0          # the uni network (on the GPU server)
+    python scripts/server/inpaint_server.py --host 0.0.0.0 --port 8770 --gpu 1
 
 Talks JSON on http://<host>:<port>:
     POST /job       body: a job .zip (the add-on's job package)        regenerates the area (inpaint.py)
@@ -24,6 +24,7 @@ Talks JSON on http://<host>:<port>:
     POST /inpaint   {"model", "picture", "points", "out", "seed", "grow", "steps"}
     POST /picture   {"model", "points", "direction", "prompt", "reference", "out", "seed"}
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import hmac
 import json

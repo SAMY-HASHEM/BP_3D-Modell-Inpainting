@@ -13,11 +13,11 @@ the worker then brings this checkout to that branch's newest commit from the pro
 repository (fast-forward only; code never comes from the cloud folder), and restarts itself first if
 its own file changed. So new code can be tested on the server without logging in there.
 
-Usage (TRELLIS.2 environment, on the server, after python3 scripts/cloud.py setup there):
+Usage (TRELLIS.2 environment, on the server, after python3 scripts/server/cloud.py setup there):
     source activate.sh
-    nohup python -u scripts/cloud_worker.py > outputs/cloud_worker.log 2>&1 &     # keeps running
+    nohup python -u scripts/server/cloud_worker.py > outputs/cloud_worker.log 2>&1 &     # keeps running
     tail -f outputs/cloud_worker.log                                               # watch it
-    python scripts/cloud_worker.py --once                                          # one round only
+    python scripts/server/cloud_worker.py --once                                          # one round only
 """
 import argparse
 import json
@@ -49,22 +49,22 @@ CHECKS = {
     "mode": lambda v: v if v in ("multidiffusion", "stochastic") else None,
 }
 KNOWS = {
-    "scripts/generate.py": {"resolution", "steps", "seed", "guidance", "texture_guidance", "max_tokens", "faces"},
-    "scripts/multi_image.py": {"resolution", "steps", "seed", "guidance", "max_tokens", "faces", "mirror", "mode"},
+    "scripts/models/generate.py": {"resolution", "steps", "seed", "guidance", "texture_guidance", "max_tokens", "faces"},
+    "scripts/models/multi_image.py": {"resolution", "steps", "seed", "guidance", "max_tokens", "faces", "mirror", "mode"},
 }
 
 
 def command_for(job, folder, zip_path, gpu):
     """The command that runs this job, built only from checked values."""
     if job.get("kind", "inpaint") == "inpaint":
-        return [sys.executable, "-u", "scripts/run_job.py", zip_path, "--gpu", str(gpu)]
+        return [sys.executable, "-u", "scripts/server/run_job.py", zip_path, "--gpu", str(gpu)]
     if job["kind"] != "generate":
         raise ValueError(f"unknown kind of job: {job['kind']}")
     pictures = [os.path.join(folder, os.path.basename(p)) for p in job["pictures"]]
     for p in pictures:
         if not os.path.isfile(p):
             raise ValueError(f"picture missing in the job: {os.path.basename(p)}")
-    script = "scripts/generate.py" if len(pictures) == 1 else "scripts/multi_image.py"
+    script = "scripts/models/generate.py" if len(pictures) == 1 else "scripts/models/multi_image.py"
     command = [sys.executable, "-u", script, *pictures]
     for key, value in job.get("options", {}).items():
         if key not in CHECKS:
@@ -84,9 +84,8 @@ def use_code(branch, project=PROJECT_DIR):
     commit ("<hash> <subject>") and whether this worker's own file changed (then it must restart)."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,59}", branch) or ".." in branch:
         raise ValueError(f"not a branch name: {branch}")
-    me = os.path.join(project, "scripts", "cloud_worker.py")
-    with open(me, "rb") as f:
-        before = f.read()
+    me = os.path.join(project, "scripts", "server", "cloud_worker.py")
+    before = open(me, "rb").read() if os.path.isfile(me) else None
     git = lambda *a: subprocess.run(["git", "-C", project, *a], check=True, capture_output=True, text=True,
                                     env=git_env()).stdout.strip()
     try:
@@ -97,8 +96,8 @@ def use_code(branch, project=PROJECT_DIR):
             git("checkout", "-q", "-B", branch, f"refs/remotes/github/{branch}")
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"couldn't get the code of {branch}: {e.stderr.strip()[-300:]}")
-    with open(me, "rb") as f:
-        return git("log", "-1", "--format=%h %s"), f.read() != before
+    after = open(me, "rb").read() if os.path.isfile(me) else None
+    return git("log", "-1", "--format=%h %s"), after != before
 
 
 def gpu_memory():

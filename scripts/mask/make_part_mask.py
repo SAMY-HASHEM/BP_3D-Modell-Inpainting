@@ -7,11 +7,12 @@ number; everything else of the object becomes part 1 ("body").
 
 Usage:
     source activate.sh
-    python scripts/make_part_mask.py pictures/yeonhee/parts-front.png pictures/yeonhee/parts-auto
+    python scripts/mask/make_part_mask.py pictures/yeonhee/parts-front.png pictures/yeonhee/parts-auto
 
 Writes next to the picture: <name>_rgba.png, <name>_mask.exr and <name>_mask_preview.png.
 OmniPart shrinks the mask to 37 x 37 cells, so parts smaller than about 1/37 of the object vanish.
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import glob
 import os

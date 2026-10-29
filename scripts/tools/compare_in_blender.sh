@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds a Blender comparison scene of all models in one output folder (see compare_in_blender.py).
 #
-#   ./scripts/compare_in_blender.sh outputs/<picture>            # saves comparison.blend
-#   ./scripts/compare_in_blender.sh outputs/<picture> --render   # also saves comparison.png
+#   ./scripts/tools/compare_in_blender.sh outputs/<picture>            # saves comparison.blend
+#   ./scripts/tools/compare_in_blender.sh outputs/<picture> --render   # also saves comparison.png
 #
 # Blender runs as a Flatpak, which starts in another folder, so it gets absolute paths.
 set -e

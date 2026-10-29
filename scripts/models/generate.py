@@ -2,10 +2,10 @@
 
 Usage:
     source activate.sh
-    python scripts/generate.py pictures/my_picture.png
-    python scripts/generate.py pictures/my_picture.png --resolution 1536 --seed 7
-    python scripts/generate.py pictures/parts/*.png        # several pictures, TRELLIS.2 loaded once
-    python scripts/generate.py pictures/my_picture.png --texture-guidance 3   # colours follow the picture more
+    python scripts/models/generate.py pictures/my_picture.png
+    python scripts/models/generate.py pictures/my_picture.png --resolution 1536 --seed 7
+    python scripts/models/generate.py pictures/parts/*.png        # several pictures, TRELLIS.2 loaded once
+    python scripts/models/generate.py pictures/my_picture.png --texture-guidance 3   # colours follow the picture more
 
 The results go to outputs/: the picture after background removal (*_input.png) and the model (*.glb).
 """
@@ -13,7 +13,7 @@ import argparse
 import os
 import time
 
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # saves GPU memory

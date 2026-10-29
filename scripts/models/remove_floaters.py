@@ -5,8 +5,8 @@ close to it (accessories, a held object, hair strands), and removed if it floats
 
 Usage (TRELLIS.2 environment):
     source activate.sh
-    python scripts/remove_floaters.py outputs/model.glb                 # writes outputs/model_clean.glb
-    python scripts/remove_floaters.py outputs/model.glb --gap 0.03      # keep parts up to 3 % away
+    python scripts/models/remove_floaters.py outputs/model.glb                 # writes outputs/model_clean.glb
+    python scripts/models/remove_floaters.py outputs/model.glb --gap 0.03      # keep parts up to 3 % away
 """
 import argparse
 import os
