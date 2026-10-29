@@ -72,10 +72,15 @@ Wait about a minute until it says **Ready**.
    drag an arrow to move one side, a dot to pull one corner, G moves it, R turns it).
    **Only one part in the box** (e.g. the helmet, not the hair under it): type its name under
    *Find a part in the box* (`helmet`), optionally **Click on it** (several spots: Enter when done), then **Find part in box**. About
-   15 s later its faces are selected and shown red (Tab to fix them by hand) and *Only the selected faces
-   in the box* is ticked. Needs `./install_mask.sh` once on this PC (a mask AI, about 4 GB VRAM).
-2. **Picture**: the model's picture.
-3. Connection: **Inside the network** → **2. Regenerate area**.
+   15 s later its faces are selected and shown red (Tab to fix them by hand), and **Box** is set to
+   *Selected faces + empty space*: the part and the empty space in the box are regenerated, every other
+   surface in the box stays exactly (no colour bleeding onto it). Needs `./install_mask.sh` once on this PC
+   (a mask AI, about 4 GB VRAM). Box choices: *Everything in the box* / *Only the selected faces* /
+   *Selected faces + empty space*.
+2. **Picture**: the model's picture, or one made with *Make picture from prompt* (it keeps the render
+   before the edit and the edit's 2D mask, which **Method: Inversion** uses).
+3. **Method**: *Repaint* (fast) or *Inversion* (the new part joins better, about 3× slower; 25 steps for
+   the best quality). Connection: **Inside the network** → **2. Regenerate area**.
 4. The panel shows the progress (1/6 … 6/6); the result appears next to the hidden original.
 
 The ↻ button next to *Server* checks the connection: **ready**, **busy** or what is wrong.

@@ -5,7 +5,8 @@ something new may grow (e.g. a statue on the ground). The boxes are drawn see-th
 selected one has an arrow on each side (drag it to move that side) and a dot on each corner (drag it
 to pull that corner anywhere, so a box can take any shape). "Find part in box" selects only one part
 inside the box (e.g. the helmet, by its name and/or a click on it) with a mask AI on this computer
-(scripts/mask_ai.py, installed by install_mask.sh). Optionally a prompt (and a reference picture)
+(scripts/mask_ai.py, installed by install_mask.sh); Box = "Selected faces + empty space" then regenerates
+that part and the empty space in the box and keeps every other surface exactly. Optionally a prompt (and a reference picture)
 says what should be there: the server then first paints it into a picture of the model, seen from the
 current view, and TRELLIS.2 builds that picture's change in 3D.
 
@@ -33,7 +34,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 7, 0),
+    "version": (1, 8, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -42,6 +43,7 @@ bl_info = {
 
 LOCAL_TOKEN = os.path.expanduser("~/.config/inpainting3d/server_token")  # made by inpaint_server.py
 BOX = "InpaintBox"
+GRID = 64  # cubes per side of TRELLIS.2's grid, as in inpaint.py
 BOX_COLOR = (0.25, 0.65, 1.0)  # blue, so a box doesn't look like Blender's orange selection
 # a box's 8 corners in Blender's bound_box order: which side of each axis they are on (-1/+1), their
 # 12 triangles and 12 edges, and the 4 edges along each axis
@@ -168,26 +170,63 @@ def box_points(model):
     return np.concatenate(points) if points else np.zeros((0, 3))
 
 
+def keep_the_rest(model, part, boxes, grow):
+    """For Box = "Selected faces + empty space": the cubes of TRELLIS.2's 64 grid to regenerate, as their
+    centres (glTF coordinates, sent with grow 0): the box and the selected faces (world points), grown by
+    `grow` cubes, without the cubes that hold only other surfaces of the model, which so stay exactly as
+    they are. A cube holding some of the part is regenerated, so the part goes completely."""
+    mesh = model.data
+    m = np.array(model.matrix_world)
+    world = lambda local: local @ m[:3, :3].T + m[:3, 3]
+    co = np.zeros(len(mesh.vertices) * 3, np.float32)
+    mesh.vertices.foreach_get("co", co)
+    vertices = to_gltf(world(co.reshape(-1, 3)))
+    low, high = vertices.min(0), vertices.max(0)
+    centre, scale = (low + high) / 2, 0.99999 / (high - low).max()  # as inpaint.py places the model
+
+    def cubes(points):
+        return np.clip((((to_gltf(points) - centre) * scale + 0.5) * GRID).astype(int), 0, GRID - 1)
+
+    mask = np.zeros((GRID,) * 3, bool)
+    for points in (part, boxes):
+        mask[tuple(cubes(points).T)] = True
+    for _ in range(grow):  # one cube in every direction per round, as inpaint.py grows
+        padded = np.pad(mask, 1)
+        mask = np.any([padded[x:x + GRID, y:y + GRID, z:z + GRID] for x in range(3) for y in range(3) for z in range(3)], 0)
+    selected = np.zeros(len(mesh.polygons), bool)
+    mesh.polygons.foreach_get("select", selected)
+    centers = np.zeros(len(mesh.polygons) * 3, np.float32)
+    mesh.polygons.foreach_get("center", centers)
+    found = cubes(world(centers.reshape(-1, 3)))
+    other, own = np.zeros_like(mask), np.zeros_like(mask)
+    other[tuple(found[~selected].T)] = True
+    own[tuple(found[selected].T)] = True
+    mask &= ~(other & ~own)
+    return ((np.argwhere(mask) + 0.5) / GRID - 0.5) / scale + centre
+
+
 def area_points(operator, context):
-    """The model and the marked area (glTF coordinates), or None after reporting what's missing."""
+    """The model, the marked area (glTF coordinates), how many faces are selected, whether boxes count, and
+    the grow the job must use; or None after reporting what's missing."""
     model = target_model(context)
     if model is None:
         operator.report({"ERROR"}, "Click the model first")
         return None
     if context.mode != "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")  # also writes the Edit Mode selection into the mesh
+    settings = context.scene.inpaint
     faces, count = selected_points(model)
-    if context.scene.inpaint.box_frame:  # the box only framed the part: the selected faces are the area
-        if count == 0:
-            operator.report({"ERROR"}, "No faces selected: find the part first, or untick 'Only the selected faces'")
-            return None
-        boxes = np.zeros((0, 3))
-    else:
-        boxes = box_points(model)
+    boxes = np.zeros((0, 3)) if settings.box_use == "part" else box_points(model)
+    if settings.box_use != "all" and count == 0:
+        operator.report({"ERROR"}, "No faces selected: find the part first (or select faces), "
+                                   "or set Box to 'Everything in the box'")
+        return None
     if count == 0 and len(boxes) == 0:
         operator.report({"ERROR"}, "Mark an area: select faces (Edit Mode) or add a space box")
         return None
-    return model, to_gltf(np.concatenate([faces, boxes])), count, len(boxes) > 0
+    if settings.box_use == "part_space":  # grown here already, around the protected surfaces: the job grows 0
+        return model, keep_the_rest(model, faces, boxes, settings.grow), count, True, 0
+    return model, to_gltf(np.concatenate([faces, boxes])), count, len(boxes) > 0, settings.grow
 
 
 def export_model(context, model, folder):
@@ -260,10 +299,15 @@ class InpaintSettings(bpy.types.PropertyGroup):
     clicks: bpy.props.CollectionProperty(type=InpaintClick, description="Spots on the part, for Find part")
     find_cpu: bpy.props.BoolProperty(name="CPU only", default=False,
                                      description="Run the mask AI without the GPU (slower: about 1-2 minutes)")
-    box_frame: bpy.props.BoolProperty(
-        name="Only the selected faces in the box", default=False,
-        description="On: the box only frames the part, and just the selected faces are regenerated (e.g. the "
-                    "part the AI found). Off: everything inside the box is regenerated")
+    box_use: bpy.props.EnumProperty(
+        name="Box",
+        items=[("all", "Everything in the box", "Everything inside the space box is regenerated"),
+               ("part", "Only the selected faces", "The box only frames the part: just the selected faces (e.g. "
+                                                   "the part the AI found) are regenerated, in their own place"),
+               ("part_space", "Selected faces + empty space",
+                "The selected faces and the empty space in the box are regenerated; every other surface in the "
+                "box stays exactly as it is (no colour bleeding onto it). For replacing a part with something new")],
+        default="all")
     folder: bpy.props.StringProperty(name="Work folder", subtype="DIR_PATH",
                                      default=os.path.expanduser("~/inpainting-3D/outputs/blender"),
                                      description="Where the model, the area, the pictures and the results are saved")
@@ -769,7 +813,7 @@ def follow_find():
         with bpy.context.temp_override(**view):  # leaving Edit Mode would overwrite the new selection
             bpy.ops.object.mode_set(mode="OBJECT")
     found = vote(model, np.load(masks_file))
-    bpy.context.scene.inpaint.box_frame = True
+    bpy.context.scene.inpaint.box_use = "part_space"
     finder["message"] = f"found {found:,} faces: red (Tab to fix them by hand)"
     for o in bpy.context.view_layer.objects:  # the model active, so Tab opens it (not the box)
         o.select_set(False)
@@ -921,7 +965,7 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
         area = area_points(self, context)
         if area is None:
             return {"CANCELLED"}
-        model, points, _, _ = area
+        model, points = area[:2]
         # direction from the model towards the viewer, as the view shows it now
         direction = context.space_data.region_3d.view_rotation @ Vector((0, 0, 1))
         folder = bpy.path.abspath(settings.folder)
@@ -1083,7 +1127,7 @@ def pack_job(operator, context):
     area = area_points(operator, context)
     if area is None:
         return None
-    model, points, _, _ = area
+    model, points, _, _, grow = area
     folder = bpy.path.abspath(settings.folder)
     path = export_model(context, model, folder)
     name = bpy.path.clean_name(model.name)
@@ -1091,7 +1135,7 @@ def pack_job(operator, context):
     np.save(area_file, points)
     picture_name = "picture" + os.path.splitext(picture)[1].lower()
     job = {"model": "model.glb", "points": "area.npy", "picture": picture_name, "object": model.name,
-           "seed": settings.seed, "grow": settings.grow, "steps": settings.steps, "method": settings.method}
+           "seed": settings.seed, "grow": grow, "steps": settings.steps, "method": settings.method}
     # a picture made from a prompt comes with the render before the edit and the edit's 2D mask
     before, picture_mask = (os.path.splitext(picture)[0] + end for end in ("_before.png", "_mask.png"))
     if os.path.isfile(before) and os.path.isfile(picture_mask):
@@ -1391,7 +1435,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
             box.label(text=finder["message"])
         if finder["folder"] and os.path.isfile(os.path.join(finder["folder"], "overview.jpg")):
             box.operator(INPAINT_OT_show_found.bl_idname, icon="IMAGE_DATA")
-        box.prop(settings, "box_frame")
+        box.prop(settings, "box_use")
 
         box = layout.box()
         box.label(text="B. What should be there (optional)", icon="TEXT")
