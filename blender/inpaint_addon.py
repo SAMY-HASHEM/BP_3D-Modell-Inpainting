@@ -34,7 +34,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 8, 0),
+    "version": (1, 9, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -1167,6 +1167,104 @@ class INPAINT_OT_save_job(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# ---------------------------------------------------------------- clean up (Geometry Nodes)
+
+CLEANUP = "Clean up"
+
+
+def cleanup_group():
+    """The Geometry Nodes graph "Clean up", made once per .blend file: closes tiny gaps and deletes every
+    loose piece with less than `Min share` of the model's faces (floating leftovers of TRELLIS.2).
+
+        Group Input -> Merge by Distance -> Delete Geometry -> Group Output
+                                              ^ Selection = "piece too small":
+        Mesh Island -> Accumulate Field (faces per piece) / Accumulate Field (all faces) < Min share
+    """
+    if CLEANUP in bpy.data.node_groups:
+        return bpy.data.node_groups[CLEANUP]
+    tree = bpy.data.node_groups.new(CLEANUP, "GeometryNodeTree")
+    tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    share = tree.interface.new_socket("Min share", in_out="INPUT", socket_type="NodeSocketFloat")
+    share.default_value, share.min_value, share.max_value = 0.002, 0.0, 1.0  # 0.2 % of all faces
+    gap = tree.interface.new_socket("Merge distance", in_out="INPUT", socket_type="NodeSocketFloat")
+    gap.default_value, gap.min_value = 0.0001, 0.0
+    tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+
+    nodes, link = tree.nodes, tree.links.new
+    inp = nodes.new("NodeGroupInput")
+    out = nodes.new("NodeGroupOutput")
+    merge = nodes.new("GeometryNodeMergeByDistance")
+    island = nodes.new("GeometryNodeInputMeshIsland")
+    per_piece = nodes.new("GeometryNodeAccumulateField")
+    per_piece.data_type, per_piece.domain = "INT", "FACE"
+    all_faces = nodes.new("GeometryNodeAccumulateField")
+    all_faces.data_type, all_faces.domain = "INT", "FACE"
+    divide = nodes.new("ShaderNodeMath")
+    divide.operation = "DIVIDE"
+    small = nodes.new("FunctionNodeCompare")
+    small.data_type, small.operation = "FLOAT", "LESS_THAN"
+    delete = nodes.new("GeometryNodeDeleteGeometry")
+    delete.domain = "FACE"
+    for node, x, y in ((inp, -900, 0), (merge, -600, 100), (island, -900, -250), (per_piece, -600, -200),
+                       (all_faces, -600, -450), (divide, -350, -250), (small, -150, -150),
+                       (delete, 100, 100), (out, 350, 100)):
+        node.location = (x, y)
+
+    link(inp.outputs["Geometry"], merge.inputs["Geometry"])
+    link(inp.outputs["Merge distance"], merge.inputs["Distance"])
+    per_piece.inputs[0].default_value = 1  # count one per face ...
+    link(island.outputs["Island Index"], per_piece.inputs[1])  # ... grouped by piece
+    all_faces.inputs[0].default_value = 1
+    link(per_piece.outputs["Total"], divide.inputs[0])
+    link(all_faces.outputs["Total"], divide.inputs[1])
+    link(divide.outputs[0], small.inputs[0])
+    link(inp.outputs["Min share"], small.inputs[1])
+    link(merge.outputs["Geometry"], delete.inputs["Geometry"])
+    link(small.outputs["Result"], delete.inputs["Selection"])
+    link(delete.outputs["Geometry"], out.inputs["Geometry"])
+    return tree
+
+
+def add_cleanup(obj):
+    """Puts the "Clean up" modifier on a mesh object (once) and returns it. The model itself isn't
+    changed: the modifier can be switched off, or applied (Ctrl+A over it) to keep the result."""
+    modifier = obj.modifiers.get(CLEANUP) or obj.modifiers.new(CLEANUP, "NODES")
+    modifier.node_group = cleanup_group()
+    return modifier
+
+
+def cleanup_input(modifier, name):
+    """Where the modifier keeps its own value of one graph input, as (data, property) for layout.prop:
+    Blender 5.x in modifier.properties.inputs, Blender 4.x as an ID property of the modifier."""
+    ident = modifier.node_group.interface.items_tree[name].identifier
+    inputs = getattr(getattr(modifier, "properties", None), "inputs", None)
+    if inputs is not None and hasattr(inputs, ident):
+        return getattr(inputs, ident), "value"
+    return modifier, f'["{ident}"]'
+
+
+def faces_after(obj):
+    return len(obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data.polygons)
+
+
+class INPAINT_OT_clean_up(bpy.types.Operator):
+    bl_idname = "inpaint.clean_up"
+    bl_label = "Clean up model"
+    bl_description = ("Geometry Nodes: delete small loose pieces (floating leftovers) of the model. "
+                      "A modifier, so nothing is lost: switch it off to compare, Ctrl+A over it to keep it")
+
+    def execute(self, context):
+        model = target_model(context)
+        if model is None:
+            self.report({"ERROR"}, "Click the model first")
+            return {"CANCELLED"}
+        before = len(model.data.polygons)
+        add_cleanup(model)
+        after = faces_after(model)
+        self.report({"INFO"}, f"{model.name}: {before - after} of {before} faces removed")
+        return {"FINISHED"}
+
+
 # ---------------------------------------------------------------- the uni server through the Sciebo cloud
 # scripts/server/cloud.py setup saves the cloud login; scripts/server/cloud_worker.py on the server runs the jobs.
 
@@ -1469,12 +1567,23 @@ class INPAINT_PT_panel(bpy.types.Panel):
         row.operator(INPAINT_OT_save_job.bl_idname, text="Save job only", icon="PACKAGE")
         row.operator(INPAINT_OT_load_result.bl_idname, icon="IMPORT")
 
+        box = layout.box()
+        box.label(text="E. Clean up (Geometry Nodes)", icon="GEOMETRY_NODES")
+        box.operator(INPAINT_OT_clean_up.bl_idname, icon="BRUSH_DATA")
+        obj = context.active_object
+        modifier = obj.modifiers.get(CLEANUP) if obj is not None and obj.type == "MESH" else None
+        if modifier is not None and modifier.node_group is not None:
+            row = box.row()
+            row.prop(*cleanup_input(modifier, "Min share"), text="Min share")
+            row.prop(modifier, "show_viewport", text="", icon="HIDE_OFF")
+
         layout.prop(settings, "folder")
 
 
 classes = (InpaintClick, InpaintSettings, INPAINT_OT_add_box, INPAINT_GGT_box_sides, INPAINT_OT_pick_point,
            INPAINT_OT_clear_click, INPAINT_OT_find_part, INPAINT_OT_show_found, INPAINT_OT_make_picture,
            INPAINT_OT_regenerate, INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result,
+           INPAINT_OT_clean_up,
            InpaintPreferences, INPAINT_OT_cloud_login,
            INPAINT_OT_show_picture, INPAINT_OT_check, INPAINT_PT_panel)
 

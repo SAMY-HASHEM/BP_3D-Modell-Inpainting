@@ -1,105 +1,64 @@
-"""Geometry Nodes "Clean up": deletes small loose pieces of a generated model and closes tiny gaps.
+"""Geometry Nodes "Clean up" without the Blender window: deletes small loose pieces of generated models.
 
-TRELLIS.2 results (and inpainting results) often have small floating pieces, e.g. a leftover under a
-new part. This builds a node graph that removes every loose piece with less than `Min share` of the
-model's faces. It is a modifier: the model itself is not changed, the modifier can be switched off or
-applied (Ctrl+A) at any time.
-
-The graph (open the "Geometry Nodes" workspace to see it):
-    Group Input -> Merge by Distance -> Delete Geometry -> Group Output
-                                          ^ Selection = "piece too small":
-    Mesh Island (which piece a face belongs to)
-      -> Accumulate Field, grouped by piece: faces per piece
-      -> divided by all faces (Accumulate Field without group)
-      -> Compare: share < Min share
+The node graph itself is in the add-on (inpaint_addon.py: cleanup_group), where the button
+"Clean up model" (Inpaint tab, section E) uses it. This runs the same graph on .glb files:
+loads each, puts the modifier on it, prints how many faces it removed and, with --out, saves the result.
 
 Usage:
-    in Blender: Scripting tab, open this file, click the model, Run Script
-    or without window:
-    flatpak run org.blender.Blender -b --python blender/cleanup_nodes.py -- model.glb [out.glb]
+    flatpak run --filesystem=home org.blender.Blender -b --python $PWD/blender/cleanup_nodes.py -- \
+        $PWD/outputs/a.glb [$PWD/outputs/b.glb ...] [--out $PWD/outputs/cleaned] [--min-share 0.002]
+    or in Blender: Scripting tab, open this file, click the model, Run Script (no file arguments)
 """
+import argparse
+import importlib.util
+import os
 import sys
 
 import bpy
 
-NAME = "Clean up"
+# the add-on file next to this one (not an older copy installed in Blender's add-on folder)
+_spec = importlib.util.spec_from_file_location(
+    "inpaint_addon_project", os.path.join(os.path.dirname(os.path.abspath(__file__)), "inpaint_addon.py"))
+addon = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(addon)
+add_cleanup, cleanup_input, faces_after = addon.add_cleanup, addon.cleanup_input, addon.faces_after
 
 
-def link(tree, a, b):
-    tree.links.new(a, b)
+def clean(obj, min_share=None):
+    """Puts the modifier on obj; returns (faces before, faces after)."""
+    modifier = add_cleanup(obj)
+    if min_share is not None:
+        data, prop = cleanup_input(modifier, "Min share")
+        if prop == "value":
+            data.value = min_share
+        else:
+            data[prop[2:-2]] = min_share
+    return len(obj.data.polygons), faces_after(obj)
 
 
-def build_group():
-    """The node graph, made once per .blend file."""
-    if NAME in bpy.data.node_groups:
-        return bpy.data.node_groups[NAME]
-    tree = bpy.data.node_groups.new(NAME, "GeometryNodeTree")
-    tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
-    share = tree.interface.new_socket("Min share", in_out="INPUT", socket_type="NodeSocketFloat")
-    share.default_value, share.min_value, share.max_value = 0.002, 0.0, 1.0  # 0.2 % of all faces
-    gap = tree.interface.new_socket("Merge distance", in_out="INPUT", socket_type="NodeSocketFloat")
-    gap.default_value, gap.min_value = 0.0001, 0.0
-    tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+def main():
+    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    parser = argparse.ArgumentParser(prog="cleanup_nodes.py")
+    parser.add_argument("models", nargs="*", help=".glb files (none: the selected objects in Blender)")
+    parser.add_argument("--out", help="folder to save the cleaned .glb files into")
+    parser.add_argument("--min-share", type=float, help="pieces smaller than this share of all faces go (0.002)")
+    args = parser.parse_args(argv)
 
-    nodes = tree.nodes
-    inp = nodes.new("NodeGroupInput")
-    out = nodes.new("NodeGroupOutput")
-    merge = nodes.new("GeometryNodeMergeByDistance")
-    island = nodes.new("GeometryNodeInputMeshIsland")
-    per_piece = nodes.new("GeometryNodeAccumulateField")
-    per_piece.data_type, per_piece.domain = "INT", "FACE"
-    all_faces = nodes.new("GeometryNodeAccumulateField")
-    all_faces.data_type, all_faces.domain = "INT", "FACE"
-    divide = nodes.new("ShaderNodeMath")
-    divide.operation = "DIVIDE"
-    small = nodes.new("FunctionNodeCompare")
-    small.data_type, small.operation = "FLOAT", "LESS_THAN"
-    delete = nodes.new("GeometryNodeDeleteGeometry")
-    delete.domain = "FACE"
-
-    for node, x, y in ((inp, -900, 0), (merge, -600, 100), (island, -900, -250), (per_piece, -600, -200),
-                       (all_faces, -600, -450), (divide, -350, -250), (small, -150, -150),
-                       (delete, 100, 100), (out, 350, 100)):
-        node.location = (x, y)
-
-    link(tree, inp.outputs["Geometry"], merge.inputs["Geometry"])
-    link(tree, inp.outputs["Merge distance"], merge.inputs["Distance"])
-    per_piece.inputs[0].default_value = 1  # count one per face ...
-    link(tree, island.outputs["Island Index"], per_piece.inputs[1])  # ... grouped by piece
-    all_faces.inputs[0].default_value = 1
-    link(tree, per_piece.outputs["Total"], divide.inputs[0])
-    link(tree, all_faces.outputs["Total"], divide.inputs[1])
-    link(tree, divide.outputs[0], small.inputs[0])
-    link(tree, inp.outputs["Min share"], small.inputs[1])
-    link(tree, merge.outputs["Geometry"], delete.inputs["Geometry"])
-    link(tree, small.outputs["Result"], delete.inputs["Selection"])
-    link(tree, delete.outputs["Geometry"], out.inputs["Geometry"])
-    return tree
-
-
-def add_cleanup(obj):
-    """Puts the "Clean up" modifier on a mesh object (once)."""
-    modifier = obj.modifiers.get(NAME) or obj.modifiers.new(NAME, "NODES")
-    modifier.node_group = build_group()
-    return modifier
-
-
-def faces_after(obj):
-    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
-    return len(evaluated.data.polygons)
-
-
-if __name__ == "__main__":
-    args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    if args:  # without window: load, clean, report, save
+    if not args.models:
+        for obj in [o for o in bpy.context.selected_objects if o.type == "MESH"]:
+            before, after = clean(obj, args.min_share)
+            print(f"{obj.name}: {before} faces -> {after} after Clean up")
+        return
+    for path in args.models:
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.import_scene.gltf(filepath=args[0])
-        targets = [o for o in bpy.context.scene.objects if o.type == "MESH"]
-    else:
-        targets = [o for o in bpy.context.selected_objects if o.type == "MESH"]
-    for obj in targets:
-        before = len(obj.data.polygons)
-        add_cleanup(obj)
-        print(f"{obj.name}: {before} faces -> {faces_after(obj)} after Clean up")
-    if len(args) > 1:
-        bpy.ops.export_scene.gltf(filepath=args[1], export_apply=True)
+        bpy.ops.import_scene.gltf(filepath=path)
+        for obj in [o for o in bpy.context.scene.objects if o.type == "MESH"]:
+            before, after = clean(obj, args.min_share)
+            print(f"{os.path.basename(path)}: {before} faces -> {after} after Clean up "
+                  f"({100 * (before - after) / before:.1f} % removed)", flush=True)
+        if args.out:
+            os.makedirs(args.out, exist_ok=True)
+            bpy.ops.export_scene.gltf(filepath=os.path.join(args.out, os.path.basename(path)), export_apply=True)
+
+
+main()
