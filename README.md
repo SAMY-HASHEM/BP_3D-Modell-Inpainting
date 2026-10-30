@@ -23,3 +23,4 @@ Samy Hashem
 | `docs/` | how-to guides for the two server connections |
 
 Setup: `./install.sh` (TRELLIS.2), `./install_mask.sh` (mask AI), `./install_omnipart.sh` (OmniPart); then `source activate.sh`.
+All AI models are in `local_ai_models/` (not in Git); `./download_models.sh` gets them, and `source activate.sh` runs it by itself when something is missing.

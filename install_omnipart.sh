@@ -45,6 +45,6 @@ pip install pytz psutil scikit-learn
 # which plyfile pulls in; lightning still needs pkg_resources, which setuptools >= 70 dropped
 pip install "numpy==1.26.4" "plyfile<1.1" "setuptools<70"
 
-conda env config vars set HF_HUB_CACHE="$PROJECT_DIR/models" HF_MODULES_CACHE="$PROJECT_DIR/models/modules" \
+conda env config vars set HF_HUB_CACHE="$PROJECT_DIR/local_ai_models" HF_MODULES_CACHE="$PROJECT_DIR/local_ai_models/modules" \
     CUDA_HOME="$CONDA_PREFIX" >/dev/null
 python -c "import torch, spconv, detectron2, xformers; assert torch.cuda.is_available(); print('OmniPart environment ready:', torch.__version__, torch.cuda.get_device_name(0))"

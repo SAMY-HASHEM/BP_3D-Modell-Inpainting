@@ -36,6 +36,7 @@ from render_views import load, render_view
 
 COMFYUI = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188")
 COMFYUI_DIR = os.environ.get("COMFYUI_DIR", os.path.expanduser("~/ai-models/tools/ComfyUI"))
+MODEL_PATHS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "comfyui_paths.yaml")  # local_ai_models/comfyui
 SIZE = 1024
 BACKGROUND = 0.75  # light grey, like a product shot
 FRAME = (255, 0, 0)
@@ -89,7 +90,8 @@ def start_comfyui(report=print):
     report("Starting ComfyUI...")
     log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs", "comfyui.log"), "w")
     process = subprocess.Popen([os.path.join(COMFYUI_DIR, ".venv", "bin", "python"), "main.py", "--listen", "127.0.0.1",
-                                "--port", COMFYUI.rsplit(":", 1)[1]], cwd=COMFYUI_DIR, stdout=log, stderr=subprocess.STDOUT)
+                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", MODEL_PATHS],
+                               cwd=COMFYUI_DIR, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(120):
         time.sleep(2)
         try:

@@ -1,7 +1,7 @@
 # What every setting does, and where it lives in the code
 
 Line numbers are from today's code (`TRELLIS.2/` is Microsoft's code, `scripts/` is ours). TRELLIS.2's
-default values are in its `pipeline.json` (in `models/models--microsoft--TRELLIS.2-4B/snapshots/…/`).
+default values are in its `pipeline.json` (in `local_ai_models/models--microsoft--TRELLIS.2-4B/snapshots/…/`).
 
 ## The way of one picture through TRELLIS.2
 

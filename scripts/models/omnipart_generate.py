@@ -20,7 +20,7 @@ import sys
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OMNIPART_DIR = os.path.join(PROJECT_DIR, "OmniPart")
-os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "models"))
+os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "local_ai_models"))
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
 import numpy as np

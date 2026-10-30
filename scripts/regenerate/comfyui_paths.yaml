@@ -1,0 +1,8 @@
+# Where ComfyUI finds this project's Qwen-Image-Edit files (download_models.sh puts them there).
+# edit_picture.py starts ComfyUI with --extra-model-paths-config pointing to this file.
+inpainting_3d:
+  base_path: ../../local_ai_models/comfyui/
+  diffusion_models: diffusion_models/
+  text_encoders: text_encoders/
+  vae: vae/
+  loras: loras/

@@ -93,7 +93,7 @@ def main():
     if args.cutout:
         import torch
         from trellis2.pipelines.rembg.BiRefNet import BiRefNet
-        os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "models"))
+        os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "local_ai_models"))
         remover = BiRefNet("briaai/RMBG-2.0")
         remover.cuda()
         torch.set_grad_enabled(False)

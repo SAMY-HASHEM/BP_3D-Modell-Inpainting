@@ -19,7 +19,7 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # saves GPU memory
 # The conda environment sets these on activation. They are repeated here for runs that skip the
 # activation (e.g. PyCharm's Run button), so the model weights are never downloaded a second time.
-os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "models"))
+os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "local_ai_models"))
 os.environ.setdefault("HF_MODULES_CACHE", os.path.join(PROJECT_DIR, "models", "modules"))
 
 import numpy as np

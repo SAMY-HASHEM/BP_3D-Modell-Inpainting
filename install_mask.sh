@@ -6,7 +6,7 @@
 #
 #   ./install_mask.sh
 #
-# Models (downloaded at the end, into ./models/mask, about 4 GB):
+# Models (downloaded at the end, into ./local_ai_models/mask, about 4 GB):
 #   Grounding DINO base (finds the word in a picture) + SAM 2.1 large (cuts out its exact outline)
 set -e
 

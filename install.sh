@@ -10,7 +10,7 @@
 #   3. creates the conda environment from environment.yml
 #   4. builds TRELLIS.2's CUDA add-ons for the GPU in this machine
 #   5. makes "import trellis2" work from anywhere in the environment
-#   6. downloads the model weights into ./models (needs a Hugging Face login with access to DINOv3 and RMBG-2.0)
+#   6. downloads the model weights into ./local_ai_models with download_models.sh (needs a Hugging Face login with access to DINOv3 and RMBG-2.0)
 #
 # Afterwards, start working with:  source activate.sh
 #
@@ -23,7 +23,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_NAME="inpainting-3d-modelling"
 CONDA_DIR="$PROJECT_DIR/conda"
 TRELLIS2_DIR="$PROJECT_DIR/TRELLIS.2"
-MODELS_DIR="$PROJECT_DIR/models"
+MODELS_DIR="$PROJECT_DIR/local_ai_models"
 BUILD_DIR="$CONDA_DIR/addon-sources"
 
 # Tested versions of TRELLIS.2 and its add-ons
@@ -82,7 +82,7 @@ conda activate "$ENV_NAME"
 # Build the add-ons for the GPU(s) in this machine, e.g. 8.6 = RTX 3090, 9.0 = H100.
 GPU_ARCHS=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | sort -u | paste -sd ';')
 GPU_ARCHS=${GPU_ARCHS:-"8.0;8.6;8.9;9.0"}
-# HF_HUB_CACHE keeps the model weights in ./models; the Hugging Face login stays in ~/.cache/huggingface.
+# HF_HUB_CACHE keeps the model weights in ./local_ai_models; the Hugging Face login stays in ~/.cache/huggingface.
 conda env config vars set -n "$ENV_NAME" CUDA_HOME="$CONDA_PREFIX" TORCH_CUDA_ARCH_LIST="$GPU_ARCHS" \
     HF_HUB_CACHE="$MODELS_DIR" HF_MODULES_CACHE="$MODELS_DIR/modules" >/dev/null
 conda deactivate && conda activate "$ENV_NAME"
@@ -114,21 +114,11 @@ import trellis2, os
 print('TRELLIS.2 loads from', os.path.dirname(trellis2.__file__))
 ")
 
-step "6/6 Model weights (in ./models)"
+step "6/6 Model weights (in ./local_ai_models)"
 if [ "${SKIP_WEIGHTS:-0}" = "1" ]; then
     echo "skipped (SKIP_WEIGHTS=1)"
-elif ! hf auth whoami >/dev/null 2>&1; then
-    echo "Not logged in to Hugging Face, so the weights are not downloaded yet. To finish:"
-    echo "  1. request access to https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m"
-    echo "     and https://huggingface.co/briaai/RMBG-2.0"
-    echo "  2. source activate.sh && hf auth login"
-    echo "  3. run ./install.sh again (it reuses everything already built)"
 else
-    hf download microsoft/TRELLIS.2-4B >/dev/null
-    hf download microsoft/TRELLIS-image-large ckpts/ss_dec_conv3d_16l8_fp16.json ckpts/ss_dec_conv3d_16l8_fp16.safetensors >/dev/null
-    hf download facebook/dinov3-vitl16-pretrain-lvd1689m >/dev/null
-    hf download briaai/RMBG-2.0 --include "*.py" "*.json" "model.safetensors" >/dev/null
-    echo "weights are in $MODELS_DIR ($(du -sh "$MODELS_DIR" | cut -f1))"
+    "$PROJECT_DIR/download_models.sh"
 fi
 
 echo

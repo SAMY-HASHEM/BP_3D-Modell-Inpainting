@@ -18,5 +18,6 @@ __pycache__/
 
 # Conda (Miniforge + environment) and model weights, installed by install.sh
 /conda/
-/models/
+/local_ai_models/
+/models
 /VoxHammer/
