@@ -20,6 +20,7 @@ and bring a "source" picture of the original model for the inversion method; wit
 sees the original picture outside the mask ("swap": false turns that off). Every version is then
 written as <job>_<version>_seed<N>.glb.
 """
+import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
 import json
 import os
