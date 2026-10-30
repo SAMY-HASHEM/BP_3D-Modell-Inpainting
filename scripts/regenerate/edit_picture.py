@@ -88,7 +88,7 @@ def start_comfyui(report=print):
     except OSError:
         pass
     report("Starting ComfyUI...")
-    log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs", "comfyui.log"), "w")
+    log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs", "comfyui.log"), "w")
     process = subprocess.Popen([os.path.join(COMFYUI_DIR, ".venv", "bin", "python"), "main.py", "--listen", "127.0.0.1",
                                 "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", MODEL_PATHS],
                                cwd=COMFYUI_DIR, stdout=log, stderr=subprocess.STDOUT)
@@ -143,6 +143,23 @@ def qwen_edit_workflow(image_name, prompt, seed, reference_name=None):
     return w
 
 
+def wait_for_picture(prompt_id):
+    """Waits until ComfyUI has run the job and returns the picture it saved."""
+    while True:
+        time.sleep(2)
+        history = comfy(f"/history/{prompt_id}")
+        if prompt_id in history:
+            entry = history[prompt_id]
+            if entry.get("status", {}).get("status_str") == "error":
+                raise RuntimeError(f"ComfyUI failed: {entry['status'].get('messages', '')}"[:500])
+            files = [i for out in entry["outputs"].values() for i in out.get("images", [])]
+            if files:
+                break
+    f = files[0]
+    query = urllib.parse.urlencode({"filename": f["filename"], "subfolder": f["subfolder"], "type": f["type"]})
+    return Image.open(io.BytesIO(comfy(f"/view?{query}", timeout=60))).convert("RGB")
+
+
 def comfy_edit(image, prompt, seed, reference=None, report=print):
     """Runs the Qwen edit in ComfyUI and frees ComfyUI's GPU memory afterwards (TRELLIS.2 needs it)."""
     started = start_comfyui(report)
@@ -154,19 +171,7 @@ def comfy_edit(image, prompt, seed, reference=None, report=print):
         job = comfy("/prompt", {"prompt": qwen_edit_workflow(name, text, seed, ref), "client_id": "inpaint3d"})
         if job.get("node_errors"):
             raise RuntimeError(f"ComfyUI: {job['node_errors']}")
-        while True:
-            time.sleep(2)
-            history = comfy(f"/history/{job['prompt_id']}")
-            if job["prompt_id"] in history:
-                entry = history[job["prompt_id"]]
-                if entry.get("status", {}).get("status_str") == "error":
-                    raise RuntimeError(f"ComfyUI failed: {entry['status'].get('messages', '')}"[:500])
-                files = [i for out in entry["outputs"].values() for i in out.get("images", [])]
-                if files:
-                    break
-        f = files[0]
-        query = urllib.parse.urlencode({"filename": f["filename"], "subfolder": f["subfolder"], "type": f["type"]})
-        return Image.open(io.BytesIO(comfy(f"/view?{query}", timeout=60))).convert("RGB")
+        return wait_for_picture(job["prompt_id"])
     finally:
         if started is not None:
             started.terminate()  # we started it: stop it, so all of its GPU memory is free again
