@@ -1265,6 +1265,221 @@ class INPAINT_OT_clean_up(bpy.types.Operator):
         return {"FINISHED"}
 
 
+COMPARE = "Compare with original"
+KEEP = "Keep original outside"
+HEATMAP = "Change heatmap"
+
+
+def proximity(tree, target, element="FACES"):
+    """A Geometry Proximity node with `target` linked (its first input: "Geometry" in 5.x, "Target" in 4.x)."""
+    node = tree.nodes.new("GeometryNodeProximity")
+    node.target_element = element
+    tree.links.new(target, node.inputs[0])
+    return node
+
+
+def original_info(tree):
+    """Object Info of the "Original" input, in the space of the object the modifier is on."""
+    node = tree.nodes.new("GeometryNodeObjectInfo")
+    node.transform_space = "RELATIVE"
+    return node
+
+
+def heatmap_material():
+    """Material that shows the "change" attribute: blue = like the original, red = new or moved."""
+    material = bpy.data.materials.get(HEATMAP)
+    if material is not None:
+        return material
+    material = bpy.data.materials.new(HEATMAP)
+    material.use_nodes = True
+    nodes, link = material.node_tree.nodes, material.node_tree.links.new
+    bsdf = nodes.get("Principled BSDF")
+    attribute = nodes.new("ShaderNodeAttribute")
+    attribute.attribute_name, attribute.attribute_type = "change", "GEOMETRY"
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (0.1, 0.25, 0.9, 1)
+    ramp.color_ramp.elements[1].color = (0.95, 0.1, 0.05, 1)
+    attribute.location, ramp.location = (-600, 0), (-350, 0)
+    link(attribute.outputs["Fac"], ramp.inputs["Fac"])
+    link(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    return material
+
+
+def compare_group():
+    """Graph "Compare with original": stores on every point of the result how far it is from the original
+    model ("change": 0 = on the original's surface, 1 = Threshold x 4 or further away) and, with Show,
+    colours the model by it. The 3D version of comparing the pictures before and after.
+
+        Group Input -> Store Named Attribute "change" -> Switch (Show) -> Group Output
+                         ^ Geometry Proximity (to Original) / (Threshold x 4), clamped
+                                                   Set Material (heatmap) ^
+    """
+    if COMPARE in bpy.data.node_groups:
+        return bpy.data.node_groups[COMPARE]
+    tree = bpy.data.node_groups.new(COMPARE, "GeometryNodeTree")
+    tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    tree.interface.new_socket("Original", in_out="INPUT", socket_type="NodeSocketObject")
+    threshold = tree.interface.new_socket("Threshold", in_out="INPUT", socket_type="NodeSocketFloat")
+    threshold.default_value, threshold.min_value = 0.005, 0.0
+    show = tree.interface.new_socket("Show", in_out="INPUT", socket_type="NodeSocketBool")
+    show.default_value = True
+    tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+
+    nodes, link = tree.nodes, tree.links.new
+    inp, out = nodes.new("NodeGroupInput"), nodes.new("NodeGroupOutput")
+    info = original_info(tree)
+    link(inp.outputs["Original"], info.inputs["Object"])
+    near = proximity(tree, info.outputs["Geometry"])
+    scale = nodes.new("ShaderNodeMath")
+    scale.operation = "MULTIPLY"
+    scale.inputs[1].default_value = 4
+    link(inp.outputs["Threshold"], scale.inputs[0])
+    share = nodes.new("ShaderNodeMath")
+    share.operation, share.use_clamp = "DIVIDE", True
+    link(near.outputs["Distance"], share.inputs[0])
+    link(scale.outputs[0], share.inputs[1])
+    store = nodes.new("GeometryNodeStoreNamedAttribute")
+    store.data_type, store.domain = "FLOAT", "POINT"
+    store.inputs["Name"].default_value = "change"
+    link(inp.outputs["Geometry"], store.inputs["Geometry"])
+    link(share.outputs[0], store.inputs["Value"])
+    paint = nodes.new("GeometryNodeSetMaterial")
+    paint.inputs["Material"].default_value = heatmap_material()
+    link(store.outputs["Geometry"], paint.inputs["Geometry"])
+    switch = nodes.new("GeometryNodeSwitch")
+    switch.input_type = "GEOMETRY"
+    link(inp.outputs["Show"], switch.inputs["Switch"])
+    link(store.outputs["Geometry"], switch.inputs["False"])
+    link(paint.outputs["Geometry"], switch.inputs["True"])
+    link(switch.outputs[0], out.inputs["Geometry"])
+    for node, x, y in ((inp, -900, 0), (info, -900, -250), (near, -650, -250), (scale, -650, -450), (share, -400, -300),
+                       (store, -150, 0), (paint, 100, -150), (switch, 350, 0), (out, 600, 0)):
+        node.location = (x, y)
+    return tree
+
+
+def keep_group():
+    """Graph "Keep original outside": the new part from the result, everything else from the original
+    model itself, so outside the change the model is exactly the original (TRELLIS.2 reads the model in
+    and writes it out again, which changes the kept surfaces a little).
+
+        result faces further than Threshold from the original      (the new part)  --+
+        original faces at most Threshold from the result      (what is still there)  --+-> Join -> Merge by Distance
+    """
+    if KEEP in bpy.data.node_groups:
+        return bpy.data.node_groups[KEEP]
+    tree = bpy.data.node_groups.new(KEEP, "GeometryNodeTree")
+    tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    tree.interface.new_socket("Original", in_out="INPUT", socket_type="NodeSocketObject")
+    threshold = tree.interface.new_socket("Threshold", in_out="INPUT", socket_type="NodeSocketFloat")
+    threshold.default_value, threshold.min_value = 0.005, 0.0
+    tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+
+    nodes, link = tree.nodes, tree.links.new
+    inp, out = nodes.new("NodeGroupInput"), nodes.new("NodeGroupOutput")
+    info = original_info(tree)
+    link(inp.outputs["Original"], info.inputs["Object"])
+
+    def delete_where(geometry, target, far):
+        """geometry without the faces that are (far=True: further, False: not further) than Threshold from target."""
+        near = proximity(tree, target)
+        compare = nodes.new("FunctionNodeCompare")
+        compare.data_type, compare.operation = "FLOAT", "GREATER_THAN" if far else "LESS_EQUAL"
+        link(near.outputs["Distance"], compare.inputs[0])
+        link(inp.outputs["Threshold"], compare.inputs[1])
+        delete = nodes.new("GeometryNodeDeleteGeometry")
+        delete.domain = "FACE"
+        link(geometry, delete.inputs["Geometry"])
+        link(compare.outputs["Result"], delete.inputs["Selection"])
+        return delete
+
+    new_part = delete_where(inp.outputs["Geometry"], info.outputs["Geometry"], far=False)
+    still_there = delete_where(info.outputs["Geometry"], inp.outputs["Geometry"], far=True)
+    join = nodes.new("GeometryNodeJoinGeometry")
+    link(still_there.outputs["Geometry"], join.inputs["Geometry"])
+    link(new_part.outputs["Geometry"], join.inputs["Geometry"])
+    merge = nodes.new("GeometryNodeMergeByDistance")
+    merge.inputs["Distance"].default_value = 0.0001  # as Clean up: only closes the seams
+    link(join.outputs["Geometry"], merge.inputs["Geometry"])
+    link(merge.outputs["Geometry"], out.inputs["Geometry"])
+    x = -900
+    for node in tree.nodes:
+        node.location = (x, 0 if node in (inp, join, merge, out) else -250)
+        x += 180
+    return tree
+
+
+def find_original(context, result):
+    """The original of a result: the other selected mesh, or the object the result's name came from
+    (load_result names it <original>_seed<N>)."""
+    others = [o for o in context.selected_objects if o.type == "MESH" and o is not result and not is_box(o)]
+    if len(others) == 1:
+        return others[0]
+    if "_seed" in result.name:
+        return bpy.data.objects.get(result.name.rsplit("_seed", 1)[0])
+    return None
+
+
+def add_graph(obj, name, group, original):
+    modifier = obj.modifiers.get(name) or obj.modifiers.new(name, "NODES")
+    modifier.node_group = group
+    data, prop = cleanup_input(modifier, "Original")
+    if prop == "value":
+        data.value = original
+    else:
+        data[prop[2:-2]] = original
+    return modifier
+
+
+def changed_share(obj):
+    """Share of the result's points that moved away from the original (change > 0.25, i.e. > Threshold)."""
+    mesh = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data
+    attribute = mesh.attributes.get("change")
+    if attribute is None or not len(attribute.data):
+        return 0.0
+    values = np.zeros(len(attribute.data), np.float32)
+    attribute.data.foreach_get("value", values)
+    return float((values > 0.25).mean())
+
+
+class INPAINT_OT_compare(bpy.types.Operator):
+    bl_idname = "inpaint.compare"
+    bl_label = "Compare with original"
+    bl_description = ("Geometry Nodes: colour the result by how far it is from the original model "
+                      "(blue = unchanged, red = new). Click the result; the original is found by its name, "
+                      "or select the original too")
+
+    def execute(self, context):
+        result = context.active_object
+        original = find_original(context, result) if result is not None else None
+        if result is None or original is None:
+            self.report({"ERROR"}, "Click the result (and select its original too)")
+            return {"CANCELLED"}
+        add_graph(result, COMPARE, compare_group(), original)
+        self.report({"INFO"}, f"{100 * changed_share(result):.1f} % of {result.name} differs from {original.name}")
+        return {"FINISHED"}
+
+
+class INPAINT_OT_keep_original(bpy.types.Operator):
+    bl_idname = "inpaint.keep_original"
+    bl_label = "Keep original outside"
+    bl_description = ("Geometry Nodes: take only the new part from the result and everything else from the "
+                      "original model, so the rest stays exactly the original")
+
+    def execute(self, context):
+        result = context.active_object
+        original = find_original(context, result) if result is not None else None
+        if result is None or original is None:
+            self.report({"ERROR"}, "Click the result (and select its original too)")
+            return {"CANCELLED"}
+        if result.modifiers.get(COMPARE):
+            result.modifiers.remove(result.modifiers[COMPARE])
+        add_graph(result, KEEP, keep_group(), original)
+        original.hide_set(True)
+        self.report({"INFO"}, f"{result.name}: {faces_after(result)} faces (new part + original)")
+        return {"FINISHED"}
+
+
 # ---------------------------------------------------------------- the uni server through the Sciebo cloud
 # scripts/server/cloud.py setup saves the cloud login; scripts/server/cloud_worker.py on the server runs the jobs.
 
@@ -1568,14 +1783,20 @@ class INPAINT_PT_panel(bpy.types.Panel):
         row.operator(INPAINT_OT_load_result.bl_idname, icon="IMPORT")
 
         box = layout.box()
-        box.label(text="E. Clean up (Geometry Nodes)", icon="GEOMETRY_NODES")
+        box.label(text="E. Geometry Nodes", icon="GEOMETRY_NODES")
         box.operator(INPAINT_OT_clean_up.bl_idname, icon="BRUSH_DATA")
+        row = box.row()
+        row.operator(INPAINT_OT_compare.bl_idname, icon="MOD_MASK")
+        row.operator(INPAINT_OT_keep_original.bl_idname, icon="MOD_BOOLEAN")
         obj = context.active_object
-        modifier = obj.modifiers.get(CLEANUP) if obj is not None and obj.type == "MESH" else None
-        if modifier is not None and modifier.node_group is not None:
-            row = box.row()
-            row.prop(*cleanup_input(modifier, "Min share"), text="Min share")
-            row.prop(modifier, "show_viewport", text="", icon="HIDE_OFF")
+        for name, value, label in ((CLEANUP, "Min share", "Min share"), (COMPARE, "Threshold", "Threshold"),
+                                   (KEEP, "Threshold", "Threshold")):
+            modifier = obj.modifiers.get(name) if obj is not None and obj.type == "MESH" else None
+            if modifier is not None and modifier.node_group is not None:
+                row = box.row()
+                row.label(text=name)
+                row.prop(*cleanup_input(modifier, value), text=label)
+                row.prop(modifier, "show_viewport", text="", icon="HIDE_OFF")
 
         layout.prop(settings, "folder")
 
@@ -1583,7 +1804,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
 classes = (InpaintClick, InpaintSettings, INPAINT_OT_add_box, INPAINT_GGT_box_sides, INPAINT_OT_pick_point,
            INPAINT_OT_clear_click, INPAINT_OT_find_part, INPAINT_OT_show_found, INPAINT_OT_make_picture,
            INPAINT_OT_regenerate, INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result,
-           INPAINT_OT_clean_up,
+           INPAINT_OT_clean_up, INPAINT_OT_compare, INPAINT_OT_keep_original,
            InpaintPreferences, INPAINT_OT_cloud_login,
            INPAINT_OT_show_picture, INPAINT_OT_check, INPAINT_PT_panel)
 
