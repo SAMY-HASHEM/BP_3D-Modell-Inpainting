@@ -21,6 +21,9 @@ Rate = how far it is solved (estimate). Main method: **flow inversion with key-v
 | 11 | Edited picture | Qwen-Image-Edit on the PC ("Make picture"), or a hand collage | 70 % | [edit_picture.py](scripts/regenerate/edit_picture.py) |
 | 12 | Speed | inversion takes ~25 min per change (3× repaint); faster steps lost quality | 30 % | [inversion.py: midpoint / euler](scripts/regenerate/inversion.py) |
 | 13 | Project structure | scripts in models / mask / regenerate / server / tools  | 90 % | [README.md](README.md#structure), [_paths.py](scripts/_paths.py) |
+| 14 | Missing views | any pictures (side from the file name) or only a prompt → Qwen-Image-Edit-2511 makes only the missing sides: A = angle LoRA per side, B = one turnaround sheet; 3D comparison running | 50 % | [make_views.py](scripts/models/make_views.py) |
+| 15 | Clean up (Geometry Nodes) | node graph deletes small loose pieces; add-on button (section E) + runner without window | 80 % | [inpaint_addon.py: cleanup_group](blender/inpaint_addon.py), [cleanup_nodes.py](blender/cleanup_nodes.py) |
+| 16 | Local AI models | all weights in `local_ai_models/`; `download_models.sh` (trellis, qwen, mask, omnipart), run by `activate.sh` when missing | 100 % | [download_models.sh](download_models.sh), [activate.sh](activate.sh) |
 
 ## Still aiming for
 
@@ -31,7 +34,11 @@ Rate = how far it is solved (estimate). Main method: **flow inversion with key-v
 
 ## New ideas and resources
 
-- (to fill in together)
+- **Texture only** (idea from Ian Le Bot, "Concept to Handpainted Texture"): keep the shape, repaint only the
+  colours with TRELLIS.2's own texturing pipeline (`TRELLIS.2/example_texturing.py`); for colour-only changes and speed (#12).
+- **Multi-view models** (MV-Adapter, Zero123++, SV3D) if Qwen's views disagree too much (#14).
+- **Soft border** with Geometry Nodes: blur the inpainting mask (Blur Attribute) and smooth the seam around the new part.
+- Fur / hair (Blender hair curves + Geometry Nodes) on top of a generated model: nice, but outside the topic.
 
 ## Rules
 
