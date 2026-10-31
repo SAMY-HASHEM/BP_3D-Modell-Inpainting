@@ -61,11 +61,12 @@ def command_for(job, folder, zip_path, gpu):
     if job["kind"] != "generate":
         raise ValueError(f"unknown kind of job: {job['kind']}")
     pictures = [os.path.join(folder, os.path.basename(p)) for p in job["pictures"]]
-    for p in pictures:
+    shapes = [os.path.join(folder, os.path.basename(p)) for p in job.get("shape_only", [])]
+    for p in pictures + shapes:
         if not os.path.isfile(p):
             raise ValueError(f"picture missing in the job: {os.path.basename(p)}")
-    script = "scripts/models/generate.py" if len(pictures) == 1 else "scripts/models/multi_image.py"
-    command = [sys.executable, "-u", script, *pictures]
+    script = "scripts/models/generate.py" if len(pictures) + len(shapes) == 1 else "scripts/models/multi_image.py"
+    command = [sys.executable, "-u", script, *pictures] + (["--shape-only", *shapes] if shapes else [])
     for key, value in job.get("options", {}).items():
         if key not in CHECKS:
             raise ValueError(f"unknown setting: {key}")

@@ -11,6 +11,7 @@ Usage:
     python3 scripts/server/cloud.py send outputs/blender/tavern_job.zip          # a job from Blender
     python3 scripts/server/cloud.py generate pictures/torso/torso-front.png pictures/torso/torso-back.png \\
         --resolution 1024 --steps 25 --mirror --faces 4000000              # picture(s) -> model
+    python3 scripts/server/cloud.py generate front.png --shape-only side.png back.png   # colours from the front only
     python3 scripts/server/cloud.py inpaint outputs/robot.glb pictures/robot.png --box -0.4 -0.5 -0.4 -0.1 0 0 \
         --seed 2 --steps 25                                 # regenerate an area, without Blender
     python3 scripts/server/cloud.py generate front.png --code voxhammer   # with the newest code of a branch (GitHub)
@@ -166,10 +167,12 @@ def generate(args):
     os.makedirs(os.path.join(PROJECT_DIR, "outputs", "cloud"), exist_ok=True)
     path = os.path.join(PROJECT_DIR, "outputs", "cloud", f"{name}_generate.zip")
     pictures = [f"picture{i}{os.path.splitext(p)[1].lower()}" for i, p in enumerate(args.pictures)]
+    shapes = [f"shape{i}{os.path.splitext(p)[1].lower()}" for i, p in enumerate(args.shape_only or [])]
     with zipfile.ZipFile(path, "w") as z:
-        for local, packed in zip(args.pictures, pictures):
+        for local, packed in zip(args.pictures + (args.shape_only or []), pictures + shapes):
             z.write(local, packed)
         z.writestr("job.json", json.dumps({"kind": "generate", "name": name, "pictures": pictures, "options": options,
+                                           **({"shape_only": shapes} if shapes else {}),
                                            **({"code": args.code} if args.code else {})}, indent=2))
     cloud = Cloud()
     job = send_zip(cloud, path)
@@ -272,6 +275,8 @@ def main():
     p.add_argument("--faces", type=int)
     p.add_argument("--mirror", action="store_true")
     p.add_argument("--mode", choices=["multidiffusion", "stochastic"])
+    p.add_argument("--shape-only", dest="shape_only", nargs="+", metavar="PICTURE",
+                   help="pictures used only for the shape, not for the colours (multi_image.py --shape-only)")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
     p.set_defaults(run=generate)
     p = sub.add_parser("inpaint", help="send an inpainting job without Blender (TRELLIS.2 environment)")

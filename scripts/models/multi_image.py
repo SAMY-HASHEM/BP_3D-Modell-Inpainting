@@ -144,9 +144,9 @@ def main():
                         help="also use every picture flipped left-right: for objects that should be mirror-"
                              "symmetric (a body, a vase); the average of both sides comes out symmetric")
     args = parser.parse_args()
-    if len(args.images) < 2:
+    if len(args.images) + len(args.shape_only) < 2:
         parser.error("give at least two pictures (for one picture, use generate.py)")
-    for path in args.images:
+    for path in args.images + args.shape_only:
         if not os.path.isfile(path):
             parser.error(f"picture not found: {path}")
 
