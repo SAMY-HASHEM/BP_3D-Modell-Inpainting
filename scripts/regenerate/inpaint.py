@@ -64,22 +64,25 @@ def load_model(path):
 
 class Placement:
     """Moves points between the model's glTF coordinates (Y up) and TRELLIS.2's cube (-0.5..0.5, Z up),
-    the same way TRELLIS.2's texturing pipeline does."""
+    the same way TRELLIS.2's texturing pipeline does. room: share of the cube kept free above the model
+    (it is made smaller by that share and moved down), so that something new can grow on top of it,
+    e.g. a crown on a head that otherwise touches the top of the cube."""
 
-    def __init__(self, vertices):
+    def __init__(self, vertices, room=0.0):
         low, high = vertices.min(0), vertices.max(0)
         self.center = (low + high) / 2
-        self.scale = 0.99999 / (high - low).max()
+        self.scale = 0.99999 * (1 - room) / (high - low).max()
+        self.lift = -room / 2  # cube Z (up) of the model's centre
 
     def to_cube(self, points):
         p = (np.asarray(points) - self.center) * self.scale
-        return np.stack([p[:, 0], -p[:, 2], p[:, 1]], 1)
+        return np.stack([p[:, 0], -p[:, 2], p[:, 1] + self.lift], 1)
 
     def from_cube_matrix(self):
         """4x4 matrix from the exported result (glTF axes, still cube-sized) back to the model's place."""
         m = np.eye(4)
         m[:3, :3] /= self.scale
-        m[:3, 3] = self.center
+        m[:3, 3] = self.center - np.array([0, self.lift, 0]) / self.scale
         return m
 
 
@@ -271,7 +274,7 @@ def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
 
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
             method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True,
-            solver="midpoint", inject=1.0):
+            solver="midpoint", inject=1.0, room=0.0):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
     method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
@@ -282,13 +285,14 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     picture_mask_path: the 2D mask of what changed in the picture; source_path is then the original's
     render from the same view, and with `swap` TRELLIS.2 sees the original picture outside the mask.
     solver: "midpoint" (second order, as VoxHammer) or "euler" (half the evaluations, faster).
-    inject: the keys and values are injected at times t <= inject only (1: always, as VoxHammer)."""
+    inject: the keys and values are injected at times t <= inject only (1: always, as VoxHammer).
+    room: share of TRELLIS.2's cube kept free above the model, for new parts on top (see Placement)."""
     assert method in METHODS and start in ("inverted", "random") and solver in ("midpoint", "euler")
     step = getattr(inversion, solver)
     start_time = time.time()
     device = pipeline.device
     mesh = load_model(model_path)
-    place = Placement(mesh.vertices)
+    place = Placement(mesh.vertices, room)
     vertices = place.to_cube(mesh.vertices)
     report(f"1/6 Reading the model into TRELLIS.2 ({len(mesh.faces):,} faces)")
     with torch.no_grad():
@@ -469,6 +473,8 @@ def main():
     parser.add_argument("--start", choices=["inverted", "random"], default="inverted",
                         help="inversion: where the area's structure starts (the original's noise or new noise)")
     parser.add_argument("--soft", type=int, default=0, help="inversion: soft edge in voxels (default 0: hard)")
+    parser.add_argument("--room", type=float, default=0.0,
+                        help="share of the cube kept free above the model, for new parts on top (e.g. 0.2)")
     parser.add_argument("--out", help="output file (default: <model>_inpaint_seed<N>.glb)")
     args = parser.parse_args()
 
@@ -482,7 +488,7 @@ def main():
         points.append(box_points(np.array(args.box), size))
     out = args.out or os.path.splitext(args.model)[0] + f"_inpaint_seed{args.seed}.glb"
     inpaint(pipeline, args.model, args.picture, np.concatenate(points), out, args.grow, args.seed, args.steps,
-            method=args.method, source_path=args.source, start=args.start, soft=args.soft)
+            method=args.method, source_path=args.source, start=args.start, soft=args.soft, room=args.room)
     print(out)
 
 

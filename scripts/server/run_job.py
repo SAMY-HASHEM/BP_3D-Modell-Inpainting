@@ -48,6 +48,7 @@ VARIANT_CHECKS = {
     "swap": lambda v: bool(v),
     "solver": lambda v: v if v in ("midpoint", "euler") else None,
     "inject": lambda v: float(v) if 0 <= float(v) <= 1 else None,
+    "room": lambda v: float(v) if 0 <= float(v) <= 0.5 else None,
 }
 
 
