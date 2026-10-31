@@ -98,13 +98,16 @@ def run_package(pipeline, folder):
     method = job.get("method", "repaint")
     if method not in ("repaint", "inversion"):
         raise ValueError(f"unknown method: {method}")
+    room = float(job.get("room", 0))
+    if not 0 <= room <= 0.5:
+        raise ValueError("room out of range")
     extra = {k: os.path.join(folder, os.path.basename(job[k])) for k in ("source", "picture_mask") if job.get(k)}
     for p in extra.values():
         if not os.path.isfile(p):
             raise ValueError(f"the job has no {os.path.basename(p)}")
     out = os.path.join(folder, f"{os.path.basename(folder)}_seed{seed}.glb")
     return inpaint(pipeline, paths["model"], paths["picture"], np.load(paths["points"]), out,
-                   grow=grow, seed=seed, steps=steps, report=report, method=method,
+                   grow=grow, seed=seed, steps=steps, report=report, method=method, room=room,
                    source_path=extra.get("source"), picture_mask_path=extra.get("picture_mask"))
 
 

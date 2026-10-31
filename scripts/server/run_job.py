@@ -62,6 +62,10 @@ def variants(job):
             if value is None:
                 raise ValueError(f"unknown or out-of-range setting in the job: {key}={variant[key]}")
             version[key] = value
+        if "room" in job and "room" not in version:  # the job's Room above counts for every version
+            version["room"] = VARIANT_CHECKS["room"](job["room"])
+            if version["room"] is None:
+                raise ValueError(f"room out of range: {job['room']}")
         checked.append(version)
     return checked
 

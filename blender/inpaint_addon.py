@@ -34,7 +34,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 9, 0),
+    "version": (1, 10, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -170,11 +170,12 @@ def box_points(model):
     return np.concatenate(points) if points else np.zeros((0, 3))
 
 
-def keep_the_rest(model, part, boxes, grow):
+def keep_the_rest(model, part, boxes, grow, room=0.0):
     """For Box = "Selected faces + empty space": the cubes of TRELLIS.2's 64 grid to regenerate, as their
     centres (glTF coordinates, sent with grow 0): the box and the selected faces (world points), grown by
     `grow` cubes, without the cubes that hold only other surfaces of the model, which so stay exactly as
-    they are. A cube holding some of the part is regenerated, so the part goes completely."""
+    they are. A cube holding some of the part is regenerated, so the part goes completely. room: as the
+    job's Room above (the model placed smaller and lower in the cube, as inpaint.py's Placement)."""
     mesh = model.data
     m = np.array(model.matrix_world)
     world = lambda local: local @ m[:3, :3].T + m[:3, 3]
@@ -182,10 +183,11 @@ def keep_the_rest(model, part, boxes, grow):
     mesh.vertices.foreach_get("co", co)
     vertices = to_gltf(world(co.reshape(-1, 3)))
     low, high = vertices.min(0), vertices.max(0)
-    centre, scale = (low + high) / 2, 0.99999 / (high - low).max()  # as inpaint.py places the model
+    centre, scale = (low + high) / 2, 0.99999 * (1 - room) / (high - low).max()  # as inpaint.py places the model
+    lift = np.array([0, -room / 2, 0])  # glTF Y is the cube's up
 
     def cubes(points):
-        return np.clip((((to_gltf(points) - centre) * scale + 0.5) * GRID).astype(int), 0, GRID - 1)
+        return np.clip((((to_gltf(points) - centre) * scale + lift + 0.5) * GRID).astype(int), 0, GRID - 1)
 
     mask = np.zeros((GRID,) * 3, bool)
     for points in (part, boxes):
@@ -202,7 +204,7 @@ def keep_the_rest(model, part, boxes, grow):
     other[tuple(found[~selected].T)] = True
     own[tuple(found[selected].T)] = True
     mask &= ~(other & ~own)
-    return ((np.argwhere(mask) + 0.5) / GRID - 0.5) / scale + centre
+    return ((np.argwhere(mask) + 0.5) / GRID - 0.5 - lift) / scale + centre
 
 
 def area_points(operator, context):
@@ -225,7 +227,7 @@ def area_points(operator, context):
         operator.report({"ERROR"}, "Mark an area: select faces (Edit Mode) or add a space box")
         return None
     if settings.box_use == "part_space":  # grown here already, around the protected surfaces: the job grows 0
-        return model, keep_the_rest(model, faces, boxes, settings.grow), count, True, 0
+        return model, keep_the_rest(model, faces, boxes, settings.grow, settings.room), count, True, 0
     return model, to_gltf(np.concatenate([faces, boxes])), count, len(boxes) > 0, settings.grow
 
 
@@ -280,6 +282,9 @@ class InpaintSettings(bpy.types.PropertyGroup):
     grow: bpy.props.IntProperty(name="Grow", default=2, min=0, max=8,
                                 description="Grow the marked area by this many voxels (of 64 per side)")
     steps: bpy.props.IntProperty(name="Steps", default=12, min=4, max=50, description="Sampling steps per stage")
+    room: bpy.props.FloatProperty(name="Room above", default=0.0, min=0.0, max=0.5, step=5,
+                                  description="Share of TRELLIS.2's space kept free above the model, for a new part "
+                                              "on top of it (e.g. 0.2 for a crown on a head that touches the top)")
     method: bpy.props.EnumProperty(
         name="Method",
         items=[("repaint", "Repaint", "The rest is kept with fresh noise at every step (fast)"),
@@ -1136,6 +1141,8 @@ def pack_job(operator, context):
     picture_name = "picture" + os.path.splitext(picture)[1].lower()
     job = {"model": "model.glb", "points": "area.npy", "picture": picture_name, "object": model.name,
            "seed": settings.seed, "grow": grow, "steps": settings.steps, "method": settings.method}
+    if settings.room > 0:
+        job["room"] = round(settings.room, 3)
     # a picture made from a prompt comes with the render before the edit and the edit's 2D mask
     before, picture_mask = (os.path.splitext(picture)[0] + end for end in ("_before.png", "_mask.png"))
     if os.path.isfile(before) and os.path.isfile(picture_mask):
@@ -1767,6 +1774,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
         row = box.row()
         row.prop(settings, "seed")
         row.prop(settings, "grow")
+        box.prop(settings, "room")
         box.prop(settings, "steps")
         box.prop(settings, "method")
         box.prop(settings, "connection", expand=True)
