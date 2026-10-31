@@ -21,8 +21,8 @@ Rate = how far it is solved (estimate). Main method: **flow inversion with key-v
 | 11 | Edited picture | Qwen-Image-Edit on the PC ("Make picture"), or a hand collage | 70 % | [edit_picture.py](scripts/regenerate/edit_picture.py) |
 | 12 | Speed | inversion takes ~25 min per change (3× repaint); faster steps lost quality | 30 % | [inversion.py: midpoint / euler](scripts/regenerate/inversion.py) |
 | 13 | Project structure | scripts in models / mask / regenerate / server / tools  | 90 % | [README.md](README.md#structure), [_paths.py](scripts/_paths.py) |
-| 14 | Missing views | any pictures (side from the file name) or only a prompt → Qwen-Image-Edit-2511 makes only the missing sides: A = angle LoRA per side, B = one turnaround sheet; 3D comparison running | 50 % | [make_views.py](scripts/models/make_views.py) |
-| 15 | Clean up (Geometry Nodes) | node graph deletes small loose pieces; add-on button (section E) + runner without window | 80 % | [inpaint_addon.py: cleanup_group](blender/inpaint_addon.py), [cleanup_nodes.py](blender/cleanup_nodes.py) |
+| 14 | Missing views | any pictures (side from the file name) or only a prompt → Qwen-Image-Edit-2511 makes only the missing sides: A = angle LoRA per side, B = one turnaround sheet. Night test on 6 objects: best = front for colours + B views for the shape only (`cloud.py generate --shape-only`) | 70 % | [make_views.py](scripts/models/make_views.py) |
+| 15 | Geometry Nodes | add-on section E: Clean up (small loose pieces), Compare with original (change heatmap), Keep original outside (new part + exact original); tested on the crown results | 80 % | [inpaint_addon.py: cleanup_group](blender/inpaint_addon.py), [cleanup_nodes.py](blender/cleanup_nodes.py) |
 | 16 | Local AI models | all weights in `local_ai_models/`; `download_models.sh` (trellis, qwen, mask, omnipart), run by `activate.sh` when missing | 100 % | [download_models.sh](download_models.sh), [activate.sh](activate.sh) |
 
 ## Still aiming for
@@ -30,6 +30,9 @@ Rate = how far it is solved (estimate). Main method: **flow inversion with key-v
 - Find the settings with the best detail (#2) and use them as defaults.
 - Make inversion faster without losing quality (#12).
 - Find part: SAM 3 once Meta grants access (#5).
+- Room above the model: the model fills TRELLIS.2's cube, so a crown can't grow above a head; an option to
+  place it smaller in the cube.
+- The front gets softer with every extra view (multidiffusion averages them); shape-only helps (#14).
 - Small leftovers under new parts (e.g. the vent under the crown).
 
 ## New ideas and resources
