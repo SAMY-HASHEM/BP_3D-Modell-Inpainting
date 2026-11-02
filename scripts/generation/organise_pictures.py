@@ -67,12 +67,21 @@ Answer only with JSON, no other text:
     "useful_for_3d": true | false,      // would this view help to build the whole object in 3D?
     "why": "a few words"}]}""" % "|".join(f'"{s}"' for s in SIDES)
 
-PASS_2 = """These %d pictures (numbered 0 to %d in this order) are cut-outs of the same object: %s.
-A 3D model will be made from some of them. The views used together must show the same object in the same pose;
-the first one must be the best front view. Close-ups, other poses, other versions and part-ID renders confuse it.
+PASS_2 = """These %d pictures (numbered 0 to %d in this order) are cut-outs of: %s.
+Measured facts about each cut-out (from the picture it was cut from):
+%s
+
+A 3D model will be made from some of them. Rules:
+1. The front must show the WHOLE object: never one that reaches the edge of its cut-out (see the facts), and
+   above all never one cut off by the picture border.
+2. Every other view must show the same object in the SAME pose as the front, only seen from another side (side,
+   back, three-quarter). Leave out close-ups, other poses (e.g. an action pose with weapons when the front stands
+   still), other outfits or versions, and part-ID renders.
+3. Fewer views are better than one wrong view. Only the front is fine.
 
 Answer only with JSON, no other text:
 {"front": the number of the best front view,
+ "front_whole": true | false,           // the front shows the whole object
  "views": [numbers of the views to use together, front first, at most 4, each from a different side],
  "left_out": {"number": "why", ...},
  "symmetric": true | false,             // left and right side mirror each other
@@ -84,7 +93,7 @@ Answer only with JSON, no other text:
 def load(model_name, cpu):
     from transformers import AutoModelForImageTextToText, AutoProcessor
     print(f"Loading {model_name} ({'CPU' if cpu else 'GPU'})...", flush=True)
-    model = AutoModelForImageTextToText.from_pretrained(model_name, dtype=torch.float32 if cpu else torch.bfloat16)
+    model = AutoModelForImageTextToText.from_pretrained(model_name, dtype=torch.bfloat16)
     model = model.to("cpu" if cpu else "cuda").eval()
     return model, AutoProcessor.from_pretrained(model_name)
 
@@ -178,6 +187,78 @@ def evenly(items, most):
     return [items[round(k * (len(items) - 1) / (most - 1))] for k in range(most)]
 
 
+BACKGROUND = {}  # the background removal model (RMBG-2.0, as TRELLIS.2 uses it), loaded once
+
+
+def object_mask(image):
+    """Which pixels belong to the object (RMBG-2.0), as a boolean array."""
+    import numpy as np
+    from torchvision import transforms
+    if "model" not in BACKGROUND:
+        from transformers import AutoModelForImageSegmentation
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = AutoModelForImageSegmentation.from_pretrained("briaai/RMBG-2.0", trust_remote_code=True)
+        BACKGROUND.update(model=model.to(device).eval(), device=device)
+    prepare = transforms.Compose([transforms.Resize((1024, 1024)), transforms.ToTensor(),
+                                  transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+    with torch.no_grad():
+        pred = BACKGROUND["model"](prepare(image).unsqueeze(0).to(BACKGROUND["device"]))[-1].sigmoid()[0, 0].cpu()
+    return np.asarray(transforms.ToPILImage()(pred).resize(image.size)) > 127
+
+
+def cut_edges(path):
+    """The sides where the object in a cut-out reaches the cut-out's edge (measured, no choice): it is cut off
+    there by the picture border, or the box was too tight. Whole objects have background all around."""
+    mask = object_mask(Image.open(path).convert("RGB"))
+    rows = {"top": mask[0], "bottom": mask[-1], "left": mask[:, 0], "right": mask[:, -1]}
+    return [side for side, row in rows.items() if row.mean() > 0.02]
+
+
+def facts(crop, pictures, out, videos=()):
+    """What can be measured about a cut-out, as a line for the AI: whether the object goes on beyond the
+    picture's border (cut off), how many figures its picture has, its angle in a turntable video, and what
+    the AI said about it in pass 1."""
+    picture = next((p for p in pictures if p["file"] == crop["from"]), {})
+    width, height = picture.get("size", (0, 0))
+    x0, y0, x1, y1 = crop["box"]
+    at_border = {"left": x0 <= 0.01 * width, "top": y0 <= 0.01 * height,
+                 "right": x1 >= 0.99 * width, "bottom": y1 >= 0.99 * height}
+    reaches = cut_edges(os.path.join(out, crop["crop"]))
+    cut = [side for side in reaches if at_border[side]]
+    line = f"the object reaches the edge of its cut-out at: {', '.join(reaches) or 'nowhere (whole, background all around)'}"
+    if cut:
+        line += f" (there it is cut off by the picture border: {', '.join(cut)})"
+    line += f"; {len(picture.get('crops', []))} figure(s) in its picture"
+    for video in videos:
+        answer = video.get("answer", {})
+        frames = video.get("frames", [])
+        if crop["from"] in frames and answer.get("turntable") and isinstance(answer.get("turn_end"), int):
+            k = frames.index(crop["from"])
+            line += f"; turntable frame at about {round(k / max(1, answer['turn_end']) * 360) % 360} degrees of the turn"
+    return line + f"; first look: side {crop.get('side')}, full body {crop.get('full_body')}, pose {crop.get('pose')}"
+
+
+def choose(model, processor, name, pictures, crops, out, videos=()):
+    """Pass 2: the AI sees all cut-outs of an object together (with the measured facts) and chooses."""
+    candidates = evenly([c for c in crops if not c.get("id_render")], 10)
+    choice = {}
+    if candidates:
+        thing = next((p["answer"].get("object") for p in pictures if p.get("answer", {}).get("object")), name)
+        images = [shrink(Image.open(os.path.join(out, c["crop"])).convert("RGB"), 448) for c in candidates]
+        lines = "\n".join(f"{k}: {facts(c, pictures, out, videos)}" for k, c in enumerate(candidates))
+        choice, raw = ask(model, processor, images, PASS_2 % (len(images), len(images) - 1, thing, lines))
+        print(f"  choice for {name}: {json.dumps(choice)}", flush=True)
+        choice["raw"] = raw
+        pick = lambda i: candidates[i]["crop"] if isinstance(i, int) and 0 <= i < len(candidates) else None
+        views = [pick(i) for i in choice.get("views", []) if pick(i)]
+        front = pick(choice.get("front"))
+        if front and front in views:
+            views.remove(front)
+        choice["front_crop"] = front or (views[0] if views else candidates[0]["crop"])
+        choice["view_crops"] = [choice["front_crop"]] + [v for v in views if v != choice["front_crop"]][:3]
+    return candidates, choice
+
+
 def organise(model, processor, folder, out, size, frames=24):
     name = os.path.basename(os.path.normpath(folder)).replace(" ", "_")
     everything = sorted(glob.glob(os.path.join(folder, "*")))
@@ -206,22 +287,7 @@ def organise(model, processor, folder, out, size, frames=24):
             crops.append({"crop": crop, "from": source, "box": box, **figure, "side": side})
         pictures.append(entry)
 
-    # pass 2: all full-body cut-outs together
-    candidates = evenly([c for c in crops if c.get("full_body") and not c.get("id_render")], 10)
-    choice = {}
-    if candidates:
-        thing = next((p["answer"].get("object") for p in pictures if p["answer"].get("object")), name)
-        images = [shrink(Image.open(os.path.join(out, c["crop"])).convert("RGB"), 448) for c in candidates]
-        choice, raw = ask(model, processor, images, PASS_2 % (len(images), len(images) - 1, thing))
-        print(f"  choice: {json.dumps(choice)}", flush=True)
-        choice["raw"] = raw
-        pick = lambda i: candidates[i]["crop"] if isinstance(i, int) and 0 <= i < len(candidates) else None
-        views = [pick(i) for i in choice.get("views", []) if pick(i)]
-        front = pick(choice.get("front"))
-        if front and front in views:
-            views.remove(front)
-        choice["front_crop"] = front or (views[0] if views else candidates[0]["crop"])
-        choice["view_crops"] = [choice["front_crop"]] + [v for v in views if v != choice["front_crop"]][:3]
+    candidates, choice = choose(model, processor, name, pictures, crops, out, videos)
     return {"object": name, "videos": videos, "pictures": pictures, "crops": crops,
             "candidates": [c["crop"] for c in candidates], "choice": choice}
 
@@ -235,6 +301,9 @@ def main():
     parser.add_argument("--size", type=int, default=1024, help="longest side of the pictures the AI sees")
     parser.add_argument("--cpu", action="store_true", help="run without a GPU (slow; for testing the small model)")
     parser.add_argument("--zip", action="store_true", help="also pack --out into one .zip (for the cloud worker)")
+    parser.add_argument("--choose-again", action="store_true",
+                        help="keep the cut-outs and pass 1 in --out/organised.json, only let the AI choose again "
+                             "(the folders then only name the objects)")
     args = parser.parse_args()
     os.makedirs(os.path.join(args.out, "crops"), exist_ok=True)
     os.makedirs(os.path.join(args.out, "frames"), exist_ok=True)
@@ -245,6 +314,21 @@ def main():
         print(f"{args.model} can't be loaded here ({type(e).__name__}: {str(e)[:150]}); using {BACKUP}", flush=True)
         args.model = BACKUP
         model, processor = load(args.model, args.cpu)
+    if args.choose_again:
+        known = os.path.join(args.out, "organised.json")
+        result = json.load(open(known))
+        wanted = {os.path.basename(os.path.normpath(f)).replace(" ", "_") for f in args.folders}
+        for obj in result["objects"]:
+            if obj["object"] in wanted and not obj.get("fallback"):
+                obj.setdefault("earlier_choices", []).append(obj.get("choice"))
+                candidates, obj["choice"] = choose(model, processor, obj["object"], obj["pictures"], obj["crops"], args.out,
+                                                  obj.get("videos", []))
+                obj["candidates"] = [c["crop"] for c in candidates]
+                json.dump(result, open(known, "w"), indent=1)
+        result["chosen_again_by"] = args.model
+        json.dump(result, open(known, "w"), indent=1)
+        print(f"Done in {time.time() - start:.0f} s", flush=True)
+        return
     result = {"model": args.model, "objects": []}
     for folder in args.folders:
         print(f"Organising {folder}", flush=True)
