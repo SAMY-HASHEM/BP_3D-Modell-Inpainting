@@ -24,6 +24,7 @@ Usage (TRELLIS.2 environment; the model is downloaded into local_ai_models/ the 
     python scripts/generation/organise_pictures.py pictures/ninja --model Qwen/Qwen3-VL-2B-Instruct --cpu   # small test
 """
 import argparse
+import functools
 import glob
 import json
 import os
@@ -89,6 +90,15 @@ Answer only with JSON, no other text:
  "thin_parts": true | false,            // wings, antennae, blades, hair strands, fingers ...
  "detail": "low" | "medium" | "high",   // how much fine surface detail
  "kind": "character" | "creature" | "vehicle" | "prop" | "building" | "other"}"""
+
+
+WHOLE = """This is a cut-out from a picture of: %s.
+Measured fact: %s
+
+Does this cut-out show the WHOLE object (from its top to its bottom, nothing important cut off), or only a part
+of it (a close-up)? Is it a flat-coloured part-ID / segmentation render instead of a normal picture?
+Answer only with JSON, no other text:
+{"whole": true | false, "id_render": true | false, "side": one of %s, "why": "a few words"}"""
 
 
 def load(model_name, cpu):
@@ -207,6 +217,7 @@ def object_mask(image):
     return np.asarray(transforms.ToPILImage()(pred).resize(image.size)) > 127
 
 
+@functools.lru_cache(maxsize=None)
 def cut_edges(path):
     """The sides where the object in a cut-out reaches the cut-out's edge (measured, no choice): it is cut off
     there by the picture border, or the box was too tight. Whole objects have background all around."""
@@ -240,13 +251,25 @@ def facts(crop, pictures, out, videos=()):
 
 def choose(model, processor, name, pictures, crops, out, videos=()):
     """Pass 2: the AI sees all cut-outs of an object together (with the measured facts) and chooses."""
-    candidates = evenly([c for c in crops if not c.get("id_render")], 10)
-    choice = {}
+    thing = next((p["answer"].get("object") for p in pictures if p.get("answer", {}).get("object")), name)
+    # step 1: every cut-out on its own (one picture and its fact): whole or a close-up, ID render or not
+    looked = []
+    for c in evenly(crops, 16):
+        fact = facts(c, pictures, out, videos)
+        image = shrink(Image.open(os.path.join(out, c["crop"])).convert("RGB"), 512)
+        answer, _ = ask(model, processor, [image], WHOLE % (thing, fact, "|".join(f'"{x}"' for x in SIDES)), 200)
+        c["second_look"] = {**answer, "fact": fact}
+        print(f"  {c['crop']}: {json.dumps(answer)}", flush=True)
+        if answer.get("whole") is True and answer.get("id_render") is not True:
+            looked.append(c)
+    # step 2: the whole ones together: front and views
+    candidates = evenly(looked, 10)
+    choice = {"whole": [c["crop"] for c in looked]}
     if candidates:
-        thing = next((p["answer"].get("object") for p in pictures if p.get("answer", {}).get("object")), name)
         images = [shrink(Image.open(os.path.join(out, c["crop"])).convert("RGB"), 448) for c in candidates]
         lines = "\n".join(f"{k}: {facts(c, pictures, out, videos)}" for k, c in enumerate(candidates))
         choice, raw = ask(model, processor, images, PASS_2 % (len(images), len(images) - 1, thing, lines))
+        choice["whole"] = [c["crop"] for c in looked]
         print(f"  choice for {name}: {json.dumps(choice)}", flush=True)
         choice["raw"] = raw
         pick = lambda i: candidates[i]["crop"] if isinstance(i, int) and 0 <= i < len(candidates) else None
