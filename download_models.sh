@@ -11,6 +11,7 @@
 #   qwen      Qwen-Image-Edit-2511 for ComfyUI + Lightning LoRA + multiple-angles LoRA (about 30 GB),
 #             in local_ai_models/comfyui/<kind>/ as ComfyUI expects them
 #   mask      Grounding DINO + SAM 2.1 (only if ./install_mask.sh made the mask-ai environment)
+#   vision    Qwen3-VL-8B-Instruct, the vision AI that organises pictures (about 17 GB; not in the default list)
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,6 +62,10 @@ for group in $WANTED; do
         comfy_file loras fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA qwen-image-edit-2511-multiple-angles-lora.safetensors
         rm -rf "$MODELS_DIR/comfyui/.download"
         ;;
+    vision)
+        hf download Qwen/Qwen3-VL-8B-Instruct >/dev/null
+        echo "  ready"
+        ;;
     mask)
         if [ -d "$CONDA_DIR/envs/mask-ai" ]; then
             conda run -n mask-ai python "$PROJECT_DIR/scripts/inpainting/find_part.py" --download
@@ -69,7 +74,7 @@ for group in $WANTED; do
         fi
         ;;
     *)
-        echo "  unknown group (trellis, qwen, mask)"
+        echo "  unknown group (trellis, qwen, mask, vision)"
         ;;
     esac
 done

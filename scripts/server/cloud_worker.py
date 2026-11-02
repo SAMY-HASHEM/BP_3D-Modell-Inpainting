@@ -7,6 +7,8 @@ last progress line is written to <job>.status, and the finished model(s) are upl
 <job>__<file>.glb.
 Only our own scripts run, with checked settings: run_job.py for inpainting jobs from Blender,
 generate.py (one picture) or multi_image.py (several) for picture -> model jobs.
+An "organise" job lets the local vision AI sort pictures (organise_pictures.py) and sends back its
+answers and cut-outs as one .zip.
 A "ping_<time>" job (Blender's "Test connection") runs nothing: it is answered at once, even when all
 GPUs are busy, with the worker's code version and the GPUs' memory.
 
@@ -60,6 +62,16 @@ def command_for(job, folder, zip_path, gpu):
     """The command that runs this job, built only from checked values."""
     if job.get("kind", "inpaint") == "inpaint":
         return [sys.executable, "-u", "scripts/server/run_job.py", zip_path, "--gpu", str(gpu)]
+    if job["kind"] == "organise":
+        folders = []
+        for name in job["objects"]:
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name):
+                raise ValueError(f"not an object name: {name}")
+            folders.append(os.path.join(folder, "objects", name))
+            if not os.path.isdir(folders[-1]):
+                raise ValueError(f"object missing in the job: {name}")
+        return [sys.executable, "-u", "scripts/generation/organise_pictures.py", *folders,
+                "--out", os.path.join(folder, "organised"), "--zip"]
     if job["kind"] != "generate":
         raise ValueError(f"unknown kind of job: {job['kind']}")
     pictures = [os.path.join(folder, os.path.basename(p)) for p in job["pictures"]]
@@ -146,7 +158,7 @@ def prepare(cloud, job_name):
         os.replace(zip_path + ".part", zip_path)
     with zipfile.ZipFile(zip_path) as z:
         job = json.loads(z.read("job.json"))
-        if job.get("kind") == "generate":
+        if job.get("kind") in ("generate", "organise"):
             z.extractall(folder)  # zipfile drops '..' and absolute paths
     return folder, zip_path, job
 
@@ -190,7 +202,7 @@ def execute(cloud, job_name, folder, zip_path, job, gpu):
         if not text:
             continue
         tail = (tail + [text])[-30:]
-        found = re.match(r"(?:Done|Result): (.+\.glb)", text)
+        found = re.match(r"(?:Done|Result): (.+\.(?:glb|zip))$", text)
         if found:
             results.append(os.path.join(PROJECT_DIR, found.group(1)) if not os.path.isabs(found.group(1)) else found.group(1))
         if char == b"\n":
