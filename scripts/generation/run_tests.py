@@ -107,31 +107,52 @@ def download(cloud, name, local):
 # ---------------------------------------------------------------- 1. organise
 
 def organise(cloud, folders, out):
-    """The vision AI's answers for all objects (asks the server once; kept in <out>/organised/)."""
+    """The vision AI's answers for all objects, kept in <out>/organised/. Objects it hasn't seen yet are
+    sent to the server (once: a job already sent is waited for again after a restart, never sent twice)."""
     target = os.path.join(out, "organised")
-    if os.path.isfile(os.path.join(target, "organised.json")):
-        return json.load(open(os.path.join(target, "organised.json")))
-    files, names = {}, []
-    for folder in folders:
-        name = safe(os.path.basename(os.path.normpath(folder)))
-        names.append(name)
-        for path in sorted(glob.glob(os.path.join(folder, "*"))):
-            if path.lower().endswith(PICTURE_TYPES):
-                files[f"objects/{name}/{os.path.basename(path)}"] = path
-    log(f"1. Organise: {len(files)} pictures of {', '.join(names)} -> the vision AI on the uni server")
-    job_name = send(cloud, "organise", files, {"kind": "organise", "objects": names, "code": "main"})
-    status = wait(cloud, job_name, 90 * 60)
-    if status["state"] != "done" or not status.get("results"):
-        log(f"   the vision AI didn't answer ({status['state']}: {status.get('message', '')[:200]})")
-        return None
-    archive = os.path.join(out, "organised.zip")
-    download(cloud, status["results"][0], archive)
-    with zipfile.ZipFile(archive) as z:
-        z.extractall(target)
-    result = json.load(open(os.path.join(target, "organised.json")))
-    result["folders"] = {safe(os.path.basename(os.path.normpath(f))): f for f in folders}
-    json.dump(result, open(os.path.join(target, "organised.json"), "w"), indent=1)
-    log(f"   organised in {result.get('seconds', '?')} s")
+    os.makedirs(os.path.join(target, "crops"), exist_ok=True)
+    known = os.path.join(target, "organised.json")
+    result = json.load(open(known)) if os.path.isfile(known) else {"model": None, "objects": [], "folders": {}}
+    names = {safe(os.path.basename(os.path.normpath(f))): f for f in folders}
+    result.setdefault("folders", {}).update(names)
+    pending_file = os.path.join(out, "organise_jobs.json")
+    pending = json.load(open(pending_file)) if os.path.isfile(pending_file) else {}
+    missing = [n for n in names if n not in {o["object"] for o in result["objects"]}]
+    if missing and not any(set(missing) & set(objects) for objects in pending.values()):
+        files = {}
+        for name in missing:
+            for path in sorted(glob.glob(os.path.join(names[name], "*"))):
+                if path.lower().endswith(PICTURE_TYPES):
+                    files[f"objects/{name}/{os.path.basename(path)}"] = path
+        log(f"1. Organise: {len(files)} pictures of {', '.join(missing)} -> the vision AI on the uni server")
+        job_name = send(cloud, "organise", files, {"kind": "organise", "objects": missing, "code": "main"})
+        pending[job_name] = missing
+        json.dump(pending, open(pending_file, "w"), indent=1)
+    for job_name, objects in list(pending.items()):
+        log(f"1. Waiting for the vision AI: {job_name} ({', '.join(objects)})")
+        status = wait(cloud, job_name, 120 * 60)
+        del pending[job_name]
+        json.dump(pending, open(pending_file, "w"), indent=1)
+        if status["state"] != "done" or not status.get("results"):
+            log(f"   the vision AI didn't answer ({status['state']}: {status.get('message', '')[:200]})")
+            continue
+        archive = os.path.join(out, f"{job_name}.zip")
+        download(cloud, status["results"][0], archive)
+        unpacked = os.path.join(out, job_name)
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(unpacked)
+        answer = json.load(open(os.path.join(unpacked, "organised.json")))
+        for crop in glob.glob(os.path.join(unpacked, "crops", "*")):
+            shutil.copy(crop, os.path.join(target, "crops"))
+        result["model"] = answer.get("model")
+        result["objects"] = [o for o in result["objects"] if o["object"] not in objects] + answer["objects"]
+        json.dump(result, open(known, "w"), indent=1)
+        log(f"   organised {', '.join(objects)} in {answer.get('seconds', '?')} s")
+    seen = {o["object"] for o in result["objects"]}
+    for name in names:  # without the AI's answer: the pictures as they are (marked as fallback)
+        if name not in seen:
+            result["objects"].append(fallback([names[name]])["objects"][0])
+    result["objects"] = [o for o in result["objects"] if o["object"] in names]
     return result
 
 
@@ -165,6 +186,9 @@ def plan(organised, out):
             closeups = [os.path.join(crops, c["crop"]) for c in obj["crops"] if not c.get("full_body")][:2]
             source = next((c["from"] for c in obj["crops"] if c["crop"] == choice["front_crop"]), None)
             raw = os.path.join(folder, source) if source else None
+        every = [] if obj.get("fallback") else [os.path.join(crops, c) for c in obj.get("candidates", [])][:8]
+        if every and views and views[0] in every:  # the front first
+            every = [views[0]] + [v for v in every if v != views[0]]
         multi = len(views) > 1
         colour = any(p.get("answer", {}).get("colours") in ("colour", "coloured") for p in obj.get("pictures", []))
         tests = [
@@ -172,6 +196,7 @@ def plan(organised, out):
             ("views_1024_s25", views, {"mode": "multidiffusion"}) if multi else None,
             ("raw_picture_1024_s25", [raw], {}) if raw else None,
             ("views_plus_closeups_1024_s25", views + closeups, {"mode": "multidiffusion"}) if multi and closeups else None,
+            ("all_views_stochastic_1024_s25", every, {"mode": "stochastic"}) if len(every) > len(views) else None,
             ("front_1536_s25", [front], {"resolution": "1536", "max_tokens": 40000}),
             ("views_stochastic_1024_s25", views, {"mode": "stochastic"}) if multi else None,
             ("front_1024_s50", [front], {"steps": 50}),
@@ -278,10 +303,10 @@ def main():
     log(f"Tests until {until:%Y-%m-%d %H:%M}, results in {args.out}")
     cloud = Cloud()
 
-    organised = organise(cloud, args.folders, args.out) or fallback(args.folders)
+    organised = organise(cloud, args.folders, args.out)
     tests = plan(organised, args.out)
     json.dump(tests, open(os.path.join(args.out, "plan.json"), "w"), indent=1)
-    log(f"2. Plan: {len(tests)} tests ({'organised by ' + organised['model'] if organised.get('model') else 'WITHOUT the vision AI'})")
+    log(f"2. Plan: {len(tests)} tests ({'organised by ' + organised['model'] if organised.get('model') else 'WITHOUT the vision AI'}; {sum(1 for o in organised['objects'] if o.get('fallback'))} object(s) without its answers)")
 
     results = os.path.join(args.out, "results.jsonl")
     records = [json.loads(line) for line in open(results)] if os.path.isfile(results) else []
