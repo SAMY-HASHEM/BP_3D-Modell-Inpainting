@@ -7,11 +7,11 @@ version of that region and inserts the part in its place.
 
 Usage:
     source activate.sh
-    python scripts/regenerate/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
+    python scripts/inpainting/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
         --part outputs/boot-right_1536_seed42.glb pictures/yeonhee/parts/boot-right.png \\
         --part outputs/boot-left_1536_seed42.glb pictures/yeonhee/parts/boot-left.png
     # all cut-outs of a folder (from cut_parts.py), each with its newest model from outputs/:
-    python scripts/regenerate/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
+    python scripts/inpainting/insert_part.py outputs/parts-front_1536_seed42.glb pictures/yeonhee/parts-front.png \\
         --parts-dir pictures/yeonhee/parts-auto
 
 Each part picture must be a cut-out (RGBA, transparent background) taken pixel for pixel from the

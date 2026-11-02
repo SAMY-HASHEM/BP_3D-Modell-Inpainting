@@ -63,7 +63,7 @@ for group in $WANTED; do
         ;;
     mask)
         if [ -d "$CONDA_DIR/envs/mask-ai" ]; then
-            conda run -n mask-ai python "$PROJECT_DIR/scripts/mask/mask_ai.py" --download
+            conda run -n mask-ai python "$PROJECT_DIR/scripts/inpainting/find_part.py" --download
         else
             echo "  skipped: no mask-ai environment (./install_mask.sh)"
         fi

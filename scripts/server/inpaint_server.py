@@ -40,7 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import generate
 import numpy as np
 
-from edit_picture import make_picture, view_from_direction
+from picture_from_prompt import make_picture, view_from_direction
 from inpaint import inpaint
 from run_job import freest_gpu
 

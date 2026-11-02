@@ -3,7 +3,7 @@
 For trying settings (resolution, steps, guidance, faces ...) on the same pictures without sitting next
 to it. By default one job at a time, so only one GPU of the shared server is used.
 
-    python3 scripts/server/sweep.py pictures/dasle/view_*.png --try "--resolution 1536 --max-tokens 49152" \
+    python3 scripts/generation/try_settings.py pictures/dasle/view_*.png --try "--resolution 1536 --max-tokens 49152" \
         --try "--steps 50" --try "--guidance 10" --parallel 1
 
 Every --try is added to the common options (--common, default "--resolution 1024 --steps 25").
@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-CLOUD = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "cloud.py")]
+CLOUD = [sys.executable, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server", "cloud.py")]
 
 
 def state(job):

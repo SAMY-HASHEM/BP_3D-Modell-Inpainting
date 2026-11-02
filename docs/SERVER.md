@@ -37,7 +37,7 @@ A job started normally stops when the VDI or the browser closes. With `nohup ...
 on the server, and its output goes into a log file:
 
 ```
-nohup python scripts/models/generate.py pictures/tavern.jpg --resolution 1536 > outputs/tavern.log 2>&1 &
+nohup python scripts/generation/generate.py pictures/tavern.jpg --resolution 1536 > outputs/tavern.log 2>&1 &
 tail -f outputs/tavern.log      # watch it (Ctrl+C only stops watching, not the job)
 ```
 

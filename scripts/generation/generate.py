@@ -2,10 +2,10 @@
 
 Usage:
     source activate.sh
-    python scripts/models/generate.py pictures/my_picture.png
-    python scripts/models/generate.py pictures/my_picture.png --resolution 1536 --seed 7
-    python scripts/models/generate.py pictures/parts/*.png        # several pictures, TRELLIS.2 loaded once
-    python scripts/models/generate.py pictures/my_picture.png --texture-guidance 3   # colours follow the picture more
+    python scripts/generation/generate.py pictures/my_picture.png
+    python scripts/generation/generate.py pictures/my_picture.png --resolution 1536 --seed 7
+    python scripts/generation/generate.py pictures/parts/*.png        # several pictures, TRELLIS.2 loaded once
+    python scripts/generation/generate.py pictures/my_picture.png --texture-guidance 3   # colours follow the picture more
 
 The results go to outputs/: the picture after background removal (*_input.png) and the model (*.glb).
 """
@@ -20,7 +20,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # saves GPU 
 # The conda environment sets these on activation. They are repeated here for runs that skip the
 # activation (e.g. PyCharm's Run button), so the model weights are never downloaded a second time.
 os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "local_ai_models"))
-os.environ.setdefault("HF_MODULES_CACHE", os.path.join(PROJECT_DIR, "models", "modules"))
+os.environ.setdefault("HF_MODULES_CACHE", os.path.join(PROJECT_DIR, "local_ai_models", "modules"))
 
 import numpy as np
 import torch

@@ -5,7 +5,7 @@ something new may grow (e.g. a statue on the ground). The boxes are drawn see-th
 selected one has an arrow on each side (drag it to move that side) and a dot on each corner (drag it
 to pull that corner anywhere, so a box can take any shape). "Find part in box" selects only one part
 inside the box (e.g. the helmet, by its name and/or a click on it) with a mask AI on this computer
-(scripts/mask/mask_ai.py, installed by install_mask.sh); Box = "Selected faces + empty space" then regenerates
+(scripts/inpainting/find_part.py, installed by install_mask.sh); Box = "Selected faces + empty space" then regenerates
 that part and the empty space in the box and keeps every other surface exactly. Optionally a prompt (and a reference picture)
 says what should be there: the server then first paints it into a picture of the model, seen from the
 current view, and TRELLIS.2 builds that picture's change in 3D.
@@ -517,7 +517,7 @@ class INPAINT_GGT_box_sides(bpy.types.GizmoGroup):
 
 
 # ---------------------------------------------------------------- finding a part in the box (the mask AI)
-# Blender takes pictures of the space box from the directions that show it best, scripts/mask/mask_ai.py (in its
+# Blender takes pictures of the space box from the directions that show it best, scripts/inpainting/find_part.py (in its
 # own environment, made by install_mask.sh) finds the part in each, and every face in the box is voted on
 # by the pictures that see it.
 
@@ -533,7 +533,7 @@ def mask_ai():
     """The mask AI's Python and script, in the project folder from the add-on preferences."""
     project = os.path.expanduser(bpy.context.preferences.addons[__name__].preferences.project)
     return (os.path.join(project, "conda", "envs", "mask-ai", "bin", "python"),
-            os.path.join(project, "scripts", "mask", "mask_ai.py"))
+            os.path.join(project, "scripts", "inpainting", "find_part.py"))
 
 
 def face_centers(model):

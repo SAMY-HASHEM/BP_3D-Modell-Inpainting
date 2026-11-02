@@ -51,8 +51,8 @@ CHECKS = {
     "mode": lambda v: v if v in ("multidiffusion", "stochastic") else None,
 }
 KNOWS = {
-    "scripts/models/generate.py": {"resolution", "steps", "seed", "guidance", "texture_guidance", "max_tokens", "faces"},
-    "scripts/models/multi_image.py": {"resolution", "steps", "seed", "guidance", "max_tokens", "faces", "mirror", "mode"},
+    "scripts/generation/generate.py": {"resolution", "steps", "seed", "guidance", "texture_guidance", "max_tokens", "faces"},
+    "scripts/generation/multi_image.py": {"resolution", "steps", "seed", "guidance", "max_tokens", "faces", "mirror", "mode"},
 }
 
 
@@ -67,7 +67,7 @@ def command_for(job, folder, zip_path, gpu):
     for p in pictures + shapes:
         if not os.path.isfile(p):
             raise ValueError(f"picture missing in the job: {os.path.basename(p)}")
-    script = "scripts/models/generate.py" if len(pictures) + len(shapes) == 1 else "scripts/models/multi_image.py"
+    script = "scripts/generation/generate.py" if len(pictures) + len(shapes) == 1 else "scripts/generation/multi_image.py"
     command = [sys.executable, "-u", script, *pictures] + (["--shape-only", *shapes] if shapes else [])
     for key, value in job.get("options", {}).items():
         if key not in CHECKS:

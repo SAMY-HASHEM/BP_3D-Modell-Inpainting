@@ -100,7 +100,7 @@ the result, each step guided by the picture. The settings below change how these
 - **Ours:** `multi_image.py`, class `MultiImageFlowModel`: every step, the model predicts once per picture;
   *multidiffusion* averages these predictions, *stochastic* uses one picture per step in turn. No camera
   angles are needed: TRELLIS.2 places every object the same way, whatever the view.
-- `scripts/models/video_views.py` takes such pictures from a turntable video.
+- `scripts/generation/views_from_video.py` takes such pictures from a turntable video.
 
 ## Recommended
 
@@ -109,4 +109,4 @@ the result, each step guided by the picture. The settings below change how these
 | Most objects | `--resolution 1024 --steps 25 --faces 4000000` |
 | Small, very detailed objects | `--resolution 1536 --steps 25 --faces 4000000` |
 | Long hair / very big objects at 1536 | add `--max-tokens 40000` |
-| Turntable video | `video_views.py video.mp4 --cutout`, then `multi_image.py pictures/<video>/view_*.png …` |
+| Turntable video | `views_from_video.py video.mp4 --cutout`, then `multi_image.py pictures/<video>/view_*.png …` |

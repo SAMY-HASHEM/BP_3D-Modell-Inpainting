@@ -5,8 +5,8 @@ sides, this script finds the part in each picture, and Blender turns the masks i
 face is voted on by the pictures that see it). Runs in its own environment (./install_mask.sh), on the
 GPU if there is one (about 4 GB of VRAM), else on the CPU.
 
-    python scripts/mask/mask_ai.py <folder>          # a folder with views.json and the pictures it names
-    python scripts/mask/mask_ai.py --download        # only download the models (into local_ai_models/mask)
+    python scripts/inpainting/find_part.py <folder>          # a folder with views.json and the pictures it names
+    python scripts/inpainting/find_part.py --download        # only download the models (into local_ai_models/mask)
 
 views.json:  {"word": "helmet", "views": [{"picture": "view_00.png", "clicks": [[x, y], ...]}, ...]}
              (clicks are the pixels where the user's clicks are seen in that picture; all of them are

@@ -22,12 +22,12 @@ Without pictures, --prompt first makes the front picture. Two ways to make a mis
 
 Usage (TRELLIS.2 environment; ComfyUI is started if it isn't running):
     source activate.sh
-    python scripts/models/make_views.py pictures/bee/bee-front.png pictures/bee/bee-side.png pictures/bee/bee-back.png
-    python scripts/models/make_views.py pictures/knight/knight.jpg --way sheet
-    python scripts/models/make_views.py --prompt "a small wooden treasure chest with iron bands"
-    python scripts/models/multi_image.py outputs/views/bee-front_angles/view_*.png --resolution 1024 --steps 25
+    python scripts/generation/views_from_picture.py pictures/bee/bee-front.png pictures/bee/bee-side.png pictures/bee/bee-back.png
+    python scripts/generation/views_from_picture.py pictures/knight/knight.jpg --way sheet
+    python scripts/generation/views_from_picture.py --prompt "a small wooden treasure chest with iron bands"
+    python scripts/generation/multi_image.py outputs/views/bee-front_angles/view_*.png --resolution 1024 --steps 25
 
-Writes outputs/views/<front picture>_<way>/view_<k>_<angle>deg.png (front first, as video_views.py does),
+Writes outputs/views/<front picture>_<way>/view_<k>_<angle>deg.png (front first, as views_from_video.py does),
 made.txt (which views were made by Qwen) and overview.jpg; for the sheet also sheet.png.
 """
 import _paths  # noqa: F401  (the scripts of the other folders)
@@ -38,12 +38,12 @@ import time
 
 from PIL import Image
 
-from edit_picture import comfy, start_comfyui, upload, wait_for_picture
+from picture_from_prompt import comfy, start_comfyui, upload, wait_for_picture
 from generate import OUTPUT_DIR, picture_name
 
 ANGLES = {0: "front view", 90: "right side view", 180: "back view", 270: "left side view"}
 WORDS = [("front", 0), ("back", 180), ("left", 270), ("right", 90), ("side", 90)]  # first match counts
-GREY = (191, 191, 191)  # like edit_picture.py's background
+GREY = (191, 191, 191)  # like picture_from_prompt.py's background
 
 FRONT_PROMPT = ("Replace the empty grey picture with {prompt}. The whole object seen straight from the front, "
                 "centred, filling most of the picture, on a plain light grey background, even studio light, "

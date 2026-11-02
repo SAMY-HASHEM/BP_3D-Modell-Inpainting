@@ -11,7 +11,7 @@ The result is the picture inpaint.py then uses.
 
 Usage (TRELLIS.2 environment; ComfyUI is started if it isn't running):
     source activate.sh
-    python scripts/regenerate/edit_picture.py outputs/tavern_1536_seed42.glb points.npy out.png \\
+    python scripts/inpainting/picture_from_prompt.py outputs/tavern_1536_seed42.glb points.npy out.png \\
         --prompt "a stone statue of a dancing woman" --yaw 30 --pitch 15 [--reference statue.jpg]
 """
 import _paths  # noqa: F401  (the scripts of the other folders)

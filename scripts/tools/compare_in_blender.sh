@@ -13,4 +13,9 @@ fi
 script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/compare_in_blender.py"
 folder="$(realpath "$1")"
 shift
-flatpak run org.blender.Blender -b --python "$script" -- "$folder" "$@"
+# Blender from blender.org (the 'blender' command), else the Flatpak one
+if command -v blender >/dev/null; then
+    blender -b --python "$script" -- "$folder" "$@"
+else
+    flatpak run org.blender.Blender -b --python "$script" -- "$folder" "$@"
+fi

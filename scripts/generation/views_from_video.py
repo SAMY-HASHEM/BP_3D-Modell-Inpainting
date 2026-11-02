@@ -5,11 +5,11 @@ This script picks one frame every 360/N degrees and saves them as pictures for m
 
 Usage (TRELLIS.2 environment):
     source activate.sh
-    python scripts/models/video_views.py pictures/sequence1.mp4                     # 8 views from one full turn
-    python scripts/models/video_views.py turn.mp4 --views 12 --front 40             # 12 views, front at frame 40
-    python scripts/models/video_views.py turn.mp4 --turn-frames 600                 # one turn takes 600 frames
-    python scripts/models/video_views.py pictures/sequence1.mp4 --cutout            # clean cut-outs (see below)
-    python scripts/models/multi_image.py pictures/sequence1/view_*.png --resolution 1024 --steps 25
+    python scripts/generation/views_from_video.py pictures/sequence1.mp4                     # 8 views from one full turn
+    python scripts/generation/views_from_video.py turn.mp4 --views 12 --front 40             # 12 views, front at frame 40
+    python scripts/generation/views_from_video.py turn.mp4 --turn-frames 600                 # one turn takes 600 frames
+    python scripts/generation/views_from_video.py pictures/sequence1.mp4 --cutout            # clean cut-outs (see below)
+    python scripts/generation/multi_image.py pictures/sequence1/view_*.png --resolution 1024 --steps 25
 
 Writes pictures/<video name>/view_<k>_<angle>deg.png (front first, so multi_image.py takes it as the
 main view) and overview.jpg with all chosen views.
