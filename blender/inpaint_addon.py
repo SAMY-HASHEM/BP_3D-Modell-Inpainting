@@ -20,6 +20,7 @@ Use:     3D view sidebar (N key) > Inpaint tab.
 """
 import atexit
 import base64
+import io
 import json
 import os
 import signal
@@ -39,7 +40,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 11, 0),
+    "version": (1, 12, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -324,6 +325,8 @@ class InpaintSettings(bpy.types.PropertyGroup):
     part: bpy.props.StringProperty(name="Part", description="What to find in the space box, in English "
                                                             "(e.g. helmet, sword, left wing)")
     clicks: bpy.props.CollectionProperty(type=InpaintClick, description="Spots on the part, for Find part")
+    show_steps: bpy.props.BoolProperty(name="Server steps (JupyterLab)", default=False,
+                                       description="What to type on the uni GPU server before the first job")
     find_cpu: bpy.props.BoolProperty(name="CPU only", default=False,
                                      description="Run the mask AI without the GPU (slower: about 1-2 minutes)")
     box_use: bpy.props.EnumProperty(
@@ -1723,6 +1726,73 @@ class INPAINT_OT_show_picture(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# What to type on the uni GPU server (JupyterLab terminal) for each connection, shown in the panel
+SERVER_STEPS = {
+    "CLOUD": {
+        "commands": ["cd ~/projects/bp_samy_hashem && git pull",
+                     "pkill -u $USER -f cloud_worker.py",
+                     "source activate.sh",
+                     "nohup python -u scripts/server/cloud_worker.py > outputs/cloud_worker.log 2>&1 &",
+                     "sleep 5; tail -n 5 outputs/cloud_worker.log"],
+        "explain": ["",
+                    "stop an old worker, if one runs",
+                    "turn on the project's Python",
+                    "start the worker; it keeps running after the VDI is closed",
+                    "show its first lines"],
+        "expect": ["You should see: 'Watching the cloud folder", "inpainting-jobs/ every 30 s'. Then close the VDI."]},
+    "UNI": {
+        "commands": ["cd ~/projects/bp_samy_hashem && git pull",
+                     "source activate.sh",
+                     "python scripts/server/inpaint_server.py --host 0.0.0.0"],
+        "explain": ["",
+                    "turn on the project's Python",
+                    "start the server; keep this terminal open (Ctrl+C stops it)"],
+        "expect": ["Wait for 'Ready' (about a minute). The first time,", "copy the 'Token' into Login / address."]},
+}
+
+
+class INPAINT_OT_copy_steps(bpy.types.Operator):
+    bl_idname = "inpaint.copy_steps"
+    bl_label = "Copy commands"
+    bl_description = "Copy the commands for the uni server; paste them in the JupyterLab terminal (Ctrl+Shift+V)"
+
+    first: bpy.props.BoolProperty(default=False, options={"SKIP_SAVE"})  # only the git pull (it asks for the login)
+
+    def execute(self, context):
+        commands = SERVER_STEPS[context.scene.inpaint.connection]["commands"]
+        commands = commands[:1] if self.first else commands[1:]
+        context.window_manager.clipboard = "\n".join(commands) + "\n"
+        self.report({"INFO"}, "Copied: paste them in the JupyterLab terminal with Ctrl+Shift+V")
+        return {"FINISHED"}
+
+
+def draw_steps(layout, settings):
+    """The fold-out with the server steps for the chosen uni connection."""
+    steps = SERVER_STEPS[settings.connection]
+    layout.prop(settings, "show_steps", icon="TRIA_DOWN" if settings.show_steps else "TRIA_RIGHT", emboss=False)
+    if not settings.show_steps:
+        return
+    column = layout.box().column(align=True)
+    column.label(text="1. VDI > browser > nc.hcigroup.de > JupyterLab")
+    column.label(text="    File > New > Terminal")
+    column.label(text="    Paste there with Ctrl+Shift+V")
+    pairs = list(zip(steps["commands"], steps["explain"]))
+    column.separator()
+    column.label(text="2. Get the newest code, then type your uni login:")
+    column.operator(INPAINT_OT_copy_steps.bl_idname, text="Copy command 2", icon="COPYDOWN").first = True
+    column.label(text=f"   {pairs[0][0]}", icon="CONSOLE")
+    column.separator()
+    column.label(text="3. Then the rest:")
+    column.operator(INPAINT_OT_copy_steps.bl_idname, text="Copy commands 3", icon="COPYDOWN").first = False
+    for command, explain in pairs[1:]:
+        column.label(text=f"   {command}", icon="CONSOLE")
+        column.label(text=f"      {explain}")
+    column.separator()
+    column.label(text="4. " + steps["expect"][0])
+    for line in steps["expect"][1:]:
+        column.label(text="    " + line)
+
+
 def project_folder():
     return os.path.expanduser(bpy.context.preferences.addons[__name__].preferences.project)
 
@@ -1810,6 +1880,82 @@ def stop_local():
 atexit.register(stop_local)  # closing Blender frees the GPU too
 
 
+ping = {"job": None, "sent": 0.0, "error": None}  # the running connection test through the cloud
+PING_WAIT = 150  # seconds: the worker looks every 30 s, and may be starting a job first
+
+
+class INPAINT_OT_test_connection(bpy.types.Operator):
+    bl_idname = "inpaint.test_connection"
+    bl_label = "Test connection"
+    bl_description = ("Send a tiny test job and wait for the answer: This PC / Uni (inside) ask the server directly; "
+                      "Uni (from anywhere) goes through Sciebo to the worker on the uni server and back (up to a minute)")
+
+    @classmethod
+    def poll(cls, context):
+        return ping["job"] is None
+
+    def execute(self, context):
+        if context.scene.inpaint.connection != "CLOUD":
+            bpy.ops.inpaint.check_server()
+            self.report({"INFO"}, f"Server: {status['server']}")
+            return {"FINISHED"}
+        if not os.path.isfile(CLOUD_CONFIG):
+            status["server"] = "no cloud login (Login / address)"
+            return {"CANCELLED"}
+        job = f"ping_{time.strftime('%Y%m%d-%H%M%S')}"
+        ping.update(job=job, sent=time.time(), error=None)
+        status["server"] = "test: sending to Sciebo..."
+
+        def send():
+            try:
+                data = io.BytesIO()
+                with zipfile.ZipFile(data, "w") as z:
+                    z.writestr("job.json", json.dumps({"kind": "ping"}))
+                cloud("PUT", job + ".zip", data.getvalue(), timeout=20)
+                cloud("PUT", job + ".status", json.dumps({"state": "queued", "message": "connection test",
+                                                          "results": []}).encode(), timeout=20)
+            except Exception as e:
+                ping["error"] = f"Sciebo not reachable: {type(e).__name__}: {e}"[:120]
+        threading.Thread(target=send, daemon=True).start()
+        bpy.app.timers.register(follow_ping, first_interval=3.0)
+        return {"FINISHED"}
+
+
+def follow_ping():
+    """Timer: waits for the worker's answer to the connection test, then removes the test files."""
+    job = ping["job"]
+    waited = time.time() - ping["sent"]
+    answer = None
+    if ping["error"]:
+        status["server"] = ping["error"]
+    else:
+        try:
+            answer = json.loads(cloud("GET", job + ".status", timeout=20))
+        except Exception:
+            answer = None
+        if answer is not None and answer["state"] == "done":
+            status["server"] = f"works ({waited:.0f} s): {answer['message']}"
+        elif answer is not None and answer["state"] == "failed":
+            status["server"] = "the worker runs, but with old code: do the Server steps again"
+        elif waited > PING_WAIT:
+            status["server"] = "no answer: the worker isn't running (see Server steps)"
+        else:
+            status["server"] = f"test: waiting for the uni server... {waited:.0f} s"
+            redraw()
+            return 5.0
+    ping["job"] = None
+
+    def clean():
+        for name in (job + ".zip", job + ".status"):
+            try:
+                cloud("DELETE", name, timeout=20)
+            except Exception:
+                pass
+    threading.Thread(target=clean, daemon=True).start()
+    redraw()
+    return None
+
+
 class INPAINT_OT_check(bpy.types.Operator):
     bl_idname = "inpaint.check_server"
     bl_label = "Check server"
@@ -1849,15 +1995,19 @@ class INPAINT_PT_panel(bpy.types.Panel):
             row.operator(INPAINT_OT_stop_local.bl_idname, text="", icon="SNAP_FACE")
         elif settings.connection == "UNI":
             box.label(text=f"Uni GPU server: {server()[0].split('//')[1]}")
-            box.label(text="Start inpaint_server.py in JupyterLab first")
+            box.label(text="Only in the uni network. First start the server:")
+            draw_steps(box, settings)
         else:
             box.label(text="Uni GPU server through Sciebo (2-3 min slower)")
-            box.label(text="cloud_worker.py must run on the server")
+            box.label(text="First start the worker on the server (once):")
+            draw_steps(box, settings)
         row = box.row()
         row.label(text=f"Status: {status['server']}")
         row.operator(INPAINT_OT_check.bl_idname, text="", icon="FILE_REFRESH")
+        row = box.row()
+        row.operator(INPAINT_OT_test_connection.bl_idname, icon="LINKED")
         if settings.connection != "LOCAL":
-            box.operator("preferences.addon_show", text="Login / address", icon="PREFERENCES").module = __name__
+            row.operator("preferences.addon_show", text="Login / address", icon="PREFERENCES").module = __name__
         if status["message"]:
             layout.label(text=status["message"])
 
@@ -1938,7 +2088,7 @@ classes = (InpaintClick, InpaintSettings, INPAINT_OT_add_box, INPAINT_GGT_box_si
            INPAINT_OT_regenerate, INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result,
            INPAINT_OT_clean_up, INPAINT_OT_compare, INPAINT_OT_keep_original,
            InpaintPreferences, INPAINT_OT_cloud_login,
-           INPAINT_OT_show_picture, INPAINT_OT_start_local, INPAINT_OT_stop_local, INPAINT_OT_check, INPAINT_PT_panel)
+           INPAINT_OT_show_picture, INPAINT_OT_start_local, INPAINT_OT_stop_local, INPAINT_OT_copy_steps, INPAINT_OT_test_connection, INPAINT_OT_check, INPAINT_PT_panel)
 
 
 def register():

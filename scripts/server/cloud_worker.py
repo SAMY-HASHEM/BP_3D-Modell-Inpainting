@@ -7,6 +7,8 @@ last progress line is written to <job>.status, and the finished model(s) are upl
 <job>__<file>.glb.
 Only our own scripts run, with checked settings: run_job.py for inpainting jobs from Blender,
 generate.py (one picture) or multi_image.py (several) for picture -> model jobs.
+A "ping_<time>" job (Blender's "Test connection") runs nothing: it is answered at once, even when all
+GPUs are busy, with the worker's code version and the GPUs' memory.
 
 A job can ask for the newest code of a branch ("code": "main" in its job.json, from cloud.py --code):
 the worker then brings this checkout to that branch's newest commit from the project's public GitHub
@@ -221,6 +223,17 @@ def free_gpus(running):
     return [gpu for _, gpu in free]
 
 
+def answer_ping(cloud, job_name, running):
+    """Answers Blender's connection test: which code this worker runs and how busy the GPUs are."""
+    commit = subprocess.run(["git", "-C", PROJECT_DIR, "log", "-1", "--format=%h"],
+                            capture_output=True, text=True).stdout.strip() or "?"
+    memory = gpu_memory()
+    free = sum(1 for used in memory.values() if used < FREE_MIB)
+    gpus = f"{free} of {len(memory)} GPUs free" if memory else "no GPU found"
+    cloud.write_status(job_name, "done", f"worker answered: code {commit}, {gpus}, {len(running)} job(s) of ours running")
+    print(f"[{time.strftime('%H:%M')}] {job_name}: answered", flush=True)
+
+
 def start_jobs(cloud, running):
     """Starts the queued jobs on the free GPUs, one per GPU. A job that asks for new code of a branch
     waits until nothing else of ours runs (the code under the running jobs must not change)."""
@@ -230,6 +243,9 @@ def start_jobs(cloud, running):
             continue
         status = cloud.read_status(job_name)
         if status is None or status["state"] != "queued":
+            continue
+        if job_name.startswith("ping_"):
+            answer_ping(cloud, job_name, running)
             continue
         gpus = free_gpus(running)
         if not gpus:
