@@ -1,10 +1,13 @@
-"""Let a local vision AI organise the pictures of an object before it is generated in 3D.
+"""Let a local vision AI organise the pictures (and videos) of an object before it is generated in 3D.
 
 People collect pictures of an object from anywhere: full views and close-ups, sheets with two views side
 by side, colour-ID renders, pictures with a pedestal or a logo. TRELLIS.2 needs clean full views of the
 same pose, the front first. This script lets a local vision-language model (Qwen3-VL) decide, instead of
 a person:
 
+  a video              the AI watches frames sampled evenly over it: is it a turntable, where does one full
+                       turn end, which frame is the front, which are blurred; the frames it keeps go on
+                       like pictures
   pass 1, every picture    how many figures it shows, a box around each one, which side each shows
                            (front, back, left, ...), full body or close-up, the pose, the background, colour
                            or grey, extras (pedestal, text, weapon); every figure is cut out with its box
@@ -36,6 +39,16 @@ MODELS = ("Qwen/Qwen3-VL-8B-Instruct", "Qwen/Qwen3-VL-2B-Instruct", "Qwen/Qwen2.
 BACKUP = "Qwen/Qwen2.5-VL-7B-Instruct"  # for an older transformers that doesn't know Qwen3-VL yet
 SIDES = ("front", "front-left", "left", "back-left", "back", "back-right", "right", "front-right", "top", "bottom", "unknown")
 PICTURE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
+VIDEO_TYPES = (".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")
+
+VIDEO = """These %d pictures are frames of one video, in time order, numbered 0 to %d (evenly spaced over the video).
+Answer only with JSON, no other text:
+{"turntable": true | false,      // the object turns around (or the camera goes around it)
+ "turns": how many full turns the video shows, e.g. 0.5, 1 or 2,
+ "turn_end": the number of the frame where the first full turn is complete (the view looks like frame 0 again), or null,
+ "front": the number of the frame that shows the front best,
+ "blurred": [numbers of frames that are blurred or show mostly something else],
+ "why": "a few words"}"""
 
 PASS_1 = """Look at this picture. It may show one or several figures or objects (for example the same character
 from two sides next to each other), or only a close-up of a part.
@@ -124,16 +137,64 @@ def to_pixels(box, width, height, shown):
     return (max(0, int(x0 - pad)), max(0, int(y0 - pad)), min(width, int(x1 + pad)), min(height, int(y1 + pad)))
 
 
-def organise(model, processor, folder, out, size):
+def sample_frames(video, count, out, name):
+    """`count` frames evenly spaced over the whole video (no choice made here), saved to out/frames/."""
+    import cv2
+    capture = cv2.VideoCapture(video)
+    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    paths = []
+    for k in range(count):
+        capture.set(cv2.CAP_PROP_POS_FRAMES, round(k * (total - 1) / max(1, count - 1)))
+        ok, frame = capture.read()
+        if ok:
+            path = os.path.join(out, "frames", f"{name}_f{k:02d}.jpg")
+            cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            paths.append(path)
+    return paths
+
+
+def look_at_video(model, processor, video, out, name, count):
+    """The AI watches the video's frames: turntable or not, where one turn ends, the front, blurred frames.
+    Returns the frames it keeps and its answer."""
+    frames = sample_frames(video, count, out, name)
+    images = [shrink(Image.open(f).convert("RGB"), 384) for f in frames]
+    answer, raw = ask(model, processor, images, VIDEO % (len(images), len(images) - 1))
+    print(f"  {os.path.basename(video)}: {json.dumps(answer)}", flush=True)
+    keep = list(range(len(frames)))
+    end = answer.get("turn_end")
+    if answer.get("turntable") and isinstance(end, int) and 2 <= end < len(frames):
+        keep = keep[:end]  # one full turn; the frames after it repeat it
+    blurred = {i for i in answer.get("blurred", []) if isinstance(i, int)} if isinstance(answer.get("blurred"), list) else set()
+    keep = [i for i in keep if i not in blurred] or keep
+    return [frames[i] for i in keep], {"file": os.path.basename(video), "video": True, "answer": answer, "raw": raw,
+                                       "frames": [os.path.relpath(f, out) for f in frames],
+                                       "kept": [os.path.relpath(frames[i], out) for i in keep]}
+
+
+def evenly(items, most):
+    """At most `most` items, evenly spaced (keeps the order)."""
+    if len(items) <= most:
+        return items
+    return [items[round(k * (len(items) - 1) / (most - 1))] for k in range(most)]
+
+
+def organise(model, processor, folder, out, size, frames=24):
     name = os.path.basename(os.path.normpath(folder)).replace(" ", "_")
-    files = sorted(f for f in glob.glob(os.path.join(folder, "*")) if f.lower().endswith(PICTURE_TYPES))
+    everything = sorted(glob.glob(os.path.join(folder, "*")))
+    files = [f for f in everything if f.lower().endswith(PICTURE_TYPES)]
+    videos = []
+    for video in (f for f in everything if f.lower().endswith(VIDEO_TYPES)):
+        kept, entry = look_at_video(model, processor, video, out, name, frames)
+        files += kept
+        videos.append(entry)
     pictures, crops = [], []
     for path in files:
         image = Image.open(path).convert("RGB")
         shown = shrink(image, size)
         answer, raw = ask(model, processor, [shown], PASS_1)
         print(f"  {os.path.basename(path)}: {json.dumps(answer)[:300]}", flush=True)
-        entry = {"file": os.path.basename(path), "size": list(image.size), "answer": answer, "raw": raw, "crops": []}
+        source = os.path.relpath(path, out) if path.startswith(os.path.join(out, "frames")) else os.path.basename(path)
+        entry = {"file": source, "size": list(image.size), "answer": answer, "raw": raw, "crops": []}
         for k, figure in enumerate(answer.get("figures", []) if isinstance(answer.get("figures"), list) else []):
             box = to_pixels(figure.get("box"), image.width, image.height, shown.size) if isinstance(figure, dict) else None
             if box is None:
@@ -142,11 +203,11 @@ def organise(model, processor, folder, out, size):
             crop = os.path.join("crops", f"{name}_{len(crops):02d}_{side}.png")
             image.crop(box).save(os.path.join(out, crop))
             entry["crops"].append(crop)
-            crops.append({"crop": crop, "from": os.path.basename(path), "box": box, **figure, "side": side})
+            crops.append({"crop": crop, "from": source, "box": box, **figure, "side": side})
         pictures.append(entry)
 
     # pass 2: all full-body cut-outs together
-    candidates = [c for c in crops if c.get("full_body") and not c.get("id_render")][:10]
+    candidates = evenly([c for c in crops if c.get("full_body") and not c.get("id_render")], 10)
     choice = {}
     if candidates:
         thing = next((p["answer"].get("object") for p in pictures if p["answer"].get("object")), name)
@@ -161,13 +222,14 @@ def organise(model, processor, folder, out, size):
             views.remove(front)
         choice["front_crop"] = front or (views[0] if views else candidates[0]["crop"])
         choice["view_crops"] = [choice["front_crop"]] + [v for v in views if v != choice["front_crop"]][:3]
-    return {"object": name, "pictures": pictures, "crops": crops, "candidates": [c["crop"] for c in candidates],
-            "choice": choice}
+    return {"object": name, "videos": videos, "pictures": pictures, "crops": crops,
+            "candidates": [c["crop"] for c in candidates], "choice": choice}
 
 
 def main():
     parser = argparse.ArgumentParser(description="Let a local vision AI organise an object's pictures for TRELLIS.2")
-    parser.add_argument("folders", nargs="+", help="one folder of pictures per object")
+    parser.add_argument("folders", nargs="+", help="one folder per object: pictures and/or videos")
+    parser.add_argument("--frames", type=int, default=24, help="frames the AI looks at per video (default 24)")
     parser.add_argument("--out", required=True)
     parser.add_argument("--model", default=MODELS[0], choices=MODELS)
     parser.add_argument("--size", type=int, default=1024, help="longest side of the pictures the AI sees")
@@ -175,6 +237,7 @@ def main():
     parser.add_argument("--zip", action="store_true", help="also pack --out into one .zip (for the cloud worker)")
     args = parser.parse_args()
     os.makedirs(os.path.join(args.out, "crops"), exist_ok=True)
+    os.makedirs(os.path.join(args.out, "frames"), exist_ok=True)
     start = time.time()
     try:
         model, processor = load(args.model, args.cpu)
@@ -185,7 +248,7 @@ def main():
     result = {"model": args.model, "objects": []}
     for folder in args.folders:
         print(f"Organising {folder}", flush=True)
-        result["objects"].append(organise(model, processor, folder, args.out, args.size))
+        result["objects"].append(organise(model, processor, folder, args.out, args.size, args.frames))
         with open(os.path.join(args.out, "organised.json"), "w") as f:
             json.dump(result, f, indent=1)
     result["seconds"] = round(time.time() - start)

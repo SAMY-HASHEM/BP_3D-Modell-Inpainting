@@ -37,6 +37,7 @@ from PIL import Image
 from cloud import Cloud
 
 PICTURE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
+VIDEO_TYPES = (".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")  # the vision AI looks at these itself
 RENDER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "render_preview.py")
 BASE = {"resolution": "1024", "steps": 25}
 
@@ -117,14 +118,15 @@ def organise(cloud, folders, out):
     result.setdefault("folders", {}).update(names)
     pending_file = os.path.join(out, "organise_jobs.json")
     pending = json.load(open(pending_file)) if os.path.isfile(pending_file) else {}
-    missing = [n for n in names if n not in {o["object"] for o in result["objects"]}]
-    if missing and not any(set(missing) & set(objects) for objects in pending.values()):
+    waiting_for = {n for objects in pending.values() for n in objects}
+    missing = [n for n in names if n not in {o["object"] for o in result["objects"]} and n not in waiting_for]
+    if missing:
         files = {}
         for name in missing:
             for path in sorted(glob.glob(os.path.join(names[name], "*"))):
-                if path.lower().endswith(PICTURE_TYPES):
+                if path.lower().endswith(PICTURE_TYPES + VIDEO_TYPES):
                     files[f"objects/{name}/{os.path.basename(path)}"] = path
-        log(f"1. Organise: {len(files)} pictures of {', '.join(missing)} -> the vision AI on the uni server")
+        log(f"1. Organise: {len(files)} pictures/videos of {', '.join(missing)} -> the vision AI on the uni server")
         job_name = send(cloud, "organise", files, {"kind": "organise", "objects": missing, "code": "main"})
         pending[job_name] = missing
         json.dump(pending, open(pending_file, "w"), indent=1)
@@ -142,8 +144,10 @@ def organise(cloud, folders, out):
         with zipfile.ZipFile(archive) as z:
             z.extractall(unpacked)
         answer = json.load(open(os.path.join(unpacked, "organised.json")))
-        for crop in glob.glob(os.path.join(unpacked, "crops", "*")):
-            shutil.copy(crop, os.path.join(target, "crops"))
+        for kind in ("crops", "frames"):
+            os.makedirs(os.path.join(target, kind), exist_ok=True)
+            for item in glob.glob(os.path.join(unpacked, kind, "*")):
+                shutil.copy(item, os.path.join(target, kind))
         result["model"] = answer.get("model")
         result["objects"] = [o for o in result["objects"] if o["object"] not in objects] + answer["objects"]
         json.dump(result, open(known, "w"), indent=1)
@@ -185,7 +189,9 @@ def plan(organised, out):
             views = [os.path.join(crops, c) for c in choice.get("view_crops", [])]
             closeups = [os.path.join(crops, c["crop"]) for c in obj["crops"] if not c.get("full_body")][:2]
             source = next((c["from"] for c in obj["crops"] if c["crop"] == choice["front_crop"]), None)
-            raw = os.path.join(folder, source) if source else None
+            raw = None
+            if source:  # the picture the front was cut from: in the folder, or a video frame the AI kept
+                raw = next((p for p in (os.path.join(folder, source), os.path.join(crops, source)) if os.path.isfile(p)), None)
         every = [] if obj.get("fallback") else [os.path.join(crops, c) for c in obj.get("candidates", [])][:8]
         if every and views and views[0] in every:  # the front first
             every = [views[0]] + [v for v in every if v != views[0]]
