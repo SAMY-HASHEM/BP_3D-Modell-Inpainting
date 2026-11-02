@@ -6,7 +6,9 @@
                 close-ups, the raw picture vs. its cut-out, resolution, steps, guidance, mode, mirror, seed
   3. run        one job at a time through the Sciebo cloud (so only one GPU of the shared server is used),
                 in a round over the objects, most important tests first; no new job after --until
-  4. record     every model goes to <out>/<object>/<test>.glb with a preview from 4 sides (Blender on the
+  4. refine    refine.json in --out may be written while it runs (after looking at the results): its tests,
+                each with a "round" and a "why", go before the rest of the plan
+  5. record     every model goes to <out>/<object>/<test>.glb with a preview from 4 sides (Blender on the
                 CPU), and one line in results.jsonl: pictures, the AI's answers, settings, time, faces.
                 results.md is the table to look at; the "rating" column is for a person, and these ratings
                 are what the settings can later be learned from.
@@ -283,13 +285,13 @@ def table(records, out):
     """results.md: one row per test, with its preview and an empty rating column."""
     lines = ["# Generation tests", "", f"Updated {time.strftime('%Y-%m-%d %H:%M')}. Rate each result 1 (bad) to 5 "
              "(great) in the last column; these ratings are the training data for the settings.", "",
-             "| Object | Test | Settings | Pictures | Minutes | Faces | Result | Preview | Rating |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "| Round | Object | Test | Settings | Pictures | Minutes | Faces | Result | Preview | Rating |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for r in records:
         settings = ", ".join(f"{k}={v}" for k, v in r["options"].items())
         shown = f"![]({r['preview']})" if r.get("preview") else ""
         result = r.get("model") or f"{r['state']}: {r['message'][:80]}"
-        lines.append(f"| {r['object']} | {r['test']} | {settings} | {len(r['pictures'])} | {r['minutes']} | "
+        lines.append(f"| {r.get('round', 0)} | {r['object']} | {r['test']} | {settings} | {len(r['pictures'])} | {r['minutes']} | "
                      f"{r.get('faces') or ''} | {result} | {shown} | |")
     open(os.path.join(out, "results.md"), "w").write("\n".join(lines) + "\n")
 
@@ -317,13 +319,24 @@ def main():
     results = os.path.join(args.out, "results.jsonl")
     records = [json.loads(line) for line in open(results)] if os.path.isfile(results) else []
     done = {r["id"] for r in records}
-    for k, test in enumerate(tests):
-        if test["id"] in done:
-            continue
-        if datetime.datetime.now() >= until:
-            log(f"It's {args.until}: no new job. {len(tests) - k} tests left for another night.")
+    refine_file = os.path.join(args.out, "refine.json")
+    while True:
+        # refinement rounds: tests added while it runs (refine.json, written after looking at results) go first
+        refine = []
+        if os.path.isfile(refine_file):
+            try:
+                refine = json.load(open(refine_file))
+            except json.JSONDecodeError:
+                log("   refine.json can't be read right now; the plan goes on")
+        queue = [t for t in refine + tests if t["id"] not in done]
+        if not queue:
             break
-        log(f"3. Test {k + 1}/{len(tests)}: {test['id']}  {test['options']}  ({len(test['pictures'])} picture(s))")
+        if datetime.datetime.now() >= until:
+            log(f"It's {args.until}: no new job. {len(queue)} tests left for another night.")
+            break
+        test = queue[0]
+        kind = f"round {test['round']}" if test.get("round") else "plan"
+        log(f"3. Test ({kind}, {len(queue)} waiting): {test['id']}  {test['options']}  ({len(test['pictures'])} picture(s))")
         try:
             record = run_test(cloud, test, organised, args.out)
         except Exception as e:
@@ -331,7 +344,10 @@ def main():
             record = {"id": test["id"], "object": test["object"], "test": test["test"], "options": test["options"],
                       "pictures": test["pictures"], "state": "error", "message": f"{type(e).__name__}: {e}"[:300],
                       "minutes": 0}
+        record["round"] = test.get("round", 0)
+        record["why"] = test.get("why", "")
         records.append(record)
+        done.add(test["id"])
         with open(results, "a") as f:
             f.write(json.dumps(record) + "\n")
         table(records, args.out)
