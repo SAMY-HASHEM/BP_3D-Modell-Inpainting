@@ -11,7 +11,7 @@ YOUR PC                                           HCI GPU SERVER (A40, 48 GB)
 ───────                                           ──────────────────────────
 browser: nc.hcigroup.de (JupyterLab)  ──────────► terminal: inpaint_server.py --host 0.0.0.0
 Blender + add-on                                  (keeps TRELLIS.2 loaded, picks the freest GPU)
-  Connection: "Inside the network"
+  AI runs: "Uni (inside)"
   "2. Regenerate area"   ──── job (.zip) ───────► regenerates the marked area
   result appears in Blender ◄── model (.glb) ───  done
 ```
@@ -80,7 +80,7 @@ Wait about a minute until it says **Ready**.
 2. **Picture**: the model's picture, or one made with *Make picture from prompt* (it keeps the render
    before the edit and the edit's 2D mask, which **Method: Inversion** uses).
 3. **Method**: *Repaint* (fast) or *Inversion* (the new part joins better, about 3× slower; 25 steps for
-   the best quality). Connection: **Inside the network** → **2. Regenerate area**.
+   the best quality). At the top of the panel, *Where does the AI run?*: **Uni (inside)** → **2. Regenerate area**.
 4. The panel shows the progress (1/6 … 6/6); the result appears next to the hidden original.
 
 The ↻ button next to *Server* checks the connection: **ready**, **busy** or what is wrong.

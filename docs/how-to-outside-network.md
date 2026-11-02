@@ -11,7 +11,7 @@ In the uni network use [how-to-inside-network.md](how-to-inside-network.md) inst
 YOUR PC                              SCIEBO CLOUD                     HCI GPU SERVER (A40, 48 GB)
 ───────                              ────────────                     ──────────────────────────
 Blender + add-on                     inpainting-jobs/                 cloud_worker.py (keeps running)
-  Connection: "Outside (cloud)"
+  AI runs: "Uni (from anywhere)"
   "2. Regenerate area" ── job.zip ─► <job>.zip          ◄── checks ── every 30 s
   panel: progress      ◄─ status ──  <job>.status       ◄── writes ── runs it on the freest GPU
   result appears       ◄─ model ───  <job>__<file>.glb  ◄── uploads ─ done
@@ -75,7 +75,7 @@ The worker keeps running after you close the VDI.
 2. **Picture**: the model's picture, or one made with *Make picture from prompt* (it keeps the render
    before the edit and the edit's 2D mask, which **Method: Inversion** uses).
 3. **Method**: *Repaint* (fast) or *Inversion* (the new part joins better, about 3× slower; 25 steps for
-   the best quality). Connection: **Outside (cloud)** → **2. Regenerate area**.
+   the best quality). At the top of the panel, *Where does the AI run?*: **Uni (from anywhere)** → **2. Regenerate area**.
 4. The panel shows the progress (`queued` → `running: GPU 2: …` → `done`); the result is downloaded
    and appears next to the hidden original.
 
