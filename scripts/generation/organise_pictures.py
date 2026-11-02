@@ -72,11 +72,12 @@ Measured facts about each cut-out (from the picture it was cut from):
 %s
 
 A 3D model will be made from some of them. Rules:
-1. The front must show the WHOLE object: never one that reaches the edge of its cut-out (see the facts), and
-   above all never one cut off by the picture border.
+1. Every chosen cut-out, the front and every other view, must show the WHOLE object. Use the facts: a cut-out
+   that is cut off by the picture border is never whole. One that reaches the edge of its cut-out on three or four
+   sides is a close-up. Reaching it on only one side (e.g. the bottom) is usually just a tight cut and still whole.
 2. Every other view must show the same object in the SAME pose as the front, only seen from another side (side,
    back, three-quarter). Leave out close-ups, other poses (e.g. an action pose with weapons when the front stands
-   still), other outfits or versions, and part-ID renders.
+   still), other outfits or versions, and part-ID renders. Cut-outs that came from the same picture are fine.
 3. Fewer views are better than one wrong view. Only the front is fine.
 
 Answer only with JSON, no other text:
@@ -228,7 +229,6 @@ def facts(crop, pictures, out, videos=()):
     line = f"the object reaches the edge of its cut-out at: {', '.join(reaches) or 'nowhere (whole, background all around)'}"
     if cut:
         line += f" (there it is cut off by the picture border: {', '.join(cut)})"
-    line += f"; {len(picture.get('crops', []))} figure(s) in its picture"
     for video in videos:
         answer = video.get("answer", {})
         frames = video.get("frames", [])

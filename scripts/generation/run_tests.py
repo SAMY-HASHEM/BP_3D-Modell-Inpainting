@@ -174,9 +174,10 @@ def fallback(folders):
 
 # ---------------------------------------------------------------- 2. plan
 
-def plan(organised, out):
-    """The tests: rounds over the objects, the most telling tests first."""
-    crops = os.path.join(out, "organised")
+def plan(organised, out, folder="organised", tag=""):
+    """The tests: rounds over the objects, the most telling tests first. `folder` holds the AI's cut-outs
+    (another one after it chose again), `tag` marks its tests (e.g. "ai4")."""
+    crops = os.path.join(out, folder)
     per_object = []
     for obj in organised["objects"]:
         name, choice = obj["object"], obj.get("choice", {})
@@ -216,7 +217,8 @@ def plan(organised, out):
             ("front_seed7", [front], {"seed": 7}),
             ("views_1536_s25", views, {"mode": "multidiffusion", "resolution": "1536", "max_tokens": 40000}) if multi else None,
         ]
-        per_object.append([{"id": f"{name}__{test}", "object": name, "test": test, "pictures": pictures,
+        test_name = lambda test: f"{test}_{tag}" if tag else test
+        per_object.append([{"id": f"{name}__{test_name(test)}", "object": name, "test": test_name(test), "pictures": pictures,
                             "options": {**BASE, **options}} for test, pictures, options in (t for t in tests if t)])
     rounds = []
     for k in range(max((len(t) for t in per_object), default=0)):
@@ -300,6 +302,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run generation tests on the uni server by themselves, one at a time")
     parser.add_argument("folders", nargs="+", help="one folder of pictures per object")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--choices", default="organised",
+                        help="folder in --out with the AI's choices to plan with (e.g. organised_v4 after --choose-again)")
     parser.add_argument("--until", default="07:00", help="start no new job after this time (HH:MM, default 07:00)")
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -312,13 +316,19 @@ def main():
     cloud = Cloud()
 
     organised = organise(cloud, args.folders, args.out)
-    tests = plan(organised, args.out)
+    if args.choices != "organised":  # the AI chose again (organise_pictures.py --choose-again): plan with that
+        organised = {**json.load(open(os.path.join(args.out, args.choices, "organised.json"))), "folders": organised["folders"]}
+        organised["objects"] = [o for o in organised["objects"] if o["object"] in organised["folders"]]
+    tests = plan(organised, args.out, args.choices, args.choices.replace("organised_v", "ai") if args.choices != "organised" else "")
     json.dump(tests, open(os.path.join(args.out, "plan.json"), "w"), indent=1)
     log(f"2. Plan: {len(tests)} tests ({'organised by ' + organised['model'] if organised.get('model') else 'WITHOUT the vision AI'}; {sum(1 for o in organised['objects'] if o.get('fallback'))} object(s) without its answers)")
 
     results = os.path.join(args.out, "results.jsonl")
     records = [json.loads(line) for line in open(results)] if os.path.isfile(results) else []
     done = {r["id"] for r in records}
+    # the same pictures with the same settings never run twice (e.g. a front the AI chose again unchanged)
+    same = lambda t: (t["object"], tuple(os.path.basename(p) for p in t["pictures"]), json.dumps(t["options"], sort_keys=True))
+    ran = {same(r) for r in records if r.get("state") == "done"}
     refine_file = os.path.join(args.out, "refine.json")
     while True:
         # refinement rounds: tests added while it runs (refine.json, written after looking at results) go first
@@ -328,7 +338,7 @@ def main():
                 refine = json.load(open(refine_file))
             except json.JSONDecodeError:
                 log("   refine.json can't be read right now; the plan goes on")
-        queue = [t for t in refine + tests if t["id"] not in done]
+        queue = [t for t in refine + tests if t["id"] not in done and same(t) not in ran]
         if not queue:
             break
         if datetime.datetime.now() >= until:
@@ -348,6 +358,8 @@ def main():
         record["why"] = test.get("why", "")
         records.append(record)
         done.add(test["id"])
+        if record.get("state") == "done":
+            ran.add(same(test))
         with open(results, "a") as f:
             f.write(json.dumps(record) + "\n")
         table(records, args.out)
