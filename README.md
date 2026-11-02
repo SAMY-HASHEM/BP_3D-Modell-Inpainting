@@ -14,13 +14,13 @@ Samy Hashem
 
 | Folder | What it does |
 |---|---|
-| `scripts/models/` | picture(s) or a turntable video → 3D model, and cleaning it (`generate.py`, `multi_image.py`, `video_views.py`, `fix_normals.py`, `remove_floaters.py`, `omnipart_generate.py`) |
-| `scripts/mask/` | which area changes: the mask AI behind "Find part" (`mask_ai.py`) and OmniPart's parts (`make_part_mask.py`, `transfer_parts.py`, `cut_parts.py`, `cut_regions.py`) |
+| `scripts/models/` | picture(s) or a turntable video → 3D model, and cleaning it (`generate.py`, `multi_image.py`, `video_views.py`, `fix_normals.py`, `remove_floaters.py`, `make_views.py`) |
+| `scripts/mask/` | which area changes: the mask AI behind "Find part" (`mask_ai.py`) and cutting a model or picture into parts (`transfer_parts.py`, `cut_parts.py`, `cut_regions.py`) |
 | `scripts/regenerate/` | making the area new: `inpaint.py` (methods repaint and inversion), `inversion.py`, `edit_picture.py` (the edited picture), `insert_part.py`, `replace_part.py` |
 | `scripts/server/` | the uni GPU server: `cloud.py` + `cloud_worker.py` (outside the network), `inpaint_server.py` (inside), `run_job.py`, `sweep.py` (trying settings) |
 | `scripts/tools/` | `render_views.py`, `compare_in_blender.py/.sh`, `project_texture.py` (camera helpers) |
 | `blender/` | the Blender add-on |
 | `docs/` | how-to guides for the two server connections |
 
-Setup: `./install.sh` (TRELLIS.2), `./install_mask.sh` (mask AI), `./install_omnipart.sh` (OmniPart); then `source activate.sh`.
+Setup: `./install.sh` (TRELLIS.2) and `./install_mask.sh` (mask AI); then `source activate.sh`.
 All AI models are in `local_ai_models/` (not in Git); `./download_models.sh` gets them, and `source activate.sh` runs it by itself when something is missing.

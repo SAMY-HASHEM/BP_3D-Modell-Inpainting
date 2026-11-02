@@ -11,13 +11,12 @@
 #   qwen      Qwen-Image-Edit-2511 for ComfyUI + Lightning LoRA + multiple-angles LoRA (about 30 GB),
 #             in local_ai_models/comfyui/<kind>/ as ComfyUI expects them
 #   mask      Grounding DINO + SAM 2.1 (only if ./install_mask.sh made the mask-ai environment)
-#   omnipart  OmniPart (only if ./install_omnipart.sh made the omnipart environment)
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODELS_DIR="$PROJECT_DIR/local_ai_models"
 CONDA_DIR="$PROJECT_DIR/conda"
-WANTED=${*:-trellis qwen mask omnipart}
+WANTED=${*:-trellis qwen mask}
 
 source "$CONDA_DIR/etc/profile.d/conda.sh"
 conda activate inpainting-3d-modelling  # for the hf command
@@ -69,16 +68,8 @@ for group in $WANTED; do
             echo "  skipped: no mask-ai environment (./install_mask.sh)"
         fi
         ;;
-    omnipart)
-        if [ -d "$CONDA_DIR/envs/omnipart" ]; then
-            hf download omnipart/OmniPart >/dev/null
-            echo "  ready"
-        else
-            echo "  skipped: no omnipart environment (./install_omnipart.sh)"
-        fi
-        ;;
     *)
-        echo "  unknown group (trellis, qwen, mask, omnipart)"
+        echo "  unknown group (trellis, qwen, mask)"
         ;;
     esac
 done
