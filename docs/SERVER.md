@@ -86,5 +86,5 @@ Two ways, each with its own step-by-step guide:
 
 | Where your PC is | Guide | In Blender, Connection |
 |---|---|---|
-| in the uni network | [docs/how-to-inside-network.md](docs/how-to-inside-network.md) | Inside the network |
-| anywhere else (home) | [docs/how-to-outside-network.md](docs/how-to-outside-network.md) | Outside (cloud) |
+| in the uni network | [docs/how-to-inside-network.md](how-to-inside-network.md) | Inside the network |
+| anywhere else (home) | [docs/how-to-outside-network.md](how-to-outside-network.md) | Outside (cloud) |

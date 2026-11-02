@@ -20,7 +20,7 @@ Samy Hashem
 | `scripts/server/` | the uni GPU server: `cloud.py` + `cloud_worker.py` (outside the network), `inpaint_server.py` (inside), `run_job.py`, `sweep.py` (trying settings) |
 | `scripts/tools/` | `render_views.py`, `compare_in_blender.py/.sh`, `project_texture.py` (camera helpers) |
 | `blender/` | the Blender add-on |
-| `docs/` | how-to guides for the two server connections |
+| `docs/` | the texts: `REQUIREMENTS.md` (progress and next steps), `SETTINGS.md` (settings guide), `SERVER.md` (uni GPU server), and how-to guides for the two server connections |
 
 Setup: `./install.sh` (TRELLIS.2) and `./install_mask.sh` (mask AI); then `source activate.sh`.
 All AI models are in `local_ai_models/` (not in Git); `./download_models.sh` gets them, and `source activate.sh` runs it by itself when something is missing.
