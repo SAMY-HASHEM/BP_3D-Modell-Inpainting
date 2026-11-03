@@ -6,6 +6,8 @@ Usage:
     python scripts/generation/multi_image.py pictures/front.png pictures/back.png --mode stochastic --resolution 1536
     # colour pictures for everything, a grey clay render only for structure and shape:
     python scripts/generation/multi_image.py pictures/m40.jpg pictures/m41.jpg --shape-only pictures/m44_clay.jpg
+    # grey views for the shape, a colour picture of another version (e.g. with extra wings) only for the colours:
+    python scripts/generation/multi_image.py grey_front.png grey_back.png --shape-only --colour-only colour.png
 
 TRELLIS.2 was trained with one picture only. This is the training-free trick from TRELLIS v1
 (run_multi_image), moved to TRELLIS.2: every sampling step looks at the pictures through the same,
@@ -79,11 +81,22 @@ class MultiImageFlowModel(nn.Module):
         return self.model(x_t, t, cond[i:i + 1], **kwargs)
 
 
+def rows_for(count, texture_count=None, colour_only=0):
+    """Which pictures each stage looks at. The pictures are ordered: colour + shape first, then the
+    colour-only ones (the last `colour_only` of the first texture_count), then the shape-only ones."""
+    texture_count = texture_count or count
+    shape = [i for i in range(count) if not texture_count - colour_only <= i < texture_count]
+    return {"shape": shape if len(shape) < count else None,
+            "texture": list(range(texture_count)) if texture_count < count else None}
+
+
 @contextmanager
-def multi_image_mode(pipeline, images, mode, texture_count=None):
+def multi_image_mode(pipeline, images, mode, texture_count=None, colour_only=0):
     """Inside this block, pipeline.run() uses all `images` instead of the one picture it gets.
     With texture_count, the texture stage only looks at the first texture_count pictures (the others
-    help with structure and shape only, e.g. grey clay renders)."""
+    help with structure and shape only, e.g. grey clay renders). The last `colour_only` of these are
+    only for the texture stage (e.g. a colour picture of a version with other parts)."""
+    rows = rows_for(len(images), texture_count, colour_only)
     original_get_cond = pipeline.get_cond
     original_models = dict(pipeline.models)
 
@@ -94,8 +107,7 @@ def multi_image_mode(pipeline, images, mode, texture_count=None):
     pipeline.get_cond = get_cond_for_all_images
     for name, model in original_models.items():
         if "flow_model" in name:
-            rows = list(range(texture_count)) if texture_count and name.startswith("tex_") else None
-            pipeline.models[name] = MultiImageFlowModel(model, mode, rows)
+            pipeline.models[name] = MultiImageFlowModel(model, mode, rows["texture" if name.startswith("tex_") else "shape"])
     try:
         yield
     finally:
@@ -105,7 +117,7 @@ def multi_image_mode(pipeline, images, mode, texture_count=None):
 
 
 def generate_multi_image(pipeline, images, resolution, seed, mode, steps=DEFAULT_STEPS, texture_count=None,
-                         max_tokens=None, guidance=None):
+                         max_tokens=None, guidance=None, colour_only=0):
     """Like generate() in generate.py, but with several (already background-removed) pictures."""
     if mode == "stochastic" and len(images) > steps:
         print(f"Warning: {len(images)} pictures but only {steps} steps, so some pictures are never used.")
@@ -114,7 +126,7 @@ def generate_multi_image(pipeline, images, resolution, seed, mode, steps=DEFAULT
     sampler_params = {"steps": steps}
     shape_params = {**sampler_params, "guidance_strength": guidance} if guidance is not None else sampler_params
     extra = {"max_num_tokens": max_tokens} if max_tokens else {}  # see generate.generate()
-    with multi_image_mode(pipeline, images, mode, texture_count):
+    with multi_image_mode(pipeline, images, mode, texture_count, colour_only):
         mesh = pipeline.run(
             images[0], seed=seed, preprocess_image=False, pipeline_type=PIPELINE_TYPES[resolution],
             sparse_structure_sampler_params=shape_params,
@@ -126,13 +138,16 @@ def generate_multi_image(pipeline, images, resolution, seed, mode, steps=DEFAULT
 
 def main():
     parser = argparse.ArgumentParser(description="Several pictures of one object -> one 3D model with TRELLIS.2")
-    parser.add_argument("images", nargs="+", help="pictures of the same object, front view first")
+    parser.add_argument("images", nargs="*", help="pictures of the same object, front view first (shape + colours)")
     parser.add_argument("--mode", choices=MODES, default="multidiffusion")
     parser.add_argument("--resolution", choices=PIPELINE_TYPES.keys(), default="1024")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS, help="sampling steps per stage")
     parser.add_argument("--shape-only", nargs="+", default=[],
                         help="pictures used only for structure and shape, not for colours (e.g. clay renders)")
+    parser.add_argument("--colour-only", nargs="+", default=[],
+                        help="pictures used only for the colours, not for the shape (e.g. another version)")
+    parser.add_argument("--out", help="the model's file (default: outputs/<name>.glb)")
     parser.add_argument("--max-tokens", type=int,
                         help="limit for the fine stage (TRELLIS.2 default 49152); lower it when 1536 runs out of "
                              "GPU memory: the resolution then drops a little instead")
@@ -144,17 +159,21 @@ def main():
                         help="also use every picture flipped left-right: for objects that should be mirror-"
                              "symmetric (a body, a vase); the average of both sides comes out symmetric")
     args = parser.parse_args()
-    if len(args.images) + len(args.shape_only) < 2:
+    if len(args.images) + len(args.shape_only) + len(args.colour_only) < 2:
         parser.error("give at least two pictures (for one picture, use generate.py)")
-    for path in args.images + args.shape_only:
+    for path in args.images + args.shape_only + args.colour_only:
         if not os.path.isfile(path):
             parser.error(f"picture not found: {path}")
 
-    texture_count = len(args.images) if args.shape_only else None
-    name = f"{picture_name(args.images[0])}_multi{len(args.images)}_{args.mode}_{args.resolution}_seed{args.seed}"
+    colour_only = len(args.colour_only)
+    texture_count = len(args.images) + colour_only if args.shape_only or colour_only else None
+    first = (args.images + args.shape_only + args.colour_only)[0]
+    name = f"{picture_name(first)}_multi{len(args.images)}_{args.mode}_{args.resolution}_seed{args.seed}"
     if args.shape_only:
         name = name.replace(f"_multi{len(args.images)}_", f"_multi{len(args.images)}+{len(args.shape_only)}shape_")
-        args.images = args.images + args.shape_only
+    if colour_only:
+        name = name.replace("_multi", f"_colour{colour_only}+multi")
+    args.images = args.images + args.colour_only + args.shape_only
     if args.steps != DEFAULT_STEPS:
         name += f"_steps{args.steps}"
     if args.guidance is not None:
@@ -177,6 +196,8 @@ def main():
     if args.mirror:
         # every picture also flipped: TRELLIS.2 places a flipped picture's object flipped too, so averaging
         # the predictions of both makes the result mirror-symmetric (colour pictures stay first)
+        if colour_only:
+            parser.error("--mirror with --colour-only is not supported yet")
         colour = texture_count or len(images)
         flip = lambda pictures: [ImageOps.mirror(p) for p in pictures]
         images = images[:colour] + flip(images[:colour]) + images[colour:] + flip(images[colour:])
@@ -185,12 +206,12 @@ def main():
 
     print(f"Generating from {len(images)} pictures ({args.mode}) at {args.resolution} with {args.steps} steps...")
     mesh, gen_time = generate_multi_image(pipeline, images, args.resolution, args.seed, args.mode, args.steps,
-                                          texture_count, args.max_tokens, args.guidance)
+                                          texture_count, args.max_tokens, args.guidance, colour_only)
     print(f"    generated in {gen_time:.0f} s, {mesh.faces.shape[0]:,} faces")
 
     print("Saving as .glb...")
     start = time.time()
-    glb_path = os.path.join(OUTPUT_DIR, f"{name}.glb")
+    glb_path = args.out or os.path.join(OUTPUT_DIR, f"{name}.glb")
     save_glb(mesh, args.resolution, glb_path, faces=args.faces)
     print(f"    saved in {time.time() - start:.0f} s")
     print(f"Done: {glb_path}")

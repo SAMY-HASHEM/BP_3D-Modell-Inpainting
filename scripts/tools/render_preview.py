@@ -7,6 +7,8 @@ side by side.
 Usage:
     blender -b --python scripts/tools/render_preview.py -- outputs/model.glb /tmp/model_preview [--size 384]
     blender -b --python scripts/tools/render_preview.py -- outputs/model.glb /tmp/model_preview --closeup   # upper part, front
+    # a box of the model (glTF coordinates, Y up, as in refine.json) from the front and from 45° left / right:
+    blender -b --python scripts/tools/render_preview.py -- model.glb /tmp/head --focus X0 Y0 Z0 X1 Y1 Z1 [--samples 32]
 """
 import math
 import sys
@@ -29,7 +31,7 @@ center, radius = (low + high) / 2, (high - low).length / 2
 scene = bpy.context.scene
 scene.render.engine = "CYCLES"
 scene.cycles.device = "CPU"  # never the GPU
-scene.cycles.samples = 16
+scene.cycles.samples = int(args[args.index("--samples") + 1]) if "--samples" in args else 16
 scene.cycles.use_denoising = True
 scene.render.resolution_x = scene.render.resolution_y = size
 scene.render.film_transparent = False
@@ -48,6 +50,21 @@ camera.data.lens = 50
 scene.collection.objects.link(camera)
 scene.camera = camera
 distance = radius / math.tan(camera.data.angle / 2) * 1.05
+if "--focus" in args:  # one box of the model, the same camera for every model: before / after comparisons
+    k = args.index("--focus")
+    a, b = Vector([float(v) for v in args[k + 1:k + 4]]), Vector([float(v) for v in args[k + 4:k + 7]])
+    a, b = Vector((a.x, -a.z, a.y)), Vector((b.x, -b.z, b.y))  # glTF (Y up) -> Blender (Z up), as the importer does
+    target, span = (a + b) / 2, max((b - a).x.__abs__(), (b - a).z.__abs__()) * 0.62
+    scene.render.resolution_x = scene.render.resolution_y = 2 * size
+    for name, angle in (("front", 0), ("left", -45), ("right", 45)):
+        turn = math.radians(angle)
+        direction = Vector((math.sin(turn), -math.cos(turn), 0.08))
+        camera.location = target + direction.normalized() * span / math.tan(camera.data.angle / 2)
+        camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+        scene.render.filepath = f"{out}_{name}.png"
+        bpy.ops.render.render(write_still=True)
+    print(f"Rendered {out}_front / _left / _right.png", flush=True)
+    sys.exit(0)
 if "--closeup" in args:  # only a close-up of the upper part from the front, for rating fine detail
     height = high.z - low.z
     target = Vector((center.x, center.y, high.z - 0.2 * height))

@@ -16,9 +16,15 @@ region of a big object (a face on a full figure) gets few pixels and few voxels.
   5. zoom out  the original model outside the seam (half way through the margin) + the new part inside it,
                as two meshes in one .glb
 
+With --sorted (node 01's sorted.json, scripts/pipeline/sort_pictures.py) the region uses ALL pictures that
+show the part: the main view (the one the model's camera is fitted to) and every other view or close-up, each
+cut to the AI's box of the part, grown by the same margin. Each one has its role from node 01: shape and
+colours, shape only (grey sculpt) or colours only (another version).
+
 Usage (TRELLIS.2 environment):
     python scripts/inpainting/refine_region.py outputs/ninja.glb pictures/ninja/front.png --part head
     python scripts/inpainting/refine_region.py model.glb picture.png --picture-box 1200 300 1900 1100 --start random
+    python scripts/inpainting/refine_region.py base.glb --sorted 01_sort/sorted.json --part head --method repaint
 """
 import _paths  # noqa: F401  (the scripts of the other folders)
 
@@ -82,7 +88,11 @@ def grow_box(low, high, share):
 def main():
     parser = argparse.ArgumentParser(description="Regenerate one region of a model with more detail (zoom in, inpaint)")
     parser.add_argument("model", help="the model (.glb with one textured mesh, e.g. from generate.py)")
-    parser.add_argument("picture", help="the picture the model was made from, at full resolution")
+    parser.add_argument("picture", nargs="?", help="the picture the model was made from, at full resolution "
+                                                   "(with --sorted: node 01's main view)")
+    parser.add_argument("--sorted", help="node 01's sorted.json: use all pictures of the part, each with its role")
+    parser.add_argument("--mode", choices=["stochastic", "multidiffusion"], default="stochastic",
+                        help="how several pictures are combined (multi_image.py)")
     parser.add_argument("--part", default="head", help="what to refine, found by the vision AI (default: head)")
     parser.add_argument("--picture-box", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"),
                         help="or the region as a box in the picture's pixels (no vision AI)")
@@ -93,6 +103,8 @@ def main():
                         help="inversion: the region starts from the original's noise or from new noise")
     parser.add_argument("--steps", type=int, default=25)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--texture-guidance", type=float, help="how strictly the colours follow the pictures (default 1 = off)")
+    parser.add_argument("--faces", type=int, default=1_000_000, help="faces of the new region (default 1,000,000)")
     parser.add_argument("--grow", type=int, default=1, help="grow the regenerated region by voxels (default 1)")
     parser.add_argument("--out", help="result (default: <model>_refined_<part>.glb)")
     args = parser.parse_args()
@@ -102,8 +114,25 @@ def main():
     work = os.path.splitext(out)[0] + "_work"
     os.makedirs(work, exist_ok=True)
 
-    print(f"1. Finding the {args.part} in the picture", flush=True)
-    box = args.picture_box or find_in_picture(args.picture, args.part)
+    sorted_views = more = None
+    if args.sorted:
+        result = json.load(open(args.sorted))
+        sorted_views = {v["name"]: v for v in result["views"]}
+        lists, main = result["lists"], sorted_views[result["lists"]["base"]["front"]]
+        args.picture = os.path.join(os.path.dirname(args.sorted), main["view"])
+        part = lists[args.part]
+        role_of = {n: r for r, key in (("both", "both"), ("colour", "colour_only"), ("shape", "shape_only")) for n in part[key]}
+        main_role = role_of.get(main["name"], "shape" if main["colours"] != "colour" else "both")
+        more = [(sorted_views[n], role_of[n]) for n in role_of if n != main["name"]]
+        print(f"1. The {args.part} in the main view {main['name']} ({main_role}) + {len(more)} more pictures", flush=True)
+        if args.part not in main["part_boxes"]:
+            raise SystemExit(f"node 01 found no {args.part} in the main view")
+        b = main["part_boxes"][args.part]
+        box = [b[0] - main["box"][0], b[1] - main["box"][1], b[2] - main["box"][0], b[3] - main["box"][1]]
+    else:
+        main_role = "both"
+        print(f"1. Finding the {args.part} in the picture", flush=True)
+        box = args.picture_box or find_in_picture(args.picture, args.part)
 
     print("2. The region in the model", flush=True)
     verts, inside, cam, (width, height), (u, v) = region_in_model(args.model, args.picture, box)
@@ -133,13 +162,28 @@ def main():
     print(f"    {len(near):,} faces (of {len(mesh.faces):,}); picture cut {crop_box} "
           f"({crop_box[2] - crop_box[0]} x {crop_box[3] - crop_box[1]} px)", flush=True)
 
+    more_pictures = []
+    for k, (view, role) in enumerate(more or []):
+        # the AI's box of the part in that picture, grown like the 3D box (margin) plus the same air
+        x0, y0, x1, y1 = view["part_boxes"][args.part]
+        grow = args.margin + 0.05
+        w, h = x1 - x0, y1 - y0
+        picture = Image.open(view["picture"])
+        cut = [int(max(0, x0 - grow * w)), int(max(0, y0 - grow * h)), int(min(picture.width, x1 + grow * w)),
+               int(min(picture.height, y1 + grow * h))]
+        path = os.path.join(work, f"zoom_picture_{k + 1}_{role}.png")
+        picture.crop(cut).save(path)
+        more_pictures.append((path, role))
+        print(f"    + {view['name']} ({role}): cut {cut}", flush=True)
+
     print(f"4. Inpainting the region ({args.method}, start {args.start}, {args.steps} steps)", flush=True)
     pipeline = generate.load_pipeline()
     size = np.ptp(zoomed.vertices, 0).max()
     points = box_points(np.concatenate(inner), size)
     zoom_out = os.path.join(work, "zoom_out.glb")
     inpaint(pipeline, zoom_in, crop, points, zoom_out, grow=args.grow, seed=args.seed, steps=args.steps,
-            method=args.method, start=args.start)
+            method=args.method, start=args.start, more_pictures=more_pictures, main_role=main_role, mode=args.mode,
+            texture_guidance=args.texture_guidance, faces=args.faces)
 
     print("5. Zoom out: the original outside the seam, the new region inside it", flush=True)
     new = load_model(zoom_out)
@@ -150,7 +194,8 @@ def main():
     scene.add_geometry(new.submesh([new_faces], append=True), geom_name=f"refined_{args.part}")
     scene.export(out)
     json.dump({"picture_box": [float(x) for x in box], "crop": crop_box, "inner": np.array(inner).tolist(),
-               "margin": args.margin, "method": args.method, "start": args.start, "steps": args.steps,
+               "margin": args.margin, "method": args.method, "pictures": [[crop, main_role]] + more_pictures, "mode": args.mode,
+               "texture_guidance": args.texture_guidance, "faces": args.faces, "start": args.start, "steps": args.steps,
                "faces_kept": len(kept_faces), "faces_new": len(new_faces)},
               open(os.path.join(work, "refine.json"), "w"), indent=1)
     print(f"    {len(kept_faces):,} faces kept + {len(new_faces):,} new faces", flush=True)

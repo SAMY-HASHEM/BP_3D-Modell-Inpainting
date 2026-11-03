@@ -274,7 +274,7 @@ def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
 
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
             method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True,
-            solver="midpoint", inject=1.0, room=0.0):
+            solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
     method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
@@ -286,7 +286,12 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     render from the same view, and with `swap` TRELLIS.2 sees the original picture outside the mask.
     solver: "midpoint" (second order, as VoxHammer) or "euler" (half the evaluations, faster).
     inject: the keys and values are injected at times t <= inject only (1: always, as VoxHammer).
-    room: share of TRELLIS.2's cube kept free above the model, for new parts on top (see Placement)."""
+    room: share of TRELLIS.2's cube kept free above the model, for new parts on top (see Placement).
+    more_pictures: more pictures of the same area, as (path, role) pairs; role "both" (shape and colours),
+    "shape" (structure and shape only, e.g. a grey sculpt render) or "colour" (colours only, e.g. another
+    version). main_role is the role of `picture_path`. They are combined as in multi_image.py (mode), repaint only.
+    texture_guidance: how strictly the colours follow the pictures (TRELLIS.2's default 1 = off).
+    faces: faces of the saved region (more keeps finer detail)."""
     assert method in METHODS and start in ("inverted", "random") and solver in ("midpoint", "euler")
     step = getattr(inversion, solver)
     start_time = time.time()
@@ -319,10 +324,28 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     else:
         image = generate.prepare_image(pipeline, picture_path, "inpaint")
         source = generate.prepare_image(pipeline, source_path, "inpaint_source") if source_path else image
+    images, roles = [image], [main_role]
+    for k, (path, role) in enumerate(more_pictures):
+        assert method == "repaint" and role in ("both", "shape", "colour")
+        images.append(generate.prepare_image(pipeline, path, f"inpaint_more{k + 1}"))
+        roles.append(role)
+    shape_rows = [i for i, r in enumerate(roles) if r in ("both", "shape")]
+    colour_rows = [i for i, r in enumerate(roles) if r in ("both", "colour")]
+    assert shape_rows and colour_rows, f"no picture for the shape or for the colours: {roles}"
+    if len(images) > 1:
+        report(f"    {len(images)} pictures ({mode}): shape from {shape_rows}, colours from {colour_rows}")
+
+    def all_pictures(flow, rows):
+        """The flow model looking at all pictures of these rows (multi_image.py), or as it is for one picture."""
+        if len(images) == 1:
+            return flow
+        from multi_image import MultiImageFlowModel
+        return MultiImageFlowModel(flow, mode, rows)
+
     torch.manual_seed(seed)
     with torch.no_grad():
-        cond_512 = pipeline.get_cond([image], 512)
-        cond_1024 = pipeline.get_cond([image], 1024)
+        cond_512 = pipeline.get_cond(images, 512)
+        cond_1024 = pipeline.get_cond(images, 1024)
         source_512 = pipeline.get_cond([source], 512) if source_path else cond_512
         source_1024 = pipeline.get_cond([source], 1024) if source_path else cond_1024
         if picture_mask_path and swap:
@@ -335,7 +358,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         progress = lambda what: lambda i: report(f"{stage}: {what} {i}/{steps}")
         sampler = pipeline.sparse_structure_sampler
         params = {**pipeline.sparse_structure_sampler_params, "steps": steps}
-        flow = pipeline.models["sparse_structure_flow_model"]
+        flow = all_pictures(pipeline.models["sparse_structure_flow_model"], shape_rows)
         noise = torch.randn(1, flow.in_channels, flow.resolution, flow.resolution, flow.resolution, device=device)
         cell = GRID // flow.resolution
         cell_mask = F.max_pool3d(mask[None, None].float(), cell, cell)[0, 0] > 0
@@ -365,7 +388,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         sampler = pipeline.shape_slat_sampler
         params = {**pipeline.shape_slat_sampler_params, "steps": steps}
         mean, std = normalization(pipeline.shape_slat_normalization, device)
-        flow = pipeline.models["shape_slat_flow_model_1024"]
+        flow = all_pictures(pipeline.models["shape_slat_flow_model_1024"], shape_rows)
         shape_feats = (shape_known.feats.float() - mean) / std
         noise = SparseTensor(feats=torch.randn(len(coords), flow.in_channels, device=device), coords=coords)
         if method == "repaint":
@@ -384,8 +407,10 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         report(stage)
         sampler = pipeline.tex_slat_sampler
         params = {**pipeline.tex_slat_sampler_params, "steps": steps}
+        if texture_guidance is not None:
+            params["guidance_strength"] = texture_guidance
         tmean, tstd = normalization(pipeline.tex_slat_normalization, device)
-        flow = pipeline.models["tex_slat_flow_model_1024"]
+        flow = all_pictures(pipeline.models["tex_slat_flow_model_1024"], colour_rows)
         tex_feats = (tex_known.feats.float() - tmean) / tstd
         noise = shape_norm.replace(torch.randn(len(coords), flow.in_channels - shape_norm.feats.shape[1], device=device))
         if method == "repaint":
@@ -409,7 +434,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     gc.collect()
     torch.cuda.empty_cache()
     print(f"    {len(result.faces):,} faces; GPU memory still in use: {torch.cuda.memory_allocated() / 2**30:.1f} GB")
-    generate.save_glb(result, str(RESOLUTION), out, remesh=False)  # remeshing ~24M faces runs out of memory
+    generate.save_glb(result, str(RESOLUTION), out, remesh=False, faces=faces)  # remeshing ~24M faces runs out of memory
     del result
     torch.cuda.empty_cache()
     scene = trimesh.load(out)
