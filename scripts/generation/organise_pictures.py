@@ -79,6 +79,9 @@ A 3D model will be made from some of them. Rules:
 2. Every other view must show the same object in the SAME pose as the front, only seen from another side (side,
    back, three-quarter). Leave out close-ups, other poses (e.g. an action pose with weapons when the front stands
    still), other outfits or versions, and part-ID renders. Cut-outs that came from the same picture are fine.
+   Same version means exactly the same parts: if the front has wings, every view must show the wings; if the front
+   holds no weapon, no view may hold one; arms and legs in the same position. Compare each view with the front
+   part by part before choosing it.
 3. Fewer views are better than one wrong view. Only the front is fine.
 
 Answer only with JSON, no other text:
