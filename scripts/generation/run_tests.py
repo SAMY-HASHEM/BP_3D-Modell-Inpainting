@@ -269,7 +269,7 @@ def run_test(cloud, test, organised, out):
         log(f"   already sent as {job_name}: waiting for it")
     else:
         job_name = send(cloud, safe(test["id"]), files, job)
-        json.dump({test["id"]: job_name}, open(inflight_file, "w"))
+        json.dump({test["id"]: job_name, "test": test}, open(inflight_file, "w"))
         log(f"   sent as {job_name}")
     status = wait(cloud, job_name, 100 * 60)
     record = {"id": test["id"], "object": test["object"], "test": test["test"], "options": test["options"],
@@ -339,6 +339,26 @@ def main():
     # the same pictures with the same settings never run twice (e.g. a front the AI chose again unchanged)
     same = lambda t: (t["object"], tuple(os.path.basename(p) for p in t["pictures"]), json.dumps(t["options"], sort_keys=True))
     ran = {same(r) for r in records if r.get("state") == "done"}
+    # a job sent before a restart that the new plan doesn't know (e.g. planned with older choices): wait for it
+    # first, so that never two jobs run at the same time
+    inflight_file = os.path.join(args.out, "inflight.json")
+    if os.path.isfile(inflight_file):
+        inflight = json.load(open(inflight_file))
+        test_id = next(k for k in inflight if k != "test")
+        known = {t["id"] for t in tests}
+        if test_id not in known and test_id not in done:
+            obj, _, name = test_id.partition("__")
+            test = inflight.get("test") or {"id": test_id, "object": obj, "test": name, "pictures": [], "options": {}}
+            log(f"3. Finishing the job of an earlier plan first: {test_id}")
+            record = run_test(cloud, test, organised, args.out)
+            records.append(record)
+            done.add(test_id)
+            with open(results, "a") as f:
+                f.write(json.dumps(record) + "\n")
+            table(records, args.out)
+            log(f"   {record['state']} in {record['minutes']} min: {record.get('model') or record['message'][:120]}")
+        elif os.path.isfile(inflight_file) and test_id in done:
+            os.remove(inflight_file)
     refine_file = os.path.join(args.out, "refine.json")
     while True:
         # refinement rounds: tests added while it runs (refine.json, written after looking at results) go first
