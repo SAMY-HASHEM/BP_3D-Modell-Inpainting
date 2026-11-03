@@ -46,6 +46,8 @@ PART_WORDS = {  # what the AI is asked to put a box around
     "feet": "the feet and shoes",
 }
 
+PART_SIDE = {"back": "back", "butt": "back"}  # the side a part is seen best from (all others: the front)
+
 
 def measured_colours(image):
     """Grey sculpt render or colour picture, measured (no AI): grey renders have almost no colour saturation."""
@@ -243,6 +245,7 @@ def choose_lists(views):
     lists["base"]["front"] = shape[0]["name"] if shape else None  # the view the model's camera is fitted to
     for part in PARTS:
         lists[part] = roles([v for v in views if part in v["part_boxes"]])
+        lists[part]["side"] = PART_SIDE.get(part, "front")
     used = {name for key in ("base",) + PARTS for role in ("both", "colour_only", "shape_only") for name in lists[key][role]}
     lists["left_out"] = [v["name"] for v in views if v["name"] not in used]
     return lists

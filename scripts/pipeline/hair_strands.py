@@ -52,6 +52,7 @@ FOCUS = option("focus", None, float, 6)
 SIZE = option("size", 384, int)
 SAMPLES = option("samples", 32, int)
 SEED = option("seed", 1, int)
+CLUMP = option("clump", 0.35, float)  # how strongly strands gather into locks (0.7 pulled fringe strands over the eyes)
 random.seed(SEED)
 rng = np.random.default_rng(SEED)
 
@@ -164,8 +165,11 @@ for k in range(COUNT):
             along = away - n * away.dot(n)
         along = along.normalized() if along.length > 1e-6 else Vector((0, 0, -1))
         d = along if d is None else (0.6 * d + 0.4 * along).normalized()
-        q, n_new, _, _ = tree.find_nearest(p + d * step)
-        if q is None or (q - p).length < 0.3 * step:  # the shell ends here (a tip)
+        target = p + d * step
+        q, n_new, _, _ = tree.find_nearest(target)
+        # the strand ends where the shell ends: no shell near the next point (it would jump over a gap to other
+        # hair, e.g. from the fringe across the face to the long side hair), or no way further down (a tip)
+        if q is None or (q - target).length > 0.5 * step or (q - p).length < 0.3 * step:
             break
         p, n = q, n_new
         points.append(p + n * lift)
@@ -179,7 +183,10 @@ curves = bpy.data.hair_curves.new("hair")
 curves.add_curves([len(s) for s in strands])
 curves.position_data.foreach_set("vector", np.array([c for s in strands for v in s for c in v], np.float32))
 attribute = curves.attributes.new("hair_colour", "FLOAT_COLOR", "CURVE")
-attribute.data.foreach_set("color", np.concatenate([np.array(strand_colours), np.ones((len(strands), 1))], 1).astype(np.float32).ravel())
+# the texture's pixels are sRGB; a colour attribute is linear (without this the strands come out too light)
+srgb = np.array(strand_colours, np.float32)
+linear = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)
+attribute.data.foreach_set("color", np.concatenate([linear, np.ones((len(strands), 1))], 1).astype(np.float32).ravel())
 hair = bpy.data.objects.new("hair", curves)
 bpy.context.scene.collection.objects.link(hair)
 
@@ -187,11 +194,12 @@ bpy.context.scene.collection.objects.link(hair)
 library = os.path.join(os.path.dirname(bpy.app.binary_path), f"{bpy.app.version[0]}.{bpy.app.version[1]}",
                        "datafiles", "assets", "nodes", "procedural_hair_node_assets.blend")
 STACK = [  # (node group, {input: value}) -- the sizes are shares of the hair's height
-    ("Clump Hair Curves", {"Factor": 0.7, "Shape": 0.4, "Tip Spread": 0.002 * height, "Guide Distance": 0.025 * height,
+    ("Clump Hair Curves", {"Factor": CLUMP, "Shape": 0.4, "Tip Spread": 0.002 * height, "Guide Distance": 0.025 * height,
                            "Existing Guide Map": False, "Preserve Length": True}),
     ("Hair Curves Noise", {"Factor": 0.5, "Distance": 0.004 * height, "Scale": 8.0}),
     ("Set Hair Curve Profile", {"Radius": 0.0012 * height, "Shape": 0.5}),
 ]
+STACK = [(name, values) for name, values in STACK if name != "Clump Hair Curves" or CLUMP > 0]
 with bpy.data.libraries.load(library) as (source, target_lib):
     target_lib.node_groups = [name for name, _ in STACK]
 for name, values in STACK:

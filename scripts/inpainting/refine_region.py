@@ -130,8 +130,14 @@ def main():
         sorted_views = {v["name"]: v for v in result["views"]}
         lists = result["lists"]
         base = lists["base"]
-        # the main view: the first view the base model was made from that shows the part (the back: a back view)
+        # the main view (its camera is fitted to the model): of the views the base model was made from, the one
+        # closest to the side the part is seen from (node 01: the back and the butt from behind) that shows it
+        angle = {"front": 0, "front-right": 45, "right": 90, "back-right": 135, "back": 180, "back-left": 225,
+                 "left": 270, "front-left": 315}
+        apart = lambda a, b: min(abs(a - b), 360 - abs(a - b)) if a is not None and b is not None else 360
+        wanted = angle.get(lists[args.part].get("side", "front"), 0)
         candidates = [base["front"]] + [n for n in base["shape_only"] + base["both"] if n != base["front"]]
+        candidates.sort(key=lambda n: apart(angle.get(sorted_views[n]["side"]), wanted))  # stable: front first on ties
         main = next((sorted_views[n] for n in candidates if args.part in sorted_views[n]["part_boxes"]),
                     sorted_views[base["front"]])
         args.picture = os.path.join(os.path.dirname(args.sorted), main["view"])
@@ -140,8 +146,6 @@ def main():
         main_role = role_of.get(main["name"], "shape" if main["colours"] != "colour" else "both")
         # only pictures from the main view's side (within 90 degrees): TRELLIS.2 has no camera, so a picture from
         # behind of a front part (e.g. the back for the chest) turns the region around
-        angle = {"front": 0, "front-right": 45, "right": 90, "back-right": 135, "back": 180, "back-left": 225,
-                 "left": 270, "front-left": 315}
         def same_side(view):
             a, b = angle.get(view["side"]), angle.get(main["side"])
             return a is None or b is None or min(abs(a - b), 360 - abs(a - b)) <= 90
@@ -151,8 +155,14 @@ def main():
                 print(f"    left out: {view['name']} ({view['side']}, the main view is {main['side']})", flush=True)
         more = [(view, role) for view, role in more if same_side(view)]
         if args.best_colour is not None:
-            area = lambda view: (lambda b: (b[2] - b[0]) * (b[3] - b[1]))(view["part_boxes"][args.part])
-            coloured = sorted([m for m in more if m[1] != "shape"], key=lambda m: -area(m[0]))
+            def score(view):
+                """Complete first (the part's box touches the picture's border on at most one side: lower legs r9
+                took a close-up where the leg filled the whole picture, cut off, seen from below), then largest."""
+                b = view["part_boxes"][args.part]
+                w, h = Image.open(view["picture"]).size
+                touches = (b[0] <= 0.01 * w) + (b[1] <= 0.01 * h) + (b[2] >= 0.99 * w) + (b[3] >= 0.99 * h)
+                return (touches > 1, -(b[2] - b[0]) * (b[3] - b[1]))
+            coloured = sorted([m for m in more if m[1] != "shape"], key=lambda m: score(m[0]))
             for view, _ in coloured[args.best_colour:]:
                 print(f"    left out: {view['name']} (only the {args.best_colour} sharpest colour picture(s))", flush=True)
             more = [m for m in more if m[1] == "shape"] + coloured[:args.best_colour]
