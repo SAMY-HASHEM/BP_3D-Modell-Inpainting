@@ -66,6 +66,9 @@ LESSONS = [  # what the rounds taught, as rules the code follows now (round -> r
     "r9: back / butt need their main view from behind -> part side (sort_pictures.PART_SIDE)",
     "r9: back.jpg has another skin colour -> it must not give colours (not solved: the AI said same colours)",
     "best of r1-r9 combined: colour bands where two parts meet -> next: colour once over the whole model",
+    "THE USER'S PRINCIPLE: everything is made without colour first (like Roman marble statues: shape only, "
+    "judged in clay renders), the colours only at the very end, from the pictures, in ONE pass over the "
+    "finished model, so both sides and all parts match (no colour seams, symmetric)",
 ]
 
 NODES["06_hair"] = {"count": 30000, "length": 0.10, "points": 16, "hue_tolerance": 0.07}
@@ -197,10 +200,11 @@ class Pipeline:
         return ok
 
 
-def render(model, out, focus=None, size=384):
+def render(model, out, focus=None, size=384, clay=False):
     """Preview renders with Blender on the CPU (render_preview.py); returns the picture paths. With a focus box:
     front, 45° left and right, and from behind (r9: back and butt were never seen from behind)."""
     extra = ["--focus", *[f"{v:.5f}" for v in focus]] if focus is not None else []
+    extra += ["--clay"] if clay else []  # shape only (the shape part of the pipeline is judged without colours)
     names = ["front", "left", "right", "back"] if focus is not None else ["0", "1", "2", "3"]
     paths = [f"{out}_{n}.png" for n in names]
     if not all(os.path.exists(p) for p in paths):

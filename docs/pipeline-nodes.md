@@ -7,6 +7,13 @@ Geometry Nodes. TRELLIS.2 stays the core model; helpers (vision AI, Blender) are
 Example data: `pictures/local model` (Morrigan), 14 pictures: a grey turnaround (3 views), grey close-ups,
 a colour full shot (with back wings and a scene), colour close-ups.
 
+## The principle: colour at the very end
+Everything is made **without colour first, like Roman marble statues**: only the shape, judged in clay
+renders (`render_preview.py --clay`) next to the artist's grey sculpt renders. The colours come **only at
+the very end, from the pictures, in one pass over the finished model**, so the left and right side, the
+front and the back and all parts match (no colour seams between parts, symmetric). The colours TRELLIS.2
+makes along the way in the shape nodes are ignored.
+
 ## How to run it (all on the local GPU)
 ```
 source activate.sh
@@ -66,14 +73,14 @@ the AI named the hair colour wrongly as a hex code (#000080), so it now only nam
 colour is measured from the hair pixels (#3c9c74). Photo projection (`project_texture.py`) is no main fix:
 the user judged it bad on Oct 23 (it smears where the shape differs).
 
-## The next process (planned): shape first, colour at the end
+## The next process (planned): shape first, colour at the very end
 
 Almost every failure was a **colour** problem, and colouring each part separately leaves bands where the
 parts meet. So the colours move to the end, over the finished shape:
 
 ```
 PART 1 SHAPE    01_sort → 02_base → 04_shape_head (and other parts if the shape needs it) → 05_combine (ONE mesh)
-                judged in grey (clay renders) next to the artist's grey sculpt renders
+                no colour: judged in clay renders (like a marble statue) next to the artist's grey sculpt renders
 PART 2 COLOUR   07_colour_base → 08_colour_<part> (colours only, one sharp picture each) → 09_colour_face
                 on the one finished mesh, so there are no colour seams between parts
 PART 3 HAIR     06_hair: strands on the final shell, colours from the final texture

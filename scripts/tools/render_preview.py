@@ -9,6 +9,7 @@ Usage:
     blender -b --python scripts/tools/render_preview.py -- outputs/model.glb /tmp/model_preview --closeup   # upper part, front
     # a box of the model (glTF coordinates, Y up, as in refine.json) from the front, 45° left / right and behind:
     blender -b --python scripts/tools/render_preview.py -- model.glb /tmp/head --focus X0 Y0 Z0 X1 Y1 Z1 [--samples 32]
+    blender -b --python scripts/tools/render_preview.py -- model.glb /tmp/model --clay   # shape only, no colours
 """
 import math
 import sys
@@ -23,6 +24,12 @@ size = int(args[args.index("--size") + 1]) if "--size" in args else 384
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=model)
 meshes = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+if "--clay" in args:  # without colours, like a marble statue: for judging the shape alone
+    clay = bpy.data.materials.new("clay")
+    clay.diffuse_color = (0.72, 0.72, 0.70, 1)
+    for o in meshes:
+        o.data.materials.clear()
+        o.data.materials.append(clay)
 corners = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
 low = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
 high = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
