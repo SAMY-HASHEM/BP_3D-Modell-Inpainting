@@ -1,4 +1,4 @@
-# BP Inpainting in ComfyUI
+# BP Inpainting in ComfyUI (and in Blender)
 
 The node pipeline (`scripts/pipeline/`) as ComfyUI nodes: drag in pictures or a video, see the data sheet,
 the base model, every part before and after, and the final model in a 3D viewer, all in one graph.
@@ -37,3 +37,15 @@ The 3D viewer is ComfyUI's own **Preview 3D** node (connect `model_3d`).
   `outputs/pipeline/<name>/<node>/<settings hash>/` (with `settings.json`, `log.txt`, `compare.jpg`), so the same
   settings are never computed twice, even after a restart.
 - **Cancel** in ComfyUI stops the running script.
+
+## The same nodes in Blender
+`blender/pipeline_nodes.py` is a node editor of its own in Blender ("BP Pipeline" in the node editor's tree
+menu). Blender's Geometry Nodes can't run outside programs (TRELLIS.2, the vision AI), so it is a separate node
+tree; only the hair node uses real Geometry Nodes. Both editors use `scripts/pipeline/nodes_core.py`, so they do
+exactly the same and share one cache: a result made in ComfyUI is found in Blender and the other way round.
+```
+ln -sfn ~/inpainting-3D/blender/pipeline_nodes.py ~/.config/blender/5.2/scripts/addons/pipeline_nodes.py
+```
+Blender: Edit → Preferences → Add-ons → enable **BP Pipeline Nodes**. In a node editor choose the tree type
+**BP Pipeline**, sidebar (N) → **BP** → **New pipeline**. Each node: its picture (data sheet, before / after),
+**Picture** (big, in an Image Editor), **In scene** (its model into a collection of its own), **Run up to here**.

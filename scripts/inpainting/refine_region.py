@@ -96,6 +96,9 @@ def main():
     parser.add_argument("--best-colour", type=int,
                         help="with --sorted: of the colour pictures, only this many, the ones showing the part the "
                              "largest (most pixels): one sharp picture gave a clean face, six mixed ones smeared it")
+    parser.add_argument("--shape-pictures", type=int,
+                        help="with --sorted: at most this many extra shape-only pictures (0 = none). The face was "
+                             "clean with ONE picture in total (r8) and got a black mouth again with two grey views added")
     parser.add_argument("--mode", choices=["stochastic", "multidiffusion"], default="stochastic",
                         help="how several pictures are combined (multi_image.py)")
     parser.add_argument("--part", default="head", help="what to refine, found by the vision AI (default: head)")
@@ -166,6 +169,11 @@ def main():
             for view, _ in coloured[args.best_colour:]:
                 print(f"    left out: {view['name']} (only the {args.best_colour} sharpest colour picture(s))", flush=True)
             more = [m for m in more if m[1] == "shape"] + coloured[:args.best_colour]
+        if args.shape_pictures is not None:
+            shapes = [m for m in more if m[1] == "shape"]
+            for view, _ in shapes[args.shape_pictures:]:
+                print(f"    left out: {view['name']} (at most {args.shape_pictures} extra shape picture(s))", flush=True)
+            more = shapes[:args.shape_pictures] + [m for m in more if m[1] != "shape"]
         print(f"1. The {args.part} in the main view {main['name']} ({main_role}) + {len(more)} more pictures", flush=True)
         if args.part not in main["part_boxes"]:
             raise SystemExit(f"node 01 found no {args.part} in the main view")

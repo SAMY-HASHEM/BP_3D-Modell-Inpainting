@@ -113,6 +113,7 @@
    "part": "lower_legs",
    "shape": "auto",
    "colour_pictures": 1,
+   "shape_pictures": "auto",
    "texture_guidance": 3.0,
    "steps": 25,
    "seed": 42
@@ -147,6 +148,7 @@
    "part": "thighs",
    "shape": "auto",
    "colour_pictures": 1,
+   "shape_pictures": "auto",
    "texture_guidance": 3.0,
    "steps": 25,
    "seed": 42
@@ -181,6 +183,7 @@
    "part": "feet",
    "shape": "auto",
    "colour_pictures": 1,
+   "shape_pictures": "auto",
    "texture_guidance": 3.0,
    "steps": 25,
    "seed": 42
@@ -215,6 +218,7 @@
    "part": "belly",
    "shape": "auto",
    "colour_pictures": 1,
+   "shape_pictures": "auto",
    "texture_guidance": 3.0,
    "steps": 25,
    "seed": 42
@@ -249,6 +253,7 @@
    "part": "bust",
    "shape": "auto",
    "colour_pictures": 1,
+   "shape_pictures": "auto",
    "texture_guidance": 3.0,
    "steps": 25,
    "seed": 42
@@ -283,6 +288,7 @@
    "part": "head",
    "shape": "auto",
    "colour_pictures": 1,
+   "shape_pictures": "auto",
    "texture_guidance": 3.0,
    "steps": 25,
    "seed": 42

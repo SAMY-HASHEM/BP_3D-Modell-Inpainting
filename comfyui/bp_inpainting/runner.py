@@ -1,54 +1,27 @@
-"""Helpers for the BP Inpainting nodes: run our scripts in the project's own environment, cache results,
-render previews, turn pictures into ComfyUI images.
+"""Running the jobs of scripts/pipeline/nodes_core.py from ComfyUI.
 
 The nodes run inside ComfyUI's Python, but TRELLIS.2, the vision AI and our scripts need the project's
-conda environment. So every heavy step runs as its own process: `source activate.sh && python <script>`.
-ComfyUI's environment stays untouched, and the GPU memory is free again after each step.
+conda environment. So every step runs as its own process: `source activate.sh && <command>`. ComfyUI's
+environment stays untouched, and the GPU memory is free again after each step.
 """
-import hashlib
-import json
+import importlib.util
 import os
 import subprocess
 import time
 
 import numpy as np
 import torch
-from PIL import Image, ImageDraw
+from PIL import Image
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-SCRIPTS = os.path.join(PROJECT, "scripts")
-OUTPUTS = os.path.join(PROJECT, "outputs", "pipeline")
-BLENDER = os.environ.get("BLENDER", "blender")
+_spec = importlib.util.spec_from_file_location("bp_nodes_core", os.path.join(PROJECT, "scripts", "pipeline", "nodes_core.py"))
+core = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(core)  # standard library only: safe inside ComfyUI
 
 
-def project_path(path):
-    """A path as the user typed it: relative paths are relative to the project folder."""
-    path = os.path.expanduser(path.strip())
-    return path if os.path.isabs(path) else os.path.join(PROJECT, path)
-
-
-def node_folder(name, node, settings):
-    """The folder of one node's result. Its name comes from the settings and the inputs (with their
-    modification times), so the same settings are never computed twice, even after a restart."""
-    key = json.dumps(settings, sort_keys=True, default=str)
-    digest = hashlib.sha1(key.encode()).hexdigest()[:8]
-    folder = os.path.join(OUTPUTS, name, node, digest)
-    os.makedirs(folder, exist_ok=True)
-    json.dump(settings, open(os.path.join(folder, "settings.json"), "w"), indent=1, default=str)
-    return folder
-
-
-def stamp(path):
-    """A file or folder as part of a cache key: the path and when it last changed."""
-    try:
-        return [path, round(os.path.getmtime(path), 1)]
-    except OSError:
-        return [path, None]
-
-
-def run(command, folder, label, done=None):
-    """Runs one of our scripts in the project environment, writing log.txt into `folder`. Skips the run when
-    the file `done` is already there (cached). Stops the process when ComfyUI's Cancel is pressed."""
+def run_step(command, folder, label, done=None):
+    """One command in the project environment, its output in folder/log.txt. Skipped when `done` exists.
+    ComfyUI's Cancel stops it."""
     if done and os.path.exists(done):
         print(f"[BP] {label}: done before ({os.path.relpath(folder, PROJECT)})", flush=True)
         return
@@ -59,7 +32,8 @@ def run(command, folder, label, done=None):
     env["PYTHONUNBUFFERED"] = "1"
     print(f"[BP] {label}: running ({os.path.relpath(folder, PROJECT)})", flush=True)
     start = time.time()
-    with open(os.path.join(folder, "log.txt"), "w") as log:
+    log_path = os.path.join(folder, "log.txt" if not label.endswith("preview") else "log_preview.txt")
+    with open(log_path, "w") as log:
         process = subprocess.Popen(["bash", "-c", shell], stdout=log, stderr=subprocess.STDOUT, cwd=PROJECT, env=env)
         try:
             while process.poll() is None:
@@ -69,43 +43,34 @@ def run(command, folder, label, done=None):
             process.kill()
             raise
     if process.returncode != 0 or (done and not os.path.exists(done)):
-        tail = open(os.path.join(folder, "log.txt"), errors="replace").read()[-1500:]
-        raise RuntimeError(f"{label} failed (see {folder}/log.txt):\n{tail}")
+        tail = open(log_path, errors="replace").read()[-1500:]
+        raise RuntimeError(f"{label} failed (see {log_path}):\n{tail}")
     print(f"[BP] {label}: done in {time.time() - start:.0f} s", flush=True)
 
 
-def render(model, out, focus=None, size=384, clay=False):
-    """Preview renders with Blender on the CPU (scripts/tools/render_preview.py), cached next to `out`."""
-    extra = ["--focus", *[f"{v:.5f}" for v in focus]] if focus is not None else []
-    extra += ["--clay"] if clay else []
-    names = ["front", "left", "right", "back"] if focus is not None else ["0", "1", "2", "3"]
-    paths = [f"{out}_{n}.png" for n in names]
-    if not all(os.path.exists(p) for p in paths):
-        subprocess.call([BLENDER, "-b", "--python", os.path.join(SCRIPTS, "tools", "render_preview.py"), "--",
-                         os.path.abspath(model), os.path.abspath(out), "--size", str(size), *extra],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return [p for p in paths if os.path.exists(p)]
-
-
-def sheet(rows, cell=320):
-    """A comparison picture: rows of (label, [pictures]), every picture fitted into one cell."""
-    rows = [(label, pics) for label, pics in rows if pics]
-    width = max(len(pics) for _, pics in rows) * cell
-    picture = Image.new("RGB", (width, len(rows) * (cell + 26)), (40, 40, 44))
-    draw = ImageDraw.Draw(picture)
-    for r, (label, pics) in enumerate(rows):
-        y = r * (cell + 26)
-        draw.text((6, y + 6), label, fill=(255, 255, 255))
-        for c, p in enumerate(pics):
-            image = Image.open(p).convert("RGB") if isinstance(p, str) else p.convert("RGB")
-            image.thumbnail((cell, cell))
-            picture.paste(image, (c * cell + (cell - image.width) // 2, y + 26 + (cell - image.height) // 2))
-    return picture
+def run_job(job):
+    for command, label, done in job["steps"]:
+        run_step(command, job["folder"], label, done)
+    return job["outputs"]
 
 
 def to_image(picture):
-    """A PIL picture as a ComfyUI IMAGE (1, H, W, 3, values 0..1)."""
+    """A picture (path or PIL) as a ComfyUI IMAGE (1, H, W, 3, values 0..1)."""
+    if isinstance(picture, str):
+        picture = Image.open(picture)
     return torch.from_numpy(np.asarray(picture.convert("RGB"), np.float32) / 255)[None]
+
+
+def grid(paths, cell=256, cols=6):
+    """Pictures small in one picture (videos are left out)."""
+    pics = [p for p in paths if p.lower().endswith(core.PICTURE_TYPES)][:36]
+    rows = max(1, -(-len(pics) // cols))
+    picture = Image.new("RGB", (min(len(pics), cols) * cell or cell, rows * cell), (40, 40, 44))
+    for k, p in enumerate(pics):
+        image = Image.open(p).convert("RGB")
+        image.thumbnail((cell, cell))
+        picture.paste(image, ((k % cols) * cell + (cell - image.width) // 2, (k // cols) * cell + (cell - image.height) // 2))
+    return to_image(picture)
 
 
 def file3d(path):

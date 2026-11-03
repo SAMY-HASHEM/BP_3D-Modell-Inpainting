@@ -53,7 +53,7 @@ NODES = {
                   # the order in 05_combine (first wins where two regions overlap)
                   "parts": ["head", "bust", "belly", "butt", "back", "thighs", "lower_legs", "feet", "legs"]},
     # the head is the only part whose shape is regenerated too (zoomed: hair locks, ears, lips), margin 0.6
-    "04_refine_head": {"keep_shape": False, "margin_of_model": None},
+    "04_refine_head": {"keep_shape": False, "margin_of_model": None, "shape_pictures": 0},
 }
 
 LESSONS = [  # what the rounds taught, as rules the code follows now (round -> rule)
@@ -66,6 +66,8 @@ LESSONS = [  # what the rounds taught, as rules the code follows now (round -> r
     "r9: back / butt need their main view from behind -> part side (sort_pictures.PART_SIDE)",
     "r9: back.jpg has another skin colour -> it must not give colours (not solved: the AI said same colours)",
     "best of r1-r9 combined: colour bands where two parts meet -> next: colour once over the whole model",
+    "ComfyUI run: the head with 1 colour picture BUT 2 grey shape views got a black mouth again -> the face takes "
+    "ONE picture in total (shape_pictures 0), as in r8",
     "THE USER'S PRINCIPLE: everything is made without colour first (like Roman marble statues: shape only, "
     "judged in clay renders), the colours only at the very end, from the pictures, in ONE pass over the "
     "finished model, so both sides and all parts match (no colour seams, symmetric)",
@@ -291,6 +293,8 @@ def node_04_refine(p, part):
                "--sorted", p.newest("01_sort", "sorted.json"), "--part", part, "--method", s["method"],
                "--margin", str(s["margin"]), "--steps", str(s["steps"]), "--mode", s["mode"], "--seed", str(s["seed"]),
                "--grow", str(s["grow"]), "--out", out]
+    if s.get("shape_pictures") is not None:
+        command += ["--shape-pictures", str(s["shape_pictures"])]
     if s.get("best_colour") is not None:
         command += ["--best-colour", str(s["best_colour"])]
     if s.get("only"):
