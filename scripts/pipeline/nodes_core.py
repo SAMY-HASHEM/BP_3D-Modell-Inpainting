@@ -105,7 +105,7 @@ def base(sorted_, mode="stochastic", resolution="1024", steps=12, faces=4_000_00
     lists = result["lists"]["base"]
     path = lambda names: [os.path.join(os.path.dirname(sorted_["path"]), views[n]["view"]) for n in names]
     folder = node_folder(sorted_["name"], "02_base", {"sorted": stamp(sorted_["path"]), "mode": mode, "resolution": resolution,
-                                                      "steps": steps, "faces": faces, "seed": seed})
+                                                      "steps": steps, "faces": faces, "seed": seed, "min_side": 1024})
     out = os.path.join(folder, "base.glb")
     command = py("generation/multi_image.py", *path(lists["both"]), "--mode", mode, "--resolution", resolution,
                  "--steps", steps, "--faces", faces, "--seed", seed, "--out", out)
@@ -129,7 +129,8 @@ def refine(base_model, sorted_, part, shape="auto", colour_pictures=1, shape_pic
     keep = (part != "head") if shape == "auto" else shape.startswith("keep")
     no_shape_views = shape_pictures == "none" or (shape_pictures == "auto" and part == "head")
     settings = {"base": stamp(base_model["glb"]), "sorted": stamp(sorted_["path"]), "part": part, "keep_shape": keep,
-                "colour_pictures": colour_pictures, "texture_guidance": texture_guidance, "steps": steps, "seed": seed}
+                "colour_pictures": colour_pictures, "texture_guidance": texture_guidance, "steps": steps, "seed": seed,
+                "min_side": 1024}
     if no_shape_views:
         settings["shape_pictures"] = 0
     folder = node_folder(sorted_["name"], f"04_refine_{part}", settings)

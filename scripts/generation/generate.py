@@ -57,6 +57,39 @@ def load_pipeline():
     return pipeline
 
 
+MIN_SIDE = 1024  # every picture TRELLIS.2 gets: the object at least this big on its longest side (the user's rule)
+UPSCALER = os.path.join(PROJECT_DIR, "local_ai_models", "upscale", "RealESRGAN_x4plus.pth")
+_upscaler = {}
+
+
+def upscale_small(image, min_side=MIN_SIDE):
+    """A picture whose longest side is below min_side, made bigger with an AI upscaler (Real-ESRGAN x4, through
+    spandrel), so that TRELLIS.2 always gets at least min_side pixels of the object. Small cut-outs (a figure of a
+    turnaround sheet, a zoomed-in region) otherwise reach TRELLIS.2 with far fewer pixels than it can use."""
+    if max(image.size) >= min_side:
+        return image
+    alpha = image.getchannel("A") if image.mode == "RGBA" else None
+    try:
+        if "model" not in _upscaler:
+            import spandrel
+            _upscaler["model"] = spandrel.ModelLoader().load_from_file(UPSCALER).cuda().eval()
+        model = _upscaler["model"]
+        x = torch.from_numpy(np.asarray(image.convert("RGB"), np.float32) / 255).permute(2, 0, 1)[None].cuda()
+        with torch.no_grad():
+            y = model(x).clamp(0, 1)[0].permute(1, 2, 0).cpu().numpy()
+        big = Image.fromarray((y * 255).astype(np.uint8))
+        how = "Real-ESRGAN x4"
+    except Exception as e:  # no upscaler: at least bigger (blurry)
+        big, how = image.convert("RGB"), f"Lanczos ({type(e).__name__}: {e})"[:120]
+    scale = min_side / max(image.size) * 1.25  # a little above the minimum
+    size = (round(image.width * scale), round(image.height * scale))
+    big = big.resize(size, Image.LANCZOS)
+    if alpha is not None:
+        big.putalpha(alpha.resize(size, Image.LANCZOS))
+    print(f"    picture {image.width} x {image.height} -> {size[0]} x {size[1]} ({how}): at least {min_side} px", flush=True)
+    return big
+
+
 def crop_to_object(pipeline, image):
     """Crops a big picture to its object (with a small margin) before TRELLIS.2 shrinks it.
 
@@ -65,7 +98,7 @@ def crop_to_object(pipeline, image):
     stretches that back to 1024. Cropping first keeps the full 1024 px for the object itself.
     """
     if max(image.size) <= 1024:
-        return image  # already small: nothing is lost
+        return upscale_small(image)  # small: made bigger, never smaller than MIN_SIDE
     if image.mode == "RGBA" and np.asarray(image)[..., 3].min() < 255:
         alpha = np.asarray(image)[..., 3]  # cut-outs already say where the object is
         scale = 1.0
@@ -79,12 +112,12 @@ def crop_to_object(pipeline, image):
             pipeline.rembg_model.cpu()
     ys, xs = np.nonzero(alpha > 0.8 * 255)
     if len(xs) == 0:
-        return image
+        return upscale_small(image)
     x0, x1, y0, y1 = xs.min() / scale, (xs.max() + 1) / scale, ys.min() / scale, (ys.max() + 1) / scale
     margin = 0.02 * max(x1 - x0, y1 - y0)
     box = (max(0, int(x0 - margin)), max(0, int(y0 - margin)),
            min(image.width, int(x1 + margin)), min(image.height, int(y1 + margin)))
-    return image.crop(box)
+    return upscale_small(image.crop(box))
 
 
 def prepare_image(pipeline, image_path, name):
