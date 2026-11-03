@@ -104,6 +104,16 @@ Answer only with JSON, no other text:
 {"whole": true | false, "id_render": true | false, "side": one of %s, "why": "a few words"}"""
 
 
+SAME = """The first picture is the front view of: %s. The second picture is another cut-out of it.
+Compare them part by part: wings, weapons, held objects, clothes, arms and legs.
+
+Answer only with JSON, no other text:
+{"same_parts": true | false,   // exactly the same parts (e.g. both with wings, both without a weapon)
+ "same_pose": true | false,    // arms and legs in the same position, only seen from another side
+ "side": the side the second picture shows, one of %s,
+ "why": "a few words"}"""
+
+
 def load(model_name, cpu):
     from transformers import AutoModelForImageTextToText, AutoProcessor
     print(f"Loading {model_name} ({'CPU' if cpu else 'GPU'})...", flush=True)
@@ -276,6 +286,18 @@ def choose(model, processor, name, pictures, crops, out, videos=()):
         print(f"  choice for {name}: {json.dumps(choice)}", flush=True)
         choice["raw"] = raw
         resolve(choice, [c["crop"] for c in candidates])
+        # step 3: every chosen view next to the front, one pair at a time: same parts and pose?
+        front_image = shrink(Image.open(os.path.join(out, choice["front_crop"])).convert("RGB"), 448)
+        kept, checks = [choice["front_crop"]], {}
+        for view in choice["view_crops"][1:]:
+            image = shrink(Image.open(os.path.join(out, view)).convert("RGB"), 448)
+            answer, _ = ask(model, processor, [front_image, image], SAME % (thing, "|".join(f'"{x}"' for x in SIDES)), 200)
+            checks[view] = answer
+            print(f"  {view} next to the front: {json.dumps(answer)}", flush=True)
+            if answer.get("same_parts") is True and answer.get("same_pose") is True:
+                kept.append(view)
+        choice["pair_checks"] = checks
+        choice["view_crops"] = kept
     return candidates, choice
 
 
