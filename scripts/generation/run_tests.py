@@ -353,6 +353,8 @@ def main():
             record = run_test(cloud, test, organised, args.out)
             records.append(record)
             done.add(test_id)
+            if record.get("state") == "done" and test.get("pictures"):
+                ran.add(same(test))
             with open(results, "a") as f:
                 f.write(json.dumps(record) + "\n")
             table(records, args.out)
