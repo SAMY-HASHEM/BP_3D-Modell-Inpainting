@@ -201,3 +201,22 @@ def compare(models, clay=False):
     return {"folder": folder, "steps": [(preview("compare", out, *(["--clay"] if clay else []), *[m["glb"] for m in models]),
                                          "99 compare", out)],
             "outputs": {"sheet": out}}
+
+
+def pick_best(candidates):
+    """04b: the local vision AI (Qwen3.6-27B, Ollama) picks the candidate closest to the artist's picture.
+    The chosen model is only known after the run: resolve() reads it."""
+    folder = node_folder(candidates[0]["name"], f"04b_pick_{candidates[0].get('part', 'part')}",
+                         {"candidates": [stamp(c["glb"]) for c in candidates]})
+    out = os.path.join(folder, "judge.json")
+    return {"folder": folder,
+            "steps": [(py("pipeline/judge.py", *[os.path.dirname(c["glb"]) for c in candidates], "--out", folder), "04b pick", out)],
+            "outputs": {"model_from": out, "candidates": candidates, "sheet": os.path.join(folder, "compare.jpg")}}
+
+
+def resolve(outputs):
+    """Outputs that are only known after the run (pick_best: which candidate won)."""
+    if "model_from" in outputs:
+        best = json.load(open(outputs["model_from"]))["best"]
+        outputs = {**outputs, "model": next(c for c in outputs["candidates"] if c["glb"] == best)}
+    return outputs

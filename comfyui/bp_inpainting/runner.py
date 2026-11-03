@@ -51,7 +51,7 @@ def run_step(command, folder, label, done=None):
 def run_job(job):
     for command, label, done in job["steps"]:
         run_step(command, job["folder"], label, done)
-    return job["outputs"]
+    return core.resolve(job["outputs"])
 
 
 def to_image(picture):

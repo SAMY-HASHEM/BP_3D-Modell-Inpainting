@@ -156,6 +156,26 @@ class RefinePart:
         return (out["model"], to_image(out["sheet"]), file3d(out["model"]["glb"]))
 
 
+class PickBest:
+    """Node 04b: the local vision AI (Qwen3.6-27B) compares candidates of one part (e.g. the head with several
+    seeds) with the artist's picture and passes on the best. The face changes a lot with small changes of the
+    random start, so one seed is a lottery."""
+    CATEGORY = CATEGORY
+    RETURN_TYPES = ("BP_MODEL", "IMAGE", "FILE_3D_GLB")
+    RETURN_NAMES = ("best", "compare", "model_3d")
+    FUNCTION = "pick"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"candidate_1": ("BP_MODEL",), "candidate_2": ("BP_MODEL",)},
+                "optional": {f"candidate_{k}": ("BP_MODEL",) for k in range(3, 7)}}
+
+    def pick(self, **candidates):
+        found = [candidates[f"candidate_{k}"] for k in range(1, 7) if candidates.get(f"candidate_{k}")]
+        out = run_job(core.pick_best(found))
+        return (out["model"], to_image(out["sheet"]), file3d(out["model"]["glb"]))
+
+
 class Combine:
     """Node 05: the refined parts put into the base model. The first part wins where two overlap."""
     CATEGORY = CATEGORY
@@ -230,12 +250,12 @@ class Compare:
 
 NODE_CLASS_MAPPINGS = {
     "BP_Pictures": Pictures, "BP_AddPicture": AddPicture, "BP_AddVideo": AddVideo, "BP_Sort": Sort,
-    "BP_BaseModel": BaseModel, "BP_RefinePart": RefinePart, "BP_Combine": Combine, "BP_Hair": Hair,
+    "BP_BaseModel": BaseModel, "BP_RefinePart": RefinePart, "BP_PickBest": PickBest, "BP_Combine": Combine, "BP_Hair": Hair,
     "BP_Compare": Compare,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "BP_Pictures": "BP 00 Pictures (folder)", "BP_AddPicture": "BP 00 Add picture", "BP_AddVideo": "BP 00 Add video",
     "BP_Sort": "BP 01 Sort pictures (data sheet)", "BP_BaseModel": "BP 02 Base model (TRELLIS.2)",
-    "BP_RefinePart": "BP 04 Refine part", "BP_Combine": "BP 05 Combine parts", "BP_Hair": "BP 06 Hair strands",
+    "BP_RefinePart": "BP 04 Refine part", "BP_PickBest": "BP 04b Pick best (local AI)", "BP_Combine": "BP 05 Combine parts", "BP_Hair": "BP 06 Hair strands",
     "BP_Compare": "BP 99 Compare models",
 }

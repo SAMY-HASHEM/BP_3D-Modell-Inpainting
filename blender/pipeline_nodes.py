@@ -39,6 +39,7 @@ core = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(core)  # standard library only
 
 TREE = "BPPipelineTree"
+SEEDS = (42, 7, 123, 2024)  # the head's candidates for the Pick best node
 state = {"queue": [], "process": None, "thread": None, "error": None, "tree": None, "log": ""}
 
 
@@ -178,6 +179,18 @@ class RefineNode(BPNode, bpy.types.Node):
                            self.steps, self.seed), None
 
 
+class PickBestNode(BPNode, bpy.types.Node):
+    """04b: the local vision AI picks the candidate closest to the artist's picture (e.g. the head with several seeds)"""
+    bl_idname, bl_label, bl_width_default = "BPPickBest", "04b Pick best (local AI)", 300
+
+    def init(self, context):
+        self.inputs.new("BPModelSocket", "candidates", use_multi_input=True)
+        self.outputs.new("BPModelSocket", "best")
+
+    def job(self):
+        return core.pick_best([n.value("model") for n in (self.upstream("candidates") or []) if n.value("model")]), None
+
+
 class CombineNode(BPNode, bpy.types.Node):
     """05: the parts put into the base (the first connected part wins where two overlap)"""
     bl_idname, bl_label, bl_width_default = "BPCombine", "05 Combine parts", 280
@@ -231,7 +244,7 @@ class CompareNode(BPNode, bpy.types.Node):
         return core.compare([n.value("model") for n in (self.upstream("models") or []) if n.value("model")], self.clay), None
 
 
-NODES = (PicturesNode, SortNode, BaseNode, RefineNode, CombineNode, HairNode, CompareNode)
+NODES = (PicturesNode, SortNode, BaseNode, RefineNode, PickBestNode, CombineNode, HairNode, CompareNode)
 
 
 # ------------------------------------------------------------------ running
@@ -292,7 +305,7 @@ def load_picture(node, path):
 
 
 def finish(node, outputs, job):
-    outputs = dict(outputs)
+    outputs = core.resolve(dict(outputs))
     node.result = json.dumps(outputs)
     node.status = f"done: {os.path.relpath(job['folder'], PROJECT)}" if job else "done"
     load_picture(node, outputs.get("sheet") or (outputs.get("renders") or [None])[0])
@@ -451,19 +464,27 @@ class BP_OT_new_pipeline(bpy.types.Operator):
         base = add("BPBase", 680, 0)
         link(sort, "sorted", base, "sorted")
         parts = {}
-        for k, part in enumerate(["lower_legs", "thighs", "feet", "belly", "bust", "head"]):
+        for k, part in enumerate(["lower_legs", "thighs", "feet", "belly", "bust"]):
             parts[part] = add("BPRefine", 1040, 400 - k * 420, part=part)
             parts[part].label = f"04 {part}"
             link(base, "model", parts[part], "base")
             link(sort, "sorted", parts[part], "sorted")
+        pick = add("BPPickBest", 1420, -1700)  # the face is a lottery: 4 seeds, the local AI picks
+        for k, seed in enumerate(SEEDS):
+            head = add("BPRefine", 1040, -1700 - k * 420, part="head", seed=seed)
+            head.label = f"04 head seed {seed}"
+            link(base, "model", head, "base")
+            link(sort, "sorted", head, "sorted")
+            link(head, "part", pick, "candidates")
+        parts["head"] = pick
         combine = add("BPCombine", 1420, 0)
         link(base, "model", combine, "base")
         for part in ["head", "bust", "belly", "thighs", "lower_legs", "feet"]:  # the first wins where they overlap
-            link(parts[part], "part", combine, "parts")
+            link(parts[part], parts[part].outputs[0].name, combine, "parts")
         hair = add("BPHair", 1780, 0)
         link(combine, "model", hair, "model")
         link(sort, "sorted", hair, "sorted")
-        link(parts["head"], "part", hair, "head")
+        link(parts["head"], "best", hair, "head")
         compare = add("BPCompare", 1780, -520)
         link(base, "model", compare, "models")
         link(combine, "model", compare, "models")

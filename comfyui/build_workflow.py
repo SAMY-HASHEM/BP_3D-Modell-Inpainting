@@ -125,8 +125,9 @@ which part each close-up shows. Check the sheet before the GPU spends time.
 **3 Base model**: the whole figure (TRELLIS.2), with renders and a clay render (shape alone).
 
 **4 Parts**, from easy to hard: each part zoomed in from its one sharpest picture. *auto* = colours
-only (shape kept); the head also regenerates its shape. Back and butt are left out (no good colour
-picture of them yet).
+only (shape kept); the head also regenerates its shape, from one picture in total. The face is a
+lottery, so it is made with 4 seeds and the local AI (Qwen3.6-27B) picks the best. Back and butt are
+left out (no good colour picture of them yet).
 
 **5 Final**: Combine (the head wins where parts overlap) -> Hair strands (Blender Geometry Nodes)
 -> Compare: base vs final, in colour and as clay.
@@ -154,12 +155,23 @@ def layout():
     group("3 Base model", 1960, -60, 1040, 860, "#a1309b")
 
     parts = {}
-    for k, part in enumerate(["lower_legs", "thighs", "feet", "belly", "bust", "head"]):
+    for k, part in enumerate(["lower_legs", "thighs", "feet", "belly", "bust"]):
         x = 3040 + k * 520
         parts[part] = node("BP_RefinePart", (x, 0), f"4.{k + 1} {part}", size=(340, 240), base=ref(base), sorted=ref(sort),
                            part=part)
         node("PreviewImage", (x, 280), f"{part}: pictures | before | after", size=(500, 460), images=ref(parts[part], 1))
-    group("4 Parts, from easy to hard (the face last)", 3020, -60, 6 * 520 + 20, 860, "#b58b2a")
+    group("4 Parts, from easy to hard", 3020, -60, 5 * 520 + 20, 860, "#b58b2a")
+    # the face is a lottery (r8 clean, the same inputs again broken): 4 seeds, the local AI picks the best
+    heads = []
+    for k, seed in enumerate((42, 7, 123, 2024)):
+        x = 3040 + k * 520
+        heads.append(node("BP_RefinePart", (x, 900), f"4.6 head, seed {seed}", size=(340, 240), base=ref(base),
+                          sorted=ref(sort), part="head", seed=seed))
+        node("PreviewImage", (x, 1180), f"head seed {seed}", size=(500, 460), images=ref(heads[-1], 1))
+    parts["head"] = node("BP_PickBest", (3040 + 4 * 520, 900), "4.7 Pick best head (local AI)", size=(320, 200),
+                         **{f"candidate_{k + 1}": ref(h) for k, h in enumerate(heads)})
+    node("PreviewImage", (3040 + 4 * 520, 1140), "the local AI's choice", size=(620, 500), images=ref(parts["head"], 1))
+    group("4b The face last: 4 seeds, the local AI picks", 3020, 840, 4 * 520 + 700, 860, "#b06634")
 
     x = 3040 + 6 * 520 + 60
     order = ["head", "bust", "belly", "thighs", "lower_legs", "feet"]  # the first wins where two overlap
