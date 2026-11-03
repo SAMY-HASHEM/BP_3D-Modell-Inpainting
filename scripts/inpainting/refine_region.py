@@ -248,7 +248,7 @@ def main():
     scene.export(out)
     json.dump({"picture_box": [float(x) for x in box], "crop": crop_box, "inner": np.array(inner).tolist(),
                "margin": args.margin, "method": args.method, "pictures": [[crop, main_role]] + more_pictures, "mode": args.mode,
-               "texture_guidance": args.texture_guidance, "faces": args.faces, "keep_shape": args.keep_shape, "start": args.start, "steps": args.steps,
+               "texture_guidance": args.texture_guidance, "faces": args.faces, "keep_shape": args.keep_shape, "seed": args.seed, "start": args.start, "steps": args.steps,
                "faces_kept": len(kept_faces), "faces_new": len(new_faces)},
               open(os.path.join(work, "refine.json"), "w"), indent=1)
     print(f"    {len(kept_faces):,} faces kept + {len(new_faces):,} new faces", flush=True)

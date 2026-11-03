@@ -207,7 +207,7 @@ def pick_best(candidates):
     """04b: the local vision AI (Qwen3.6-27B, Ollama) picks the candidate closest to the artist's picture.
     The chosen model is only known after the run: resolve() reads it."""
     folder = node_folder(candidates[0]["name"], f"04b_pick_{candidates[0].get('part', 'part')}",
-                         {"candidates": [stamp(c["glb"]) for c in candidates]})
+                         {"candidates": [stamp(c["glb"]) for c in candidates], "judge": "one candidate at a time"})
     out = os.path.join(folder, "judge.json")
     return {"folder": folder,
             "steps": [(py("pipeline/judge.py", *[os.path.dirname(c["glb"]) for c in candidates], "--out", folder), "04b pick", out)],

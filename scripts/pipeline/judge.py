@@ -23,16 +23,16 @@ from PIL import Image, ImageDraw
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MODEL = "qwen3.6:27b"
 
-QUESTION = """The first picture is the artist's picture of the %s of a character. The next %d pairs of pictures are %d
-3D models of that part (numbered 1 to %d), each seen from the front and from the side.
+# One candidate at a time (the artist's picture + its front and side render): with all candidates in one question
+# (9 pictures) the AI mixed up the numbers and picked the worst one.
+QUESTION = """The first picture is the artist's picture of the %s of a character. The second and third pictures show a
+3D model of that part, from the front and from the side.
 
-Which 3D model is closest to the artist's picture? Look at: the face (eyes, lips, nose), the colours, and defects:
-holes, black spots or smears, broken or melted parts, a wrong mouth. A model with clear defects is worse than a
-plainer one without.
+How close is the 3D model to the artist's picture? First list its defects: holes, black spots or smears, parts that
+look broken or melted, hair covering the face, a wrong mouth or eyes. Then give a score: 10 = like the picture,
+no defects; 1 = unusable. Clear defects make the score low, even when the colours are right.
 Answer only with JSON, no other text:
-{"scores": [one number from 1 (bad) to 10 (like the picture) per model, in order],
- "best": the number of the best model,
- "why": "a few words"}"""
+{"defects": ["..."], "score": a number from 1 to 10, "why": "a few words"}"""
 
 
 def encoded(path, size=512):
@@ -70,12 +70,17 @@ def main():
     part = os.path.basename(found[0]["glb"])[:-4]
     colour = [p for p, role in first["pictures"] if role in ("both", "colour")]
     reference = os.path.join(os.path.splitext(found[0]["glb"])[0] + "_work", os.path.basename(colour[0]))
-    images = [encoded(reference)] + [encoded(r) for c in found for r in c["renders"]]
     n = len(found)
-    answer, raw = ask(images, QUESTION % (part.replace("_", " "), n, n, n))
-    best = answer.get("best")
-    best = best if isinstance(best, int) and 1 <= best <= n else 1 + max(range(n), key=lambda k: (answer.get("scores") or [0] * n)[k])
-    result = {"model": MODEL, "part": part, "reference": reference, "answer": answer, "raw": raw,
+    answers = []
+    for k, c in enumerate(found):
+        answer, raw = ask([encoded(reference)] + [encoded(r) for r in c["renders"]], QUESTION % part.replace("_", " "))
+        score = answer.get("score") if isinstance(answer.get("score"), (int, float)) else 0
+        answers.append({**answer, "score": score, "raw": raw})
+        print(f"  {k + 1}: score {score}, defects {answer.get('defects')}", flush=True)
+    # the highest score wins; on a tie the one with fewer defects
+    best = 1 + max(range(n), key=lambda k: (answers[k]["score"], -len(answers[k].get("defects") or [])))
+    answer = {"scores": [a["score"] for a in answers], "best": best, "why": answers[best - 1].get("why", "")}
+    result = {"model": MODEL, "part": part, "reference": reference, "answers": answers, "answer": answer,
               "candidates": [{"folder": c["folder"], "glb": c["glb"], "seed": c["info"].get("seed")} for c in found],
               "best": found[best - 1]["glb"]}
     json.dump(result, open(os.path.join(args.out, "judge.json"), "w"), indent=1)
