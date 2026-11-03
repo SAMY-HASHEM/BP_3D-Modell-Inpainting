@@ -259,10 +259,18 @@ def faces(model):
 
 def run_test(cloud, test, organised, out):
     files = {f"picture{i}{os.path.splitext(p)[1].lower()}": p for i, p in enumerate(test["pictures"])}
-    job = {"kind": "generate", "name": test["id"], "pictures": list(files), "options": test["options"]}
+    job = {"kind": "generate", "name": test["id"], "pictures": list(files), "options": test["options"],
+           "code": "main"}  # the worker brings itself to the newest code first (fixes made during the night)
     started = time.time()
-    job_name = send(cloud, safe(test["id"]), files, job)
-    log(f"   sent as {job_name}")
+    inflight_file = os.path.join(out, "inflight.json")  # the job on its way: after a restart, wait for it, never send twice
+    inflight = json.load(open(inflight_file)) if os.path.isfile(inflight_file) else {}
+    if test["id"] in inflight:
+        job_name = inflight[test["id"]]
+        log(f"   already sent as {job_name}: waiting for it")
+    else:
+        job_name = send(cloud, safe(test["id"]), files, job)
+        json.dump({test["id"]: job_name}, open(inflight_file, "w"))
+        log(f"   sent as {job_name}")
     status = wait(cloud, job_name, 100 * 60)
     record = {"id": test["id"], "object": test["object"], "test": test["test"], "options": test["options"],
               "pictures": [os.path.relpath(p, out) if p.startswith(out) else p for p in test["pictures"]],
@@ -280,6 +288,8 @@ def run_test(cloud, test, organised, out):
         record["faces"] = faces(model)
         shown = preview(model, os.path.join(folder, f"{test['test']}.jpg"))
         record["preview"] = os.path.relpath(shown, out) if shown else None
+    if os.path.isfile(inflight_file):
+        os.remove(inflight_file)
     return record
 
 

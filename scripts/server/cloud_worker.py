@@ -208,7 +208,10 @@ def execute(cloud, job_name, folder, zip_path, job, gpu):
         if char == b"\n":
             print(text, flush=True)
         if time.time() - last_report > 20:  # progress for Blender / cloud.py status
-            cloud.write_status(job_name, "running", f"GPU {gpu}: {text[:150]}")
+            try:
+                cloud.write_status(job_name, "running", f"GPU {gpu}: {text[:150]}")
+            except Exception as e:  # only the progress line is lost; the job goes on (and keeps its GPU)
+                print(f"    progress not written: {type(e).__name__}: {e}", flush=True)
             last_report = time.time()
     if process.wait() != 0 or not results:
         cloud.write_status(job_name, "failed", " | ".join(tail[-4:])[:500])

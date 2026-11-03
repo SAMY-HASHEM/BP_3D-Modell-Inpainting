@@ -65,7 +65,18 @@ class Cloud:
         token = base64.b64encode(f"{config['user']}:{config['password']}".encode()).decode()
         self.auth = {"Authorization": f"Basic {token}"}
 
-    def request(self, method, path, data=None, headers=None, timeout=60):
+    def request(self, method, path, data=None, headers=None, timeout=60, tries=6):
+        """One WebDAV request; short-lived refusals (a file locked for a moment, too many requests, the cloud
+        busy) are tried again a few times, waiting a little longer each time."""
+        for attempt in range(tries):
+            try:
+                return self.request_once(method, path, data, headers, timeout)
+            except urllib.error.HTTPError as e:
+                if e.code not in (423, 429, 500, 502, 503, 504) or attempt == tries - 1:
+                    raise
+                time.sleep(5 * (attempt + 1))
+
+    def request_once(self, method, path, data=None, headers=None, timeout=60):
         url = f"{self.url}/{urllib.parse.quote(path)}"
         request = urllib.request.Request(url, data=data, method=method, headers={**self.auth, **(headers or {})})
         try:
@@ -77,7 +88,7 @@ class Cloud:
                 raise
             print("    the proxy refuses: going to the cloud directly from now on", flush=True)
             use_direct()
-            return self.request(method, path, data, headers, timeout)
+            return self.request_once(method, path, data, headers, timeout)
 
     def list(self, folder=None):
         """Names of the files in a cloud folder."""
