@@ -31,15 +31,28 @@ from PIL import Image, ImageDraw
 import organise_pictures as ai
 
 SIDES = ai.SIDES
-PARTS = ("head", "hair", "chest", "legs", "feet", "back")  # the parts that get their own refine node
+# the parts that get their own refine node: small boxes get more zoom (the user: bust, belly and butt
+# looked bad inside the big chest and legs boxes, and the butt sat on the seam between back and legs)
+PARTS = ("head", "hair", "bust", "belly", "back", "butt", "thighs", "lower_legs", "feet")
 PART_WORDS = {  # what the AI is asked to put a box around
     "head": "the head (face and the hair on top of the head, from the top of the head down to the chin)",
     "hair": "all of the hair, from the top of the head down to the tips of the longest strands",
-    "chest": "the chest and belly (from the shoulders down to the hips)",
-    "legs": "both legs (from the hips down to the ankles)",
+    "bust": "the breasts (from the collarbones down to just below the breasts)",
+    "belly": "the belly and waist (from just below the breasts down to the hips)",
+    "back": "the upper back (from the shoulders down to the waist)",
+    "butt": "the hips and the bottom (buttocks)",
+    "thighs": "the thighs (both upper legs, from the hips down to the knees)",
+    "lower_legs": "the lower legs (from the knees down to the ankles)",
     "feet": "the feet and shoes",
-    "back": "the back of the body (from the shoulders down to the hips)",
 }
+
+
+def measured_colours(image):
+    """Grey sculpt render or colour picture, measured (no AI): grey renders have almost no colour saturation."""
+    import numpy as np
+    rgb = np.asarray(ai.shrink(image, 256).convert("RGB"), np.float32) / 255
+    saturation = (rgb.max(-1) - rgb.min(-1)) / (rgb.max(-1) + 1e-6)
+    return ("grey" if np.percentile(saturation, 75) < 0.2 else "colour"), round(float(np.percentile(saturation, 75)), 3)
 
 VIEWS = """Look at this picture. It may show one figure, the same figure several times from different sides next to
 each other (a turnaround sheet), or only a close-up of a part.
@@ -114,8 +127,11 @@ def look(model, processor, folder, out, size):
                 part_box = ai.to_pixels(answer.get("box"), crop.width, crop.height, shown_crop.size)
                 if part_box:  # in pixels of the original picture
                     boxes_of_parts[part] = [part_box[0] + box[0], part_box[1] + box[1], part_box[2] + box[0], part_box[3] + box[1]]
+            colours, saturation = measured_colours(crop)
+            if colours != tags.get("colours"):
+                print(f"    {name}: the AI said {tags.get('colours')}, measured {colours} (saturation {saturation})", flush=True)
             view = {"name": name, "picture": os.path.abspath(path), "view": os.path.relpath(view_path, out),
-                    "box": list(box), "colours": tags.get("colours"), "side": tags.get("side") if tags.get("side") in SIDES else "unknown",
+                    "box": list(box), "colours": colours, "colours_ai": tags.get("colours"), "saturation": saturation, "side": tags.get("side") if tags.get("side") in SIDES else "unknown",
                     "whole": tags.get("whole") is True, "parts": parts, "wings_on_back": tags.get("wings_on_back") is True,
                     "scene": tags.get("scene") if isinstance(tags.get("scene"), list) else [], "why": tags.get("why"),
                     "part_boxes": boxes_of_parts}
@@ -162,8 +178,7 @@ def check(model, processor, thing, views, out, size):
             if answer.get("is_part") is not True or answer.get("main_character") is not True:
                 del v["part_boxes"][part]
                 print(f"    {v['name']}: no {part} ({answer.get('why')})", flush=True)
-        votes = [a.get("colours") for a in v["part_checks"].values()] + [v["colours"]]
-        v["colours"] = max(("colour", "grey"), key=votes.count)  # the majority of all looks
+        # the colours stay measured (saturation), the AI's looks are only kept for the record
         v["same_colours"] = True
         if v["colours"] == "colour" and not v["whole"] and whole_colour:
             pair = [ai.shrink(Image.open(os.path.join(out, x["view"])).convert("RGB"), 512) for x in (whole_colour, v)]

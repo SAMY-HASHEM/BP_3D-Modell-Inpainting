@@ -44,7 +44,8 @@ NODES = {
     "02_base": {"mode": "stochastic", "resolution": "1024", "steps": 12, "faces": 4_000_000, "seed": 42},
     # the head test the user liked: repaint, margin 0.6, 25 steps; now with all pictures of the part
     "04_refine": {"method": "repaint", "margin": 0.6, "steps": 25, "mode": "stochastic", "seed": 42, "grow": 1,
-                  "parts": ["head", "chest", "back", "legs", "feet"]},  # also the order in 05_combine (first wins)
+                  # the order in 05_combine (first wins where two regions overlap)
+                  "parts": ["head", "bust", "belly", "butt", "back", "thighs", "lower_legs", "feet"]},
 }
 
 NODES["06_hair"] = {"count": 30000, "length": 0.10, "points": 16, "hue_tolerance": 0.07}
@@ -65,7 +66,40 @@ ROUNDS = {  # round: {node: changed settings}, "why": the reason
     5: {"why": "r4 head: pink lips and eye shadow like the pictures, brighter hair: the same settings for every part",
         **{f"04_refine_{part}": {"texture_guidance": 3.0, "faces": 4_000_000} for part in ("chest", "back", "legs", "feet")},
         "use": {"04_refine_head": 4}},
+    6: {"why": "r5 chest failed: the back picture (seen from behind) in the chest list turned the body around, and "
+               "margin 0.6 of the chest = almost the whole model (no zoom). Now: only pictures from the main view's "
+               "side, the margin as a share of the model (0.1) for every part but the head, and the parts from easy "
+               "to hard (legs, feet, chest, back; the face last)",
+        **{f"04_refine_{part}": {"texture_guidance": 3.0, "faces": 4_000_000, "margin_of_model": 0.1}
+           for part in ("chest", "back", "legs", "feet")},
+        "use": {"04_refine_head": 4}},
 }
+
+ROUNDS[7] = {"why": "r6 legs: the colours right (pink with bats) but the shape worse (lumpy, a hole at the knee); "
+                    "the base shape from the 3 grey views was already good. Now two kinds of refine: colour only "
+                    "(keep shape) for the clothes and body, shape + colours only for the head",
+             **{f"04_refine_{part}": {"texture_guidance": 3.0, "faces": 4_000_000, "margin_of_model": 0.1,
+                                      "keep_shape": True} for part in ("chest", "back", "legs", "feet")},
+             "use": {"04_refine_head": 4}}
+
+ROUNDS[8] = {"why": "face test: r3/r4 mixed 6 head pictures from different angles (stochastic: each colour picture "
+                    "~8 of 25 steps), which smears eyes and lips; the ninja head worked with ONE picture. Now the "
+                    "head with one sharp picture only (morrigan-01-001), like the ninja",
+             "04_refine_head": {"texture_guidance": 3.0, "faces": 4_000_000,
+                                "only": ["deyvson-william-morrigan-01-camera-money-shot-001"]}}
+
+ROUNDS[9] = {"why": "the user: bust, belly and butt looked bad. They were inside the big chest / legs boxes (2x and "
+                    "1.5x zoom) and the butt on the seam between back and legs. Now finer parts (bust, belly, butt, "
+                    "thighs, lower legs) with ~4-5x zoom; grey / colour measured (002 was wrongly 'grey'); "
+                    "colours only, the shape stays",
+             **{f"04_refine_{part}": {"texture_guidance": 3.0, "faces": 4_000_000, "margin_of_model": 0.1,
+                                      "keep_shape": True, "best_colour": 1}
+                for part in ("bust", "belly", "butt", "back", "thighs", "lower_legs", "feet")},
+             "use": {"04_refine_head": 8}}
+ROUNDS[9]["why"] += "; r8 head with ONE picture: clean lips and eyes, so every part takes only its sharpest colour picture"
+
+# from easy to hard (the user: legs and clothes first, the face last)
+RUN_ORDER = ["lower_legs", "thighs", "feet", "belly", "back", "butt", "bust", "head"]
 
 
 def settings(node, round_):
@@ -219,6 +253,14 @@ def node_04_refine(p, part):
                "--sorted", p.newest("01_sort", "sorted.json"), "--part", part, "--method", s["method"],
                "--margin", str(s["margin"]), "--steps", str(s["steps"]), "--mode", s["mode"], "--seed", str(s["seed"]),
                "--grow", str(s["grow"]), "--out", out]
+    if s.get("best_colour") is not None:
+        command += ["--best-colour", str(s["best_colour"])]
+    if s.get("only"):
+        command += ["--only", *s["only"]]
+    if s.get("keep_shape"):
+        command += ["--keep-shape"]
+    if s.get("margin_of_model"):
+        command += ["--margin-of-model", str(s["margin_of_model"])]
     if s.get("texture_guidance"):
         command += ["--texture-guidance", str(s["texture_guidance"])]
     if s.get("faces"):
@@ -334,7 +376,7 @@ def main():
     wanted = lambda node: not args.only or node in args.only
     if not args.compare_only:
         steps = [("01_sort", lambda: node_01_sort(p)), ("02_base", lambda: node_02_base(p))]
-        steps += [(f"04_refine_{part}", lambda part=part: node_04_refine(p, part)) for part in NODES["04_refine"]["parts"]]
+        steps += [(f"04_refine_{part}", lambda part=part: node_04_refine(p, part)) for part in RUN_ORDER]
         steps += [("05_combine", lambda: node_05_combine(p)), ("06_hair", lambda: node_06_hair(p))]
         for node, step in steps:
             if wanted(node):

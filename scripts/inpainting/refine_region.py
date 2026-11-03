@@ -91,6 +91,11 @@ def main():
     parser.add_argument("picture", nargs="?", help="the picture the model was made from, at full resolution "
                                                    "(with --sorted: node 01's main view)")
     parser.add_argument("--sorted", help="node 01's sorted.json: use all pictures of the part, each with its role")
+    parser.add_argument("--only", nargs="+", help="with --sorted: use only these pictures (names from sorted.json) "
+                                                  "besides the main view, e.g. one sharp front picture")
+    parser.add_argument("--best-colour", type=int,
+                        help="with --sorted: of the colour pictures, only this many, the ones showing the part the "
+                             "largest (most pixels): one sharp picture gave a clean face, six mixed ones smeared it")
     parser.add_argument("--mode", choices=["stochastic", "multidiffusion"], default="stochastic",
                         help="how several pictures are combined (multi_image.py)")
     parser.add_argument("--part", default="head", help="what to refine, found by the vision AI (default: head)")
@@ -98,6 +103,9 @@ def main():
                         help="or the region as a box in the picture's pixels (no vision AI)")
     parser.add_argument("--margin", type=float, default=0.35,
                         help="the kept margin around the region, as a share of its size (default 0.35)")
+    parser.add_argument("--margin-of-model", type=float,
+                        help="or the margin as a share of the whole model's height (the same width for big and small "
+                             "parts, so big parts still get zoomed), e.g. 0.1")
     parser.add_argument("--method", choices=["inversion", "repaint"], default="inversion")
     parser.add_argument("--start", choices=["inverted", "random"], default="inverted",
                         help="inversion: the region starts from the original's noise or from new noise")
@@ -105,6 +113,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--texture-guidance", type=float, help="how strictly the colours follow the pictures (default 1 = off)")
     parser.add_argument("--faces", type=int, default=1_000_000, help="faces of the new region (default 1,000,000)")
+    parser.add_argument("--keep-shape", action="store_true",
+                        help="only the colours are regenerated, the shape stays exactly as it is (e.g. clothes)")
     parser.add_argument("--grow", type=int, default=1, help="grow the regenerated region by voxels (default 1)")
     parser.add_argument("--out", help="result (default: <model>_refined_<part>.glb)")
     args = parser.parse_args()
@@ -118,12 +128,34 @@ def main():
     if args.sorted:
         result = json.load(open(args.sorted))
         sorted_views = {v["name"]: v for v in result["views"]}
-        lists, main = result["lists"], sorted_views[result["lists"]["base"]["front"]]
+        lists = result["lists"]
+        base = lists["base"]
+        # the main view: the first view the base model was made from that shows the part (the back: a back view)
+        candidates = [base["front"]] + [n for n in base["shape_only"] + base["both"] if n != base["front"]]
+        main = next((sorted_views[n] for n in candidates if args.part in sorted_views[n]["part_boxes"]),
+                    sorted_views[base["front"]])
         args.picture = os.path.join(os.path.dirname(args.sorted), main["view"])
         part = lists[args.part]
         role_of = {n: r for r, key in (("both", "both"), ("colour", "colour_only"), ("shape", "shape_only")) for n in part[key]}
         main_role = role_of.get(main["name"], "shape" if main["colours"] != "colour" else "both")
-        more = [(sorted_views[n], role_of[n]) for n in role_of if n != main["name"]]
+        # only pictures from the main view's side (within 90 degrees): TRELLIS.2 has no camera, so a picture from
+        # behind of a front part (e.g. the back for the chest) turns the region around
+        angle = {"front": 0, "front-right": 45, "right": 90, "back-right": 135, "back": 180, "back-left": 225,
+                 "left": 270, "front-left": 315}
+        def same_side(view):
+            a, b = angle.get(view["side"]), angle.get(main["side"])
+            return a is None or b is None or min(abs(a - b), 360 - abs(a - b)) <= 90
+        more = [(sorted_views[n], role_of[n]) for n in role_of if n != main["name"] and (not args.only or n in args.only)]
+        for view, _ in more:
+            if not same_side(view):
+                print(f"    left out: {view['name']} ({view['side']}, the main view is {main['side']})", flush=True)
+        more = [(view, role) for view, role in more if same_side(view)]
+        if args.best_colour is not None:
+            area = lambda view: (lambda b: (b[2] - b[0]) * (b[3] - b[1]))(view["part_boxes"][args.part])
+            coloured = sorted([m for m in more if m[1] != "shape"], key=lambda m: -area(m[0]))
+            for view, _ in coloured[args.best_colour:]:
+                print(f"    left out: {view['name']} (only the {args.best_colour} sharpest colour picture(s))", flush=True)
+            more = [m for m in more if m[1] == "shape"] + coloured[:args.best_colour]
         print(f"1. The {args.part} in the main view {main['name']} ({main_role}) + {len(more)} more pictures", flush=True)
         if args.part not in main["part_boxes"]:
             raise SystemExit(f"node 01 found no {args.part} in the main view")
@@ -139,6 +171,9 @@ def main():
     if inside.sum() < 50:
         raise SystemExit(f"Only {inside.sum()} vertices of the model lie in that box: is it the right picture?")
     inner = (verts[inside].min(0), verts[inside].max(0))
+    if args.margin_of_model:
+        args.margin = round(args.margin_of_model * np.ptp(verts, 0).max() / (inner[1] - inner[0]).max(), 3)
+        print(f"    margin {args.margin} of the part's size ({args.margin_of_model} of the model's)", flush=True)
     outer = grow_box(*inner, args.margin)
     seam = grow_box(*inner, args.margin / 2)
     print(f"    {inside.sum():,} of {len(verts):,} vertices; inner box {np.round(inner, 3).tolist()}", flush=True)
@@ -183,7 +218,7 @@ def main():
     zoom_out = os.path.join(work, "zoom_out.glb")
     inpaint(pipeline, zoom_in, crop, points, zoom_out, grow=args.grow, seed=args.seed, steps=args.steps,
             method=args.method, start=args.start, more_pictures=more_pictures, main_role=main_role, mode=args.mode,
-            texture_guidance=args.texture_guidance, faces=args.faces)
+            texture_guidance=args.texture_guidance, faces=args.faces, keep_shape=args.keep_shape)
 
     print("5. Zoom out: the original outside the seam, the new region inside it", flush=True)
     new = load_model(zoom_out)
@@ -195,7 +230,7 @@ def main():
     scene.export(out)
     json.dump({"picture_box": [float(x) for x in box], "crop": crop_box, "inner": np.array(inner).tolist(),
                "margin": args.margin, "method": args.method, "pictures": [[crop, main_role]] + more_pictures, "mode": args.mode,
-               "texture_guidance": args.texture_guidance, "faces": args.faces, "start": args.start, "steps": args.steps,
+               "texture_guidance": args.texture_guidance, "faces": args.faces, "keep_shape": args.keep_shape, "start": args.start, "steps": args.steps,
                "faces_kept": len(kept_faces), "faces_new": len(new_faces)},
               open(os.path.join(work, "refine.json"), "w"), indent=1)
     print(f"    {len(kept_faces):,} faces kept + {len(new_faces):,} new faces", flush=True)

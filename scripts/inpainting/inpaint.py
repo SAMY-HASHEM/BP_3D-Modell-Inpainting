@@ -274,7 +274,7 @@ def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
 
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
             method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True,
-            solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000):
+            solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000, keep_shape=False):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
     method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
@@ -291,7 +291,9 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     "shape" (structure and shape only, e.g. a grey sculpt render) or "colour" (colours only, e.g. another
     version). main_role is the role of `picture_path`. They are combined as in multi_image.py (mode), repaint only.
     texture_guidance: how strictly the colours follow the pictures (TRELLIS.2's default 1 = off).
-    faces: faces of the saved region (more keeps finer detail)."""
+    faces: faces of the saved region (more keeps finer detail).
+    keep_shape: only the colours are regenerated; the structure and shape stay exactly the model's own
+    (for parts whose shape is already right but whose colours are not, e.g. clothes)."""
     assert method in METHODS and start in ("inverted", "random") and solver in ("midpoint", "euler")
     step = getattr(inversion, solver)
     start_time = time.time()
@@ -362,7 +364,10 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         noise = torch.randn(1, flow.in_channels, flow.resolution, flow.resolution, flow.resolution, device=device)
         cell = GRID // flow.resolution
         cell_mask = F.max_pool3d(mask[None, None].float(), cell, cell)[0, 0] > 0
-        if method == "repaint":
+        if keep_shape:
+            report("    the structure stays the model's own (keep shape)")
+            z = None
+        elif method == "repaint":
             with KeepKnown(sampler, ~cell_mask[None, None], ss_known, noise, progress("step")), OnGpu(flow):
                 z = sampler.sample(flow, noise, **cond_512, **params, verbose=True,
                                    tqdm_desc="Sampling sparse structure").samples
@@ -373,9 +378,12 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
             kept = inversion.Kept(cells, cells, weight)
             z = follow_original(sampler, flow, params, steps, cond_512, source_512, ss_known, kept,
                                 start=None if start == "inverted" else noise, progress=progress, step=step, inject=inject)
-        with OnGpu(pipeline.models["sparse_structure_decoder"]) as decoder:
-            new_occupied = decoder(z)[0, 0] > 0
-        occupied = torch.where(mask, new_occupied, occupied[0, 0] > 0)
+        if keep_shape:
+            occupied = occupied[0, 0] > 0
+        else:
+            with OnGpu(pipeline.models["sparse_structure_decoder"]) as decoder:
+                new_occupied = decoder(z)[0, 0] > 0
+            occupied = torch.where(mask, new_occupied, occupied[0, 0] > 0)
         coords = torch.argwhere(occupied).int()
         coords = torch.cat([torch.zeros_like(coords[:, :1]), coords], 1)
         inside = mask[coords[:, 1].long(), coords[:, 2].long(), coords[:, 3].long()]
@@ -391,7 +399,11 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         flow = all_pictures(pipeline.models["shape_slat_flow_model_1024"], shape_rows)
         shape_feats = (shape_known.feats.float() - mean) / std
         noise = SparseTensor(feats=torch.randn(len(coords), flow.in_channels, device=device), coords=coords)
-        if method == "repaint":
+        if keep_shape:
+            report("    the shape stays the model's own (keep shape)")
+            x0, found = lookup(coords, shape_known.coords, shape_feats)
+            shape = SparseTensor(feats=x0 * found[:, None], coords=coords)
+        elif method == "repaint":
             x0, found = lookup(coords, shape_known.coords, shape_feats)
             with KeepKnown(sampler, (found & ~inside)[:, None], x0, noise.feats, progress("step")), OnGpu(flow):
                 shape = sampler.sample(flow, noise, **cond_1024, **params, verbose=True,
