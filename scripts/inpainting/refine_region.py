@@ -119,8 +119,17 @@ def main():
     parser.add_argument("--keep-shape", action="store_true",
                         help="only the colours are regenerated, the shape stays exactly as it is (e.g. clothes)")
     parser.add_argument("--grow", type=int, default=1, help="grow the regenerated region by voxels (default 1)")
+    parser.add_argument("--box3d", type=float, nargs=6, metavar=("X0", "Y0", "Z0", "X1", "Y1", "Z1"),
+                        help="block mode (node 04 of the grid loop): the region as a box in the model's coordinates "
+                             "(e.g. a bad block of grid_judge.py); `picture` is the view that sees it best")
+    parser.add_argument("--role", choices=["both", "shape", "colour"], default="both",
+                        help="block mode: what the picture is for (a grey sculpt render: shape)")
+    parser.add_argument("--soft", type=int, default=0,
+                        help="inversion: a soft edge of this many voxels, so the new block grows into the old model")
     parser.add_argument("--out", help="result (default: <model>_refined_<part>.glb)")
     args = parser.parse_args()
+    if args.box3d:
+        args.part = "block"
     start = time.time()
     name = os.path.splitext(args.model)[0]
     out = args.out or f"{name}_refined_{args.part.replace(' ', '_')}_{args.method}_{args.start}.glb"
@@ -128,7 +137,12 @@ def main():
     os.makedirs(work, exist_ok=True)
 
     sorted_views = more = None
-    if args.sorted:
+    if args.box3d:
+        main_role = args.role
+        size = Image.open(args.picture).size
+        box = [0, 0, size[0], size[1]]  # the whole picture: the camera is fitted to it, the region is the 3D box
+        print(f"1. The block {np.round(args.box3d, 3).tolist()} with {os.path.basename(args.picture)} ({main_role})", flush=True)
+    elif args.sorted:
         result = json.load(open(args.sorted))
         sorted_views = {v["name"]: v for v in result["views"]}
         lists = result["lists"]
@@ -186,9 +200,14 @@ def main():
 
     print("2. The region in the model", flush=True)
     verts, inside, cam, (width, height), (u, v) = region_in_model(args.model, args.picture, box)
+    if args.box3d:
+        low, high = np.array(args.box3d[:3]), np.array(args.box3d[3:])
+        inside = np.all((verts >= low) & (verts <= high), axis=1)
     if inside.sum() < 50:
         raise SystemExit(f"Only {inside.sum()} vertices of the model lie in that box: is it the right picture?")
     inner = (verts[inside].min(0), verts[inside].max(0))
+    if args.box3d:  # the block itself (its surface may not fill it)
+        inner = (np.maximum(np.array(args.box3d[:3]), verts.min(0)), np.minimum(np.array(args.box3d[3:]), verts.max(0)))
     if args.margin_of_model:
         args.margin = round(args.margin_of_model * np.ptp(verts, 0).max() / (inner[1] - inner[0]).max(), 3)
         print(f"    margin {args.margin} of the part's size ({args.margin_of_model} of the model's)", flush=True)
@@ -236,7 +255,7 @@ def main():
     points = box_points(np.concatenate(inner), size)
     zoom_out = os.path.join(work, "zoom_out.glb")
     inpaint(pipeline, zoom_in, crop, points, zoom_out, grow=args.grow, seed=args.seed, steps=args.steps,
-            method=args.method, start=args.start, more_pictures=more_pictures, main_role=main_role, mode=args.mode,
+            method=args.method, start=args.start, soft=args.soft, more_pictures=more_pictures, main_role=main_role, mode=args.mode,
             texture_guidance=args.texture_guidance, faces=args.faces, keep_shape=args.keep_shape)
 
     print("5. Zoom out: the original outside the seam, the new region inside it", flush=True)

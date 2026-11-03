@@ -43,6 +43,8 @@ def main():
     parser.add_argument("base", help="the base model (.glb with one mesh)")
     parser.add_argument("parts", nargs="*", help="refine_region.py results, the most important first")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--single", action="store_true",
+                        help="one mesh with one texture (packed), so the next round can inpaint the result again")
     args = parser.parse_args()
     base = load_model(args.base)
     centers = base.triangles_center
@@ -62,6 +64,15 @@ def main():
     kept = np.nonzero(~taken)[0]
     scene.add_geometry(base.submesh([kept], append=True), geom_name="base")
     report["base"] = int(len(kept))
+    if args.single:  # all meshes as one, their textures packed into one atlas (at most 8192 px)
+        from PIL import Image
+        one = trimesh.util.concatenate(list(scene.geometry.values()))
+        texture = one.visual.material.baseColorTexture
+        if texture is not None and max(texture.size) > 8192:
+            scale = 8192 / max(texture.size)
+            one.visual.material.baseColorTexture = texture.resize(
+                (round(texture.width * scale), round(texture.height * scale)), Image.LANCZOS)
+        scene = trimesh.Scene(one)
     scene.export(args.out)
     json.dump({"base": args.base, "parts": args.parts, "faces": report},
               open(os.path.splitext(args.out)[0] + ".json", "w"), indent=1)

@@ -190,6 +190,27 @@ def generate(args):
     print(f"Sent as {job} ({len(pictures)} picture(s), {options}). Follow it with:  python3 scripts/server/cloud.py status")
 
 
+def pipeline(args):
+    """Packs all pictures (and videos) of one character into a 'pipeline' job: the whole grid loop on the server
+    (scripts/pipeline/auto_pipeline.py: sort, base, judge, re-inpaint bad blocks, ...). Comes back as one zip."""
+    folder = os.path.abspath(args.folder)
+    name = args.name or re.sub(r"[^A-Za-z0-9_-]+", "_", os.path.basename(folder.rstrip("/"))).strip("_")[:40]
+    types = (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")
+    files = sorted(f for f in os.listdir(folder) if f.lower().endswith(types))
+    if not files:
+        raise SystemExit(f"no pictures or videos in {folder}")
+    os.makedirs(os.path.join(PROJECT_DIR, "outputs", "cloud"), exist_ok=True)
+    path = os.path.join(PROJECT_DIR, "outputs", "cloud", f"{name}_pipeline.zip")
+    with zipfile.ZipFile(path, "w") as z:
+        for k, f in enumerate(files):  # simple names on the server (no spaces)
+            z.write(os.path.join(folder, f), f"pictures/{k:02d}{os.path.splitext(f)[1].lower()}")
+        z.writestr("job.json", json.dumps({"kind": "pipeline", "name": name, "rounds": args.rounds,
+                                           "threshold": args.threshold, "code": args.code}, indent=2))
+    cloud = Cloud()
+    job = send_zip(cloud, path)
+    print(f"Sent as {job} ({len(files)} files of {name}). Follow it with:  python3 scripts/server/cloud.py status")
+
+
 def inpaint(args):
     """Packs a model, an area (a box in the model's coordinates, or a Blender area .npy) and a picture into
     the same job .zip that Blender's add-on makes, and sends it."""
@@ -290,6 +311,13 @@ def main():
                    help="pictures used only for the shape, not for the colours (multi_image.py --shape-only)")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
     p.set_defaults(run=generate)
+    p = sub.add_parser("pipeline", help="send a character's pictures/videos: the whole grid loop on the server")
+    p.add_argument("folder")
+    p.add_argument("--name", help="default: the folder's name")
+    p.add_argument("--rounds", type=int, default=3)
+    p.add_argument("--threshold", type=float, default=85)
+    p.add_argument("--code", default="main", help="the branch the server runs it with (default: main, newest)")
+    p.set_defaults(run=pipeline)
     p = sub.add_parser("inpaint", help="send an inpainting job without Blender (TRELLIS.2 environment)")
     p.add_argument("model")
     p.add_argument("picture", help="picture that guides the new area")

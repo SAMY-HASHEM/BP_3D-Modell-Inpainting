@@ -72,6 +72,12 @@ def upscale_small(image, min_side=MIN_SIDE):
     try:
         if "model" not in _upscaler:
             import spandrel
+            if not os.path.isfile(UPSCALER):  # once: the weights (64 MB, BSD licence) from the Real-ESRGAN release
+                import urllib.request
+                os.makedirs(os.path.dirname(UPSCALER), exist_ok=True)
+                urllib.request.urlretrieve("https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/"
+                                           "RealESRGAN_x4plus.pth", UPSCALER + ".part")
+                os.replace(UPSCALER + ".part", UPSCALER)
             _upscaler["model"] = spandrel.ModelLoader().load_from_file(UPSCALER).cuda().eval()
         model = _upscaler["model"]
         x = torch.from_numpy(np.asarray(image.convert("RGB"), np.float32) / 255).permute(2, 0, 1)[None].cuda()

@@ -26,6 +26,8 @@ dependencies:
       - opencv-python-headless==4.14.0.94
       - numpy==2.2.6
       - scipy==1.15.3
+      # loads the Real-ESRGAN upscaler (every picture to TRELLIS.2 at least 1024 px, generate.py upscale_small)
+      - spandrel==0.4.2
       - pillow==12.3.0
       - imageio==2.38.0
       - imageio-ffmpeg==0.6.0

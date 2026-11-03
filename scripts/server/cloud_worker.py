@@ -72,6 +72,16 @@ def command_for(job, folder, zip_path, gpu):
                 raise ValueError(f"object missing in the job: {name}")
         return [sys.executable, "-u", "scripts/generation/organise_pictures.py", *folders,
                 "--out", os.path.join(folder, "organised"), "--zip"]
+    if job["kind"] == "pipeline":  # the whole grid loop for one character (scripts/pipeline/auto_pipeline.py)
+        name = job.get("name", "")
+        rounds, threshold = int(job.get("rounds", 3)), float(job.get("threshold", 85))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name) or not 1 <= rounds <= 5 or not 50 <= threshold <= 100:
+            raise ValueError(f"bad pipeline job: {name}, {rounds} rounds, threshold {threshold}")
+        pictures = os.path.join(folder, "pictures")
+        if not os.path.isdir(pictures) or not os.listdir(pictures):
+            raise ValueError("no pictures in the job")
+        return [sys.executable, "-u", "scripts/pipeline/auto_pipeline.py", pictures, "--name", name,
+                "--out", os.path.join(folder, name), "--rounds", str(rounds), "--threshold", str(threshold), "--zip"]
     if job["kind"] != "generate":
         raise ValueError(f"unknown kind of job: {job['kind']}")
     pictures = [os.path.join(folder, os.path.basename(p)) for p in job["pictures"]]
@@ -158,7 +168,7 @@ def prepare(cloud, job_name):
         os.replace(zip_path + ".part", zip_path)
     with zipfile.ZipFile(zip_path) as z:
         job = json.loads(z.read("job.json"))
-        if job.get("kind") in ("generate", "organise"):
+        if job.get("kind") in ("generate", "organise", "pipeline"):
             z.extractall(folder)  # zipfile drops '..' and absolute paths
     return folder, zip_path, job
 
