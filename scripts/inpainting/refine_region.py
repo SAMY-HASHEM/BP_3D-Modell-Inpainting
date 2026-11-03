@@ -211,7 +211,8 @@ def main():
     air = 0.05 * max(px1 - px0, py1 - py0)
     crop_box = [int(max(0, px0 - air)), int(max(0, py0 - air)), int(min(width, px1 + air)), int(min(height, py1 + air))]
     crop = os.path.join(work, "zoom_picture.png")
-    Image.open(args.picture).crop(crop_box).save(crop)
+    # saved as TRELLIS.2 gets it: at least 1024 px on the longest side (AI-upscaled if the crop is smaller)
+    generate.upscale_small(Image.open(args.picture).crop(crop_box)).save(crop)
     print(f"    {len(near):,} faces (of {len(mesh.faces):,}); picture cut {crop_box} "
           f"({crop_box[2] - crop_box[0]} x {crop_box[3] - crop_box[1]} px)", flush=True)
 
@@ -225,7 +226,7 @@ def main():
         cut = [int(max(0, x0 - grow * w)), int(max(0, y0 - grow * h)), int(min(picture.width, x1 + grow * w)),
                int(min(picture.height, y1 + grow * h))]
         path = os.path.join(work, f"zoom_picture_{k + 1}_{role}.png")
-        picture.crop(cut).save(path)
+        generate.upscale_small(picture.crop(cut)).save(path)  # at least 1024 px, as TRELLIS.2 gets it
         more_pictures.append((path, role))
         print(f"    + {view['name']} ({role}): cut {cut}", flush=True)
 
