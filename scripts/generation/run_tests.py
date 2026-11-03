@@ -259,8 +259,12 @@ def faces(model):
 
 def run_test(cloud, test, organised, out):
     files = {f"picture{i}{os.path.splitext(p)[1].lower()}": p for i, p in enumerate(test["pictures"])}
+    shapes = {f"shape{i}{os.path.splitext(p)[1].lower()}": p for i, p in enumerate(test.get("shape_only", []))}
     job = {"kind": "generate", "name": test["id"], "pictures": list(files), "options": test["options"],
            "code": "main"}  # the worker brings itself to the newest code first (fixes made during the night)
+    if shapes:  # pictures only for the shape, not the colours (multi_image.py --shape-only)
+        job["shape_only"] = list(shapes)
+        files.update(shapes)
     started = time.time()
     inflight_file = os.path.join(out, "inflight.json")  # the job on its way: after a restart, wait for it, never send twice
     inflight = json.load(open(inflight_file)) if os.path.isfile(inflight_file) else {}
@@ -274,6 +278,7 @@ def run_test(cloud, test, organised, out):
     status = wait(cloud, job_name, 100 * 60)
     record = {"id": test["id"], "object": test["object"], "test": test["test"], "options": test["options"],
               "pictures": [os.path.relpath(p, out) if p.startswith(out) else p for p in test["pictures"]],
+              "shape_only": test.get("shape_only", []),
               "job": job_name, "state": status["state"], "message": status.get("message", ""),
               "minutes": round((time.time() - started) / 60, 1), "finished": time.strftime("%Y-%m-%d %H:%M"),
               "organised_by": organised.get("model")}
