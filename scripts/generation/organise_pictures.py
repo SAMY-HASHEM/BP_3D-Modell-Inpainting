@@ -272,14 +272,22 @@ def choose(model, processor, name, pictures, crops, out, videos=()):
         choice["whole"] = [c["crop"] for c in looked]
         print(f"  choice for {name}: {json.dumps(choice)}", flush=True)
         choice["raw"] = raw
-        pick = lambda i: candidates[i]["crop"] if isinstance(i, int) and 0 <= i < len(candidates) else None
-        views = [pick(i) for i in choice.get("views", []) if pick(i)]
-        front = pick(choice.get("front"))
-        if front and front in views:
-            views.remove(front)
-        choice["front_crop"] = front or (views[0] if views else candidates[0]["crop"])
-        choice["view_crops"] = [choice["front_crop"]] + [v for v in views if v != choice["front_crop"]][:3]
+        resolve(choice, [c["crop"] for c in candidates])
     return candidates, choice
+
+
+def resolve(choice, candidates):
+    """The cut-outs the AI's answer names (front_crop, view_crops). Where the answer contradicts itself (a view
+    it also lists under left_out, with a reason), its stated reason wins."""
+    left_out = {str(k) for k in choice.get("left_out", {})} if isinstance(choice.get("left_out"), dict) else set()
+    pick = lambda i: candidates[i] if isinstance(i, int) and 0 <= i < len(candidates) else None
+    views = [pick(i) for i in choice.get("views", []) if pick(i) and str(i) not in left_out]
+    front = pick(choice.get("front"))
+    if front and front in views:
+        views.remove(front)
+    choice["front_crop"] = front or (views[0] if views else candidates[0])
+    choice["view_crops"] = [choice["front_crop"]] + [v for v in views if v != choice["front_crop"]][:3]
+    return choice
 
 
 def organise(model, processor, folder, out, size, frames=24):
