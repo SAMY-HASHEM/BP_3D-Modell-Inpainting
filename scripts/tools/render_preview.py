@@ -26,7 +26,10 @@ bpy.ops.import_scene.gltf(filepath=model)
 meshes = [o for o in bpy.context.scene.objects if o.type == "MESH"]
 if "--clay" in args:  # without colours, like a marble statue: for judging the shape alone
     clay = bpy.data.materials.new("clay")
-    clay.diffuse_color = (0.72, 0.72, 0.70, 1)
+    clay.use_nodes = True  # Cycles renders the node tree, not the viewport colour
+    principled = next(n for n in clay.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    principled.inputs["Base Color"].default_value = (0.42, 0.42, 0.40, 1)
+    principled.inputs["Roughness"].default_value = 0.55
     for o in meshes:
         o.data.materials.clear()
         o.data.materials.append(clay)

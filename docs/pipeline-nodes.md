@@ -105,3 +105,27 @@ pedestal).
   over the shell, every strand walks down along it (snapped back onto the shell each step, ending where the
   shell ends), then Clump (0.35) + Noise + Profile; colour from the texture at the root (sRGB → linear).
 - **Later idea:** DiffLocks (CVPR 2025) makes ~100k strands from one front picture (research code).
+
+## ComfyUI: the pipeline as a node graph (built Nov 3)
+`comfyui/bp_inpainting/` (nodes) + `comfyui/workflows/BP Inpainting - pictures to model.json`, see
+`comfyui/README.md`. Pictures / video → data sheet → base → parts → combine → hair → compare, each with its
+pictures and a 3D viewer (ComfyUI's Preview 3D). The nodes call the same scripts as `run_pipeline.py`.
+
+## What we have and what to add next (research, Nov 3)
+
+**Already on this PC** (`~/ai-models`, ComfyUI from Oct 2026): Qwen3.6-27B with vision (Ollama), SAM 3.1 (text →
+mask), FLUX.2, Qwen-Image-Edit 2511; ComfyUI's own nodes for TRELLIS.2, Pixal3D, SAM 3, SAM 3D Body, MoGe /
+Depth Anything 3, mesh tools (UV unwrap, bake, remesh, fill holes) and a 3D viewer. In the TRELLIS.2 repo:
+`Trellis2TexturingPipeline` (colours an existing mesh from a picture). The uni server's worker did not answer on
+Nov 3 (not running); its models still have to be listed.
+
+| Step | Point | What | Why |
+|---|---|---|---|
+| B | structure | shape first in clay → combine into ONE mesh → colours once at the very end with `Trellis2TexturingPipeline` (+ our zoom and one-picture rules for the parts) → hair | removes the colour bands; the user's principle |
+| C | local models | Qwen3.6-27B (Ollama) as the sorter and as a local judge of the rounds; SAM 3.1 masks instead of boxes; Sapiens2 (Meta 2026: 29 body parts, normals; own licence) | exact part outlines; the rounds decided locally, not by Claude |
+| D | combining 3D models | SAM 3D Body (in ComfyUI): a fitted human body gives every point of our mesh a body-part label → 3D regions instead of boxes; SegviGen (MIT, 3D part segmentation) as another way; Pixal3D only as a comparison (its weights are locked for the EU) | regions follow the body, no seam through the butt |
+
+Sources: [TRELLIS.2 + Pixal3D in ComfyUI](https://comfyui-wiki.com/en/news/2026-08-22-trellis2-pixal3d-native-comfyui),
+[Sapiens2](https://www.marktechpost.com/2026/04/27/meta-ai-releases-sapiens2-a-high-resolution-human-centric-vision-model-for-pose-segmentation-normals-pointmap-and-albedo/),
+[SegviGen](https://github.com/Nelipot-Lee/SegviGen), [SAM 3.1](https://www.labellerr.com/blog/sam-3-vs-sam-3-1-performance-comparison/),
+[Qwen3.6-27B](https://playground.roboflow.com/models/qwen/qwen3-6-27b).

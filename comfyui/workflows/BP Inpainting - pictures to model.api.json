@@ -1,0 +1,471 @@
+{
+ "1": {
+  "class_type": "BP_Pictures",
+  "inputs": {
+   "name": "morrigan",
+   "folder": "pictures/local model"
+  },
+  "_meta": {
+   "title": "1 Pictures"
+  }
+ },
+ "4": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "1",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "all pictures"
+  }
+ },
+ "6": {
+  "class_type": "BP_Sort",
+  "inputs": {
+   "pictures": [
+    "1",
+    0
+   ],
+   "model": "Qwen/Qwen3-VL-8B-Instruct"
+  },
+  "_meta": {
+   "title": "2 Sort pictures (data sheet)"
+  }
+ },
+ "7": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "6",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "data sheet"
+  }
+ },
+ "8": {
+  "class_type": "PreviewAny",
+  "inputs": {
+   "source": [
+    "6",
+    2
+   ]
+  },
+  "_meta": {
+   "title": "lists"
+  }
+ },
+ "9": {
+  "class_type": "BP_BaseModel",
+  "inputs": {
+   "sorted": [
+    "6",
+    0
+   ],
+   "mode": "stochastic",
+   "resolution": "1024",
+   "steps": 12,
+   "faces": 4000000,
+   "seed": 42
+  },
+  "_meta": {
+   "title": "3 Base model (TRELLIS.2)"
+  }
+ },
+ "10": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "9",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "base: pictures, renders, clay"
+  }
+ },
+ "11": {
+  "class_type": "Preview3D",
+  "inputs": {
+   "model_file": [
+    "9",
+    2
+   ]
+  },
+  "_meta": {
+   "title": "base in 3D"
+  }
+ },
+ "12": {
+  "class_type": "BP_RefinePart",
+  "inputs": {
+   "base": [
+    "9",
+    0
+   ],
+   "sorted": [
+    "6",
+    0
+   ],
+   "part": "lower_legs",
+   "shape": "auto",
+   "colour_pictures": 1,
+   "texture_guidance": 3.0,
+   "steps": 25,
+   "seed": 42
+  },
+  "_meta": {
+   "title": "4.1 lower_legs"
+  }
+ },
+ "13": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "12",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "lower_legs: pictures | before | after"
+  }
+ },
+ "14": {
+  "class_type": "BP_RefinePart",
+  "inputs": {
+   "base": [
+    "9",
+    0
+   ],
+   "sorted": [
+    "6",
+    0
+   ],
+   "part": "thighs",
+   "shape": "auto",
+   "colour_pictures": 1,
+   "texture_guidance": 3.0,
+   "steps": 25,
+   "seed": 42
+  },
+  "_meta": {
+   "title": "4.2 thighs"
+  }
+ },
+ "15": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "14",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "thighs: pictures | before | after"
+  }
+ },
+ "16": {
+  "class_type": "BP_RefinePart",
+  "inputs": {
+   "base": [
+    "9",
+    0
+   ],
+   "sorted": [
+    "6",
+    0
+   ],
+   "part": "feet",
+   "shape": "auto",
+   "colour_pictures": 1,
+   "texture_guidance": 3.0,
+   "steps": 25,
+   "seed": 42
+  },
+  "_meta": {
+   "title": "4.3 feet"
+  }
+ },
+ "17": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "16",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "feet: pictures | before | after"
+  }
+ },
+ "18": {
+  "class_type": "BP_RefinePart",
+  "inputs": {
+   "base": [
+    "9",
+    0
+   ],
+   "sorted": [
+    "6",
+    0
+   ],
+   "part": "belly",
+   "shape": "auto",
+   "colour_pictures": 1,
+   "texture_guidance": 3.0,
+   "steps": 25,
+   "seed": 42
+  },
+  "_meta": {
+   "title": "4.4 belly"
+  }
+ },
+ "19": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "18",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "belly: pictures | before | after"
+  }
+ },
+ "20": {
+  "class_type": "BP_RefinePart",
+  "inputs": {
+   "base": [
+    "9",
+    0
+   ],
+   "sorted": [
+    "6",
+    0
+   ],
+   "part": "bust",
+   "shape": "auto",
+   "colour_pictures": 1,
+   "texture_guidance": 3.0,
+   "steps": 25,
+   "seed": 42
+  },
+  "_meta": {
+   "title": "4.5 bust"
+  }
+ },
+ "21": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "20",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "bust: pictures | before | after"
+  }
+ },
+ "22": {
+  "class_type": "BP_RefinePart",
+  "inputs": {
+   "base": [
+    "9",
+    0
+   ],
+   "sorted": [
+    "6",
+    0
+   ],
+   "part": "head",
+   "shape": "auto",
+   "colour_pictures": 1,
+   "texture_guidance": 3.0,
+   "steps": 25,
+   "seed": 42
+  },
+  "_meta": {
+   "title": "4.6 head"
+  }
+ },
+ "23": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "22",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "head: pictures | before | after"
+  }
+ },
+ "24": {
+  "class_type": "BP_Combine",
+  "inputs": {
+   "base": [
+    "9",
+    0
+   ],
+   "part_1": [
+    "22",
+    0
+   ],
+   "part_2": [
+    "20",
+    0
+   ],
+   "part_3": [
+    "18",
+    0
+   ],
+   "part_4": [
+    "14",
+    0
+   ],
+   "part_5": [
+    "12",
+    0
+   ],
+   "part_6": [
+    "16",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "5 Combine"
+  }
+ },
+ "25": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "24",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "base | combined"
+  }
+ },
+ "26": {
+  "class_type": "Preview3D",
+  "inputs": {
+   "model_file": [
+    "24",
+    2
+   ]
+  },
+  "_meta": {
+   "title": "final in 3D"
+  }
+ },
+ "27": {
+  "class_type": "BP_Hair",
+  "inputs": {
+   "model": [
+    "24",
+    0
+   ],
+   "sorted": [
+    "6",
+    0
+   ],
+   "count": 35000,
+   "length": 0.1,
+   "clump": 0.35,
+   "head": [
+    "22",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "6 Hair strands"
+  }
+ },
+ "28": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "27",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "hair"
+  }
+ },
+ "29": {
+  "class_type": "Preview3D",
+  "inputs": {
+   "model_file": [
+    "27",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "final with hair in 3D"
+  }
+ },
+ "30": {
+  "class_type": "BP_Compare",
+  "inputs": {
+   "model_1": [
+    "9",
+    0
+   ],
+   "clay": false,
+   "model_2": [
+    "24",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "99 Compare (colour)"
+  }
+ },
+ "31": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "30",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "base vs final"
+  }
+ },
+ "32": {
+  "class_type": "BP_Compare",
+  "inputs": {
+   "model_1": [
+    "9",
+    0
+   ],
+   "clay": true,
+   "model_2": [
+    "24",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "99 Compare (clay: the shape alone)"
+  }
+ },
+ "33": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "32",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "shape: base vs final"
+  }
+ }
+}
