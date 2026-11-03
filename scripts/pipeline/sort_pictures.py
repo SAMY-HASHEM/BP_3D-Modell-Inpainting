@@ -50,11 +50,20 @@ PART_SIDE = {"back": "back", "butt": "back"}  # the side a part is seen best fro
 
 
 def measured_colours(image):
-    """Grey sculpt render or colour picture, measured (no AI): grey renders have almost no colour saturation."""
+    """Grey sculpt render or colour picture, measured (no AI), on the OBJECT's pixels only (the background removed
+    with RMBG-2.0): a dark navy robot on a grey background was taken for a grey sculpt when the whole picture
+    was measured. Colour if its pixels are noticeably saturated, or some are strongly coloured (e.g. red lights)."""
     import numpy as np
-    rgb = np.asarray(ai.shrink(image, 256).convert("RGB"), np.float32) / 255
-    saturation = (rgb.max(-1) - rgb.min(-1)) / (rgb.max(-1) + 1e-6)
-    return ("grey" if np.percentile(saturation, 75) < 0.2 else "colour"), round(float(np.percentile(saturation, 75)), 3)
+    small = ai.shrink(image, 384).convert("RGB")
+    rgb = np.asarray(small, np.float32) / 255
+    mask = ai.object_mask(small)
+    pixels = rgb[mask] if mask.sum() > 500 else rgb.reshape(-1, 3)
+    mx = pixels.max(-1)
+    saturation = (mx - pixels.min(-1)) / (mx + 1e-6)
+    typical = float(np.percentile(saturation, 75))
+    strong = float(((saturation > 0.5) & (mx > 0.3)).mean())  # strongly coloured pixels
+    colours = "colour" if typical > 0.15 or strong > 0.02 else "grey"
+    return colours, {"typical": round(typical, 3), "strong": round(strong, 3)}
 
 VIEWS = """Look at this picture. It may show one figure, the same figure several times from different sides next to
 each other (a turnaround sheet), or only a close-up of a part.
@@ -238,7 +247,10 @@ def choose_lists(views):
     counts = {}
     for v in whole:
         counts[key(v)] = counts.get(key(v), 0) + 1 + 0.5 * (v["colours"] == "grey")
-    version = max(counts, key=counts.get) if counts else (False, "neutral")
+    # neutral beats action: action views often show several DIFFERENT poses (the robot fly: blades, a gun,
+    # flying), all called "action"; a neutral turnaround of at least 2 views is one pose for sure
+    neutral = {k: c for k, c in counts.items() if k[1] == "neutral" and c >= 2}
+    version = max(neutral or counts, key=(neutral or counts).get) if counts else (False, "neutral")
     by_side = lambda v: SIDE_ORDER.index(v["side"]) if v["side"] in SIDE_ORDER else len(SIDE_ORDER)
     roles = lambda vs: {
         "both": [v["name"] for v in sorted(vs, key=by_side) if colour(v) and key(v) == version],

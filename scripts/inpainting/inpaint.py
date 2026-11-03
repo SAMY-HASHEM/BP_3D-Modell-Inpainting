@@ -333,6 +333,9 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         roles.append(role)
     shape_rows = [i for i, r in enumerate(roles) if r in ("both", "shape")]
     colour_rows = [i for i, r in enumerate(roles) if r in ("both", "colour")]
+    if not colour_rows:  # only a grey (shape) picture sees this area: its colours come from it too (with a warning)
+        print("    warning: no colour picture; the shape picture also gives the colours", flush=True)
+        colour_rows = list(shape_rows)
     assert shape_rows and colour_rows, f"no picture for the shape or for the colours: {roles}"
     if len(images) > 1:
         report(f"    {len(images)} pictures ({mode}): shape from {shape_rows}, colours from {colour_rows}")
