@@ -115,7 +115,7 @@ class BaseModel:
     def INPUT_TYPES(cls):
         return {"required": {
             "sorted": ("BP_SORTED",),
-            "mode": (["stochastic", "multidiffusion"],),
+            "mode": (["multidiffusion", "stochastic"],),
             "resolution": (["1024", "1536", "512"],),
             "steps": ("INT", {"default": 12, "min": 4, "max": 100}),
             "faces": ("INT", {"default": 4_000_000, "min": 100_000, "max": 16_000_000, "step": 100_000}),

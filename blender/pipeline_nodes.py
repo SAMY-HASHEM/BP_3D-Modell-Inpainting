@@ -141,7 +141,9 @@ class BaseNode(BPNode, bpy.types.Node):
     """02: the whole figure (TRELLIS.2)"""
     bl_idname, bl_label, bl_width_default = "BPBase", "02 Base model", 280
     settings = ("mode", "resolution", "steps", "faces", "seed")
-    mode: EnumProperty(name="Mode", items=[(m, m, "") for m in ("stochastic", "multidiffusion")])
+    # multidiffusion: every step looks at ALL pictures (stochastic took turns: with 8 pictures in 12 steps the back
+    # view got 1-2 steps, and the witch's skin at the butt was lost)
+    mode: EnumProperty(name="Mode", items=[(m, m, "") for m in ("multidiffusion", "stochastic")])
     resolution: EnumProperty(name="Resolution", items=[(r, r, "") for r in ("1024", "1536", "512")])
     steps: IntProperty(name="Steps", default=12, min=4, max=100)
     faces: IntProperty(name="Faces", default=4_000_000, min=100_000, max=16_000_000, step=100_000)
@@ -473,7 +475,7 @@ class BP_OT_new_pipeline(bpy.types.Operator):
         base = add("BPBase", 680, 0)
         link(sort, "sorted", base, "sorted")
         parts = {}
-        for k, part in enumerate(["lower_legs", "thighs", "feet", "belly", "bust"]):
+        for k, part in enumerate(["lower_legs", "thighs", "feet", "belly", "back", "butt", "bust"]):
             parts[part] = add("BPRefine", 1040, 400 - k * 420, part=part)
             parts[part].label = f"04 {part}"
             link(base, "model", parts[part], "base")
@@ -488,7 +490,7 @@ class BP_OT_new_pipeline(bpy.types.Operator):
         parts["head"] = pick
         combine = add("BPCombine", 1420, 0)
         link(base, "model", combine, "base")
-        for part in ["head", "bust", "belly", "thighs", "lower_legs", "feet"]:  # the first wins where they overlap
+        for part in ["head", "bust", "belly", "butt", "back", "thighs", "lower_legs", "feet"]:  # the first wins
             link(parts[part], parts[part].outputs[0].name, combine, "parts")
         hair = add("BPHair", 1780, 0)
         link(combine, "model", hair, "model")

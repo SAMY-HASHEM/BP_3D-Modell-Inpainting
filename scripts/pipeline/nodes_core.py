@@ -99,7 +99,7 @@ def lists_text(sorted_):
     return "\n".join(lines)
 
 
-def base(sorted_, mode="stochastic", resolution="1024", steps=12, faces=4_000_000, seed=42):
+def base(sorted_, mode="multidiffusion", resolution="1024", steps=12, faces=4_000_000, seed=42):
     result = json.load(open(sorted_["path"]))
     views = {v["name"]: v for v in result["views"]}
     lists = result["lists"]["base"]

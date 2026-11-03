@@ -126,8 +126,8 @@ which part each close-up shows. Check the sheet before the GPU spends time.
 
 **4 Parts**, from easy to hard: each part zoomed in from its one sharpest picture. *auto* = colours
 only (shape kept); the head also regenerates its shape, from one picture in total. The face is a
-lottery, so it is made with 4 seeds and the local AI (Qwen3.6-27B) picks the best. Back and butt are
-left out (no good colour picture of them yet).
+lottery, so it is made with 4 seeds and the local AI (Qwen3.6-27B) picks the best. A part that no
+picture shows is skipped.
 
 **5 Final**: Combine (the head wins where parts overlap) -> Hair strands (Blender Geometry Nodes)
 -> Compare: base vs final, in colour and as clay.
@@ -155,12 +155,12 @@ def layout():
     group("3 Base model", 1960, -60, 1040, 860, "#a1309b")
 
     parts = {}
-    for k, part in enumerate(["lower_legs", "thighs", "feet", "belly", "bust"]):
+    for k, part in enumerate(["lower_legs", "thighs", "feet", "belly", "back", "butt", "bust"]):
         x = 3040 + k * 520
         parts[part] = node("BP_RefinePart", (x, 0), f"4.{k + 1} {part}", size=(340, 240), base=ref(base), sorted=ref(sort),
                            part=part)
         node("PreviewImage", (x, 280), f"{part}: pictures | before | after", size=(500, 460), images=ref(parts[part], 1))
-    group("4 Parts, from easy to hard", 3020, -60, 5 * 520 + 20, 860, "#b58b2a")
+    group("4 Parts, from easy to hard", 3020, -60, 7 * 520 + 20, 860, "#b58b2a")
     # the face is a lottery (r8 clean, the same inputs again broken): 4 seeds, the local AI picks the best
     heads = []
     for k, seed in enumerate((42, 7, 123, 2024)):
@@ -173,8 +173,8 @@ def layout():
     node("PreviewImage", (3040 + 4 * 520, 1140), "the local AI's choice", size=(620, 500), images=ref(parts["head"], 1))
     group("4b The face last: 4 seeds, the local AI picks", 3020, 840, 4 * 520 + 700, 860, "#b06634")
 
-    x = 3040 + 6 * 520 + 60
-    order = ["head", "bust", "belly", "thighs", "lower_legs", "feet"]  # the first wins where two overlap
+    x = 3040 + 7 * 520 + 60
+    order = ["head", "bust", "belly", "butt", "back", "thighs", "lower_legs", "feet"]  # the first wins where two overlap
     combine = node("BP_Combine", (x, 0), "5 Combine", size=(320, 260), base=ref(base),
                    **{f"part_{i + 1}": ref(parts[p]) for i, p in enumerate(order)})
     node("PreviewImage", (x, 300), "base | combined", size=(520, 440), images=ref(combine, 1))

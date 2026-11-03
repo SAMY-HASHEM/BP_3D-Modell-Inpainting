@@ -68,6 +68,9 @@ LESSONS = [  # what the rounds taught, as rules the code follows now (round -> r
     "best of r1-r9 combined: colour bands where two parts meet -> next: colour once over the whole model",
     "ComfyUI run: the head with 1 colour picture BUT 2 grey shape views got a black mouth again -> the face takes "
     "ONE picture in total (shape_pictures 0), as in r8",
+    "witch: the base in stochastic mode (8 pictures taking turns in 12 steps) lost the back view's colours (skin at "
+    "the butt) -> the base in multidiffusion (every step sees all pictures); back and butt are nodes again (the "
+    "witch has a colour back view; Morrigan had none)",
     "THE USER'S PRINCIPLE: everything is made without colour first (like Roman marble statues: shape only, "
     "judged in clay renders), the colours only at the very end, from the pictures, in ONE pass over the "
     "finished model, so both sides and all parts match (no colour seams, symmetric)",
