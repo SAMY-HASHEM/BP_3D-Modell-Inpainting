@@ -339,8 +339,12 @@ def step():
             node.status = f"failed: {type(e).__name__}: {e}"[:200]
             state["queue"] = []
             break
-        if job is None:  # nothing to compute (Pictures)
+        if job is not None and job["folder"] is None:  # skipped (e.g. no picture shows this part)
+            job, outputs = None, job["outputs"]
+        if job is None:  # nothing to compute (Pictures, or skipped)
             finish(node, outputs, None)
+            if outputs.get("skipped"):
+                node.status = "skipped: " + outputs["skipped"]
             state["queue"].pop(0)
             continue
         if all(done and os.path.exists(done) for _, _, done in job["steps"]):  # computed before
@@ -453,11 +457,16 @@ class BP_OT_show_model(bpy.types.Operator):
 class BP_OT_new_pipeline(bpy.types.Operator):
     """A new BP Pipeline tree with all nodes connected (as the ComfyUI workflow)"""
     bl_idname, bl_label = "bp.new_pipeline", "New pipeline"
+    character: StringProperty(name="Name", default="morrigan")
+    folder: StringProperty(name="Pictures folder", default="pictures/local model", subtype="DIR_PATH")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        tree = bpy.data.node_groups.new("BP Pipeline", TREE)
+        tree = bpy.data.node_groups.new(f"BP Pipeline {self.character}", TREE)
         add = lambda kind, x, y, **props: _node(tree, kind, x, y, props)
-        pics = add("BPPictures", 0, 0)
+        pics = add("BPPictures", 0, 0, character=self.character, folder=self.folder)
         sort = add("BPSort", 320, 0)
         link = lambda a, out, b, inp: tree.links.new(a.outputs[out], b.inputs[inp])
         link(pics, "pictures", sort, "pictures")

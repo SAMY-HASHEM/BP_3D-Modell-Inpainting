@@ -123,6 +123,9 @@ def refine(base_model, sorted_, part, shape="auto", colour_pictures=1, shape_pic
            steps=25, seed=42):
     """auto = the lessons: the head also regenerates its shape (margin 0.6 of the head) from ONE picture in total;
     every other part only its colours (shape kept, margin 0.1 of the model); one sharp complete colour picture."""
+    lists = json.load(open(sorted_["path"]))["lists"].get(part, {})
+    if not any(isinstance(v, list) and v for v in lists.values()):  # no picture shows this part: skipped
+        return {"folder": None, "steps": [], "outputs": {"model": None, "skipped": f"no picture shows the {part}"}}
     keep = (part != "head") if shape == "auto" else shape.startswith("keep")
     no_shape_views = shape_pictures == "none" or (shape_pictures == "auto" and part == "head")
     settings = {"base": stamp(base_model["glb"]), "sorted": stamp(sorted_["path"]), "part": part, "keep_shape": keep,
@@ -204,6 +207,7 @@ def compare(models, clay=False):
 
 
 def pick_best(candidates):
+    candidates = [c for c in candidates if c]
     """04b: the local vision AI (Qwen3.6-27B, Ollama) picks the candidate closest to the artist's picture.
     The chosen model is only known after the run: resolve() reads it."""
     folder = node_folder(candidates[0]["name"], f"04b_pick_{candidates[0].get('part', 'part')}",

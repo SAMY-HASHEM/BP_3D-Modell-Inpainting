@@ -152,7 +152,11 @@ class RefinePart:
         }}
 
     def refine(self, base, sorted, part, shape, colour_pictures, shape_pictures, texture_guidance, steps, seed):
-        out = run_job(core.refine(base, sorted, part, shape, colour_pictures, shape_pictures, texture_guidance, steps, seed))
+        job = core.refine(base, sorted, part, shape, colour_pictures, shape_pictures, texture_guidance, steps, seed)
+        if job["folder"] is None:  # skipped: no picture shows this part (Combine leaves it out)
+            print(f"[BP] 04 refine {part}: {job['outputs']['skipped']}", flush=True)
+            return (None, to_image(Image.new("RGB", (64, 64), (40, 40, 44))), file3d(base["glb"]))
+        out = run_job(job)
         return (out["model"], to_image(out["sheet"]), file3d(out["model"]["glb"]))
 
 

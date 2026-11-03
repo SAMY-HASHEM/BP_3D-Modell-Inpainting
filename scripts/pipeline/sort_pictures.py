@@ -70,6 +70,7 @@ Answer only with JSON, no other text:
  "whole": true | false,                 // the whole character from head to feet (false for a close-up)
  "parts": [the body parts that can be seen well, from: %s],
  "wings_on_back": true | false,         // big wings growing from the back (small wings on the head do not count)
+ "pose": "neutral" | "action",          // neutral = standing straight (A- or T-pose, arms down or out); action = any other pose
  "scene": [things that are not part of the character: "pedestal", "rail", "candles", "pumpkin", "bag", "floor", ...],
  "why": "a few words"}"""
 
@@ -135,6 +136,7 @@ def look(model, processor, folder, out, size):
             view = {"name": name, "picture": os.path.abspath(path), "view": os.path.relpath(view_path, out),
                     "box": list(box), "colours": colours, "colours_ai": tags.get("colours"), "saturation": saturation, "side": tags.get("side") if tags.get("side") in SIDES else "unknown",
                     "whole": tags.get("whole") is True, "parts": parts, "wings_on_back": tags.get("wings_on_back") is True,
+                    "pose": tags.get("pose") if tags.get("pose") in ("neutral", "action") else "action",
                     "scene": tags.get("scene") if isinstance(tags.get("scene"), list) else [], "why": tags.get("why"),
                     "part_boxes": boxes_of_parts}
             print(f"    {name}: {view['colours']}, {view['side']}, whole {view['whole']}, parts {parts}, "
@@ -229,19 +231,22 @@ def choose_lists(views):
     - close-ups never build the whole figure, only the refine node of their part
     - a colour close-up with other colours than the whole colour view (another material) is shape only"""
     colour = lambda v: v["colours"] == "colour" and v.get("same_colours", True)
+    # a version = which parts (wings on the back or not) AND which pose: an action pose mixed into A-pose views
+    # ruined models in the night tests. The version most whole views show wins; a tie goes to the grey views'
     whole = [v for v in views if v["whole"]]
-    count = lambda wings: sum(v["wings_on_back"] == wings for v in whole)
-    grey_wings = [v["wings_on_back"] for v in whole if v["colours"] == "grey"]
-    tie = (sum(grey_wings) > len(grey_wings) / 2) if grey_wings else True
-    version = tie if count(True) == count(False) else count(True) > count(False)
+    key = lambda v: (v["wings_on_back"], v.get("pose", "action"))
+    counts = {}
+    for v in whole:
+        counts[key(v)] = counts.get(key(v), 0) + 1 + 0.5 * (v["colours"] == "grey")
+    version = max(counts, key=counts.get) if counts else (False, "neutral")
     by_side = lambda v: SIDE_ORDER.index(v["side"]) if v["side"] in SIDE_ORDER else len(SIDE_ORDER)
     roles = lambda vs: {
-        "both": [v["name"] for v in sorted(vs, key=by_side) if colour(v) and v["wings_on_back"] == version],
-        "colour_only": [v["name"] for v in sorted(vs, key=by_side) if colour(v) and v["wings_on_back"] != version],
-        "shape_only": [v["name"] for v in sorted(vs, key=by_side) if not colour(v) and v["wings_on_back"] == version],
+        "both": [v["name"] for v in sorted(vs, key=by_side) if colour(v) and key(v) == version],
+        "colour_only": [v["name"] for v in sorted(vs, key=by_side) if colour(v) and key(v) != version],
+        "shape_only": [v["name"] for v in sorted(vs, key=by_side) if not colour(v) and key(v) == version],
     }
-    lists = {"version": {"wings_on_back": version}, "base": roles(whole)}
-    shape = sorted([v for v in whole if v["wings_on_back"] == version], key=by_side)
+    lists = {"version": {"wings_on_back": version[0], "pose": version[1]}, "base": roles(whole)}
+    shape = sorted([v for v in whole if key(v) == version], key=by_side)
     lists["base"]["front"] = shape[0]["name"] if shape else None  # the view the model's camera is fitted to
     for part in PARTS:
         lists[part] = roles([v for v in views if part in v["part_boxes"]])
