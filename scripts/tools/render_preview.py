@@ -6,6 +6,7 @@ side by side.
 
 Usage:
     blender -b --python scripts/tools/render_preview.py -- outputs/model.glb /tmp/model_preview [--size 384]
+    blender -b --python scripts/tools/render_preview.py -- outputs/model.glb /tmp/model_preview --closeup   # upper part, front
 """
 import math
 import sys
@@ -47,6 +48,17 @@ camera.data.lens = 50
 scene.collection.objects.link(camera)
 scene.camera = camera
 distance = radius / math.tan(camera.data.angle / 2) * 1.05
+if "--closeup" in args:  # only a close-up of the upper part from the front, for rating fine detail
+    height = high.z - low.z
+    target = Vector((center.x, center.y, high.z - 0.2 * height))
+    span = 0.38 * max(height, 1e-6)
+    camera.location = target + Vector((0, -span / math.tan(camera.data.angle / 2), 0))
+    camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+    scene.render.resolution_x = scene.render.resolution_y = 2 * size
+    scene.render.filepath = f"{out}_closeup.png"
+    bpy.ops.render.render(write_still=True)
+    print(f"Rendered {out}_closeup.png", flush=True)
+    sys.exit(0)
 for k, angle in enumerate((0, 90, 180, 270)):
     a = math.radians(angle)
     camera.location = center + Vector((math.sin(a) * distance, -math.cos(a) * distance, radius * 0.25))
