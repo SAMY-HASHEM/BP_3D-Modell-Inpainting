@@ -42,11 +42,31 @@ NODES = {
     "01_sort": {"model": "Qwen/Qwen3-VL-8B-Instruct"},
     # night tests: stochastic best and 2x faster; 1024 (1536 makes holes in hair); 12 steps = 25; 4M faces keep detail
     "02_base": {"mode": "stochastic", "resolution": "1024", "steps": 12, "faces": 4_000_000, "seed": 42},
-    # the head test the user liked: repaint, margin 0.6, 25 steps; now with all pictures of the part
+    # every part, with the lessons of rounds 1-9 (see LESSONS and docs/pipeline-nodes.md):
+    #   colours only (keep_shape): the base shape from the grey views is already good (legs r6 got lumpy)
+    #   one sharp colour picture (best_colour 1): mixing pictures smeared the face (r4 -> r8)
+    #   margin as a share of the model (0.1): big parts still get zoomed (chest r5 was the whole model)
+    #   texture guidance 3: the colours follow the picture (r3 -> r4: pink lips instead of black)
     "04_refine": {"method": "repaint", "margin": 0.6, "steps": 25, "mode": "stochastic", "seed": 42, "grow": 1,
+                  "texture_guidance": 3.0, "faces": 4_000_000, "margin_of_model": 0.1, "keep_shape": True,
+                  "best_colour": 1,
                   # the order in 05_combine (first wins where two regions overlap)
-                  "parts": ["head", "bust", "belly", "butt", "back", "thighs", "lower_legs", "feet"]},
+                  "parts": ["head", "bust", "belly", "butt", "back", "thighs", "lower_legs", "feet", "legs"]},
+    # the head is the only part whose shape is regenerated too (zoomed: hair locks, ears, lips), margin 0.6
+    "04_refine_head": {"keep_shape": False, "margin_of_model": None},
 }
+
+LESSONS = [  # what the rounds taught, as rules the code follows now (round -> rule)
+    "r2: all colour close-ups in the base mix the colours up -> the base gets the whole colour view only",
+    "r5: a back view in a front part turns the region around -> only pictures from the main view's side",
+    "r5: a margin of 0.6 of a big part is the whole model -> the margin as a share of the model (0.1)",
+    "r6: regenerating the shape of big parts from close-ups makes them lumpy -> colours only (keep shape)",
+    "r3/r4: black make-up -> texture guidance 3; r8: one sharp picture beats six mixed ones -> best_colour 1",
+    "r9: the largest picture can be a cut-off close-up from below -> the largest COMPLETE picture",
+    "r9: back / butt need their main view from behind -> part side (sort_pictures.PART_SIDE)",
+    "r9: back.jpg has another skin colour -> it must not give colours (not solved: the AI said same colours)",
+    "best of r1-r9 combined: colour bands where two parts meet -> next: colour once over the whole model",
+]
 
 NODES["06_hair"] = {"count": 30000, "length": 0.10, "points": 16, "hue_tolerance": 0.07}
 
@@ -58,7 +78,7 @@ ROUNDS = {  # round: {node: changed settings}, "why": the reason
     3: {"why": "r2: hair greener and leggings pink, but the orange gloves lost and the suit patchy (9 colour pictures "
                "in 12 steps: each only 1-2 steps). The base stays r1; the parts get their colours from their own "
                "close-ups in the refine nodes",
-        "use": {"02_base": 1}},
+        "02_base": {"colour_closeups": False}, "use": {"02_base": 1}},
     4: {"why": "r3 head: hair much better (green, fringe, locks), but the face got black eye make-up and black lips "
                "(the pictures: pink lips): the colours follow the pictures more strongly (texture guidance 3), and "
                "the region keeps 4M faces (r3 saved 1M where the base had 1.4M)",
@@ -98,6 +118,15 @@ ROUNDS[9] = {"why": "the user: bust, belly and butt looked bad. They were inside
              "use": {"04_refine_head": 8}}
 ROUNDS[9]["why"] += "; r8 head with ONE picture: clean lips and eyes, so every part takes only its sharpest colour picture"
 
+ROUNDS[10] = {"why": "the best of rounds 1-9 combined (the user: the best full model): head r8, bust / belly / "
+                     "thighs / feet r9, the lower legs from legs r7; back r9 (brown skin from back.jpg), butt r9 (almost "
+                     "white) and lower legs r9 (a cut-off close-up from below) are left out",
+              "use": {"04_refine_head": 8, "04_refine_bust": 9, "04_refine_belly": 9, "04_refine_thighs": 9,
+                      "04_refine_feet": 9, "04_refine_legs": 7, "04_refine_back": 0, "04_refine_butt": 0,
+                      "04_refine_lower_legs": 0}}
+
+ROUNDS_OF = "morrigan"  # ROUNDS is Morrigan's history; another character starts from NODES (the lessons) alone
+
 # from easy to hard (the user: legs and clothes first, the face last)
 RUN_ORDER = ["lower_legs", "thighs", "feet", "belly", "back", "butt", "bust", "head"]
 
@@ -106,6 +135,8 @@ def settings(node, round_):
     """A node's settings in a round: NODES, changed by every round up to this one."""
     key = "04_refine" if node.startswith("04_refine") else node
     result = dict(NODES.get(key, {}))
+    if node != key:
+        result.update(NODES.get(node, {}))  # a part's own settings (e.g. the head)
     for r in sorted(ROUNDS):
         if r <= round_:
             result.update(ROUNDS[r].get(node, {}))
@@ -131,6 +162,8 @@ class Pipeline:
         for r in sorted(ROUNDS):
             if r <= self.round:
                 use.update(ROUNDS[r].get("use", {}))
+        if node in use and use[node] == 0:
+            return None  # this round leaves the node out (its results got worse)
         if node in use:
             found = sorted(glob.glob(os.path.join(self.root, node, f"r{use[node]}", pattern)))
             if found:
@@ -165,9 +198,10 @@ class Pipeline:
 
 
 def render(model, out, focus=None, size=384):
-    """Preview renders with Blender on the CPU (render_preview.py); returns the picture paths."""
+    """Preview renders with Blender on the CPU (render_preview.py); returns the picture paths. With a focus box:
+    front, 45° left and right, and from behind (r9: back and butt were never seen from behind)."""
     extra = ["--focus", *[f"{v:.5f}" for v in focus]] if focus is not None else []
-    names = ["front", "left", "right"] if focus is not None else ["0", "1", "2", "3"]
+    names = ["front", "left", "right", "back"] if focus is not None else ["0", "1", "2", "3"]
     paths = [f"{out}_{n}.png" for n in names]
     if not all(os.path.exists(p) for p in paths):
         subprocess.call([BLENDER, "-b", "--python", os.path.join(SCRIPTS, "tools", "render_preview.py"), "--",
@@ -372,6 +406,10 @@ def main():
     parser.add_argument("--only", nargs="+", help="run only these nodes (e.g. 04_refine_head 05_combine)")
     parser.add_argument("--compare-only", action="store_true", help="only build the comparison pictures")
     args = parser.parse_args()
+    if args.name != ROUNDS_OF:  # a new character: no rounds of another one, only the defaults with the lessons
+        ROUNDS.clear()
+        ROUNDS[1] = {"why": "first run with the defaults (NODES, with the lessons of " + ROUNDS_OF + ")"}
+        args.round = min(args.round, 1) if args.round else 1
     p = Pipeline(os.path.abspath(args.pictures), args.name, args.round)
     wanted = lambda node: not args.only or node in args.only
     if not args.compare_only:
