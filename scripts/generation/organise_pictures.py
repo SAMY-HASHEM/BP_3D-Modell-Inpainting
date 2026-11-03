@@ -105,6 +105,8 @@ Answer only with JSON, no other text:
 
 
 SAME = """The first picture is the front view of: %s. The second picture is another cut-out of it.
+Measured: the outline of the object is %s times as wide as high in the first picture, %s in the second (seen from
+the side an object is narrower, but parts like spread wings or long weapons change it a lot).
 Compare them part by part: wings, weapons, held objects, clothes, arms and legs.
 
 Answer only with JSON, no other text:
@@ -231,6 +233,17 @@ def object_mask(image):
 
 
 @functools.lru_cache(maxsize=None)
+def outline(path):
+    """Width / height of the object's outline in a cut-out (from its mask), e.g. 2.5 for spread wings."""
+    import numpy as np
+    mask = object_mask(Image.open(path).convert("RGB"))
+    rows, cols = np.nonzero(mask.any(1))[0], np.nonzero(mask.any(0))[0]
+    if len(rows) == 0:
+        return None
+    return round((cols[-1] - cols[0] + 1) / (rows[-1] - rows[0] + 1), 2)
+
+
+@functools.lru_cache(maxsize=None)
 def cut_edges(path):
     """The sides where the object in a cut-out reaches the cut-out's edge (measured, no choice): it is cut off
     there by the picture border, or the box was too tight. Whole objects have background all around."""
@@ -291,7 +304,9 @@ def choose(model, processor, name, pictures, crops, out, videos=()):
         kept, checks = [choice["front_crop"]], {}
         for view in choice["view_crops"][1:]:
             image = shrink(Image.open(os.path.join(out, view)).convert("RGB"), 448)
-            answer, _ = ask(model, processor, [front_image, image], SAME % (thing, "|".join(f'"{x}"' for x in SIDES)), 200)
+            shapes = (outline(os.path.join(out, choice["front_crop"])), outline(os.path.join(out, view)))
+            answer, _ = ask(model, processor, [front_image, image],
+                            SAME % (thing, *shapes, "|".join(f'"{x}"' for x in SIDES)), 200)
             checks[view] = answer
             print(f"  {view} next to the front: {json.dumps(answer)}", flush=True)
             if answer.get("same_parts") is True and answer.get("same_pose") is True:
