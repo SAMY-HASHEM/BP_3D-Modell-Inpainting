@@ -35,8 +35,8 @@ PICTURE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
 VIDEO_TYPES = (".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")
 METHODS = [  # the tries of a block that stays bad: the user's inversion first
     {"method": "inversion", "start": "inverted", "soft": 2},
-    {"method": "repaint"},
     {"method": "inversion", "start": "random", "soft": 2},
+    {"method": "inversion", "start": "random", "soft": 0},
 ]
 
 

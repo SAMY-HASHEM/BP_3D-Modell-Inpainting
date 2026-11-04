@@ -39,7 +39,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 14, 1),
+    "version": (1, 15, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -293,16 +293,15 @@ class InpaintSettings(bpy.types.PropertyGroup):
     seed: bpy.props.IntProperty(name="Seed", default=1, min=0, description="Another seed gives another result")
     grow: bpy.props.IntProperty(name="Grow", default=2, min=0, max=8,
                                 description="Grow the marked area by this many voxels (of 64 per side)")
-    steps: bpy.props.IntProperty(name="Steps", default=12, min=4, max=50, description="Sampling steps per stage")
+    steps: bpy.props.IntProperty(name="Steps", default=25, min=4, max=50, description="Sampling steps per stage")
     room: bpy.props.FloatProperty(name="Room above", default=0.0, min=0.0, max=0.5, step=5,
                                   description="Share of TRELLIS.2's space kept free above the model, for a new part "
                                               "on top of it (e.g. 0.2 for a crown on a head that touches the top)")
     method: bpy.props.EnumProperty(
         name="Method",
-        items=[("repaint", "Repaint", "The rest is kept with fresh noise at every step (fast)"),
-               ("inversion", "Inversion", "The rest follows the original's own path and the new area attends to "
-                                          "exactly the original around it: joins better, about 3x slower")],
-        default="repaint")
+        items=[("inversion", "Inversion", "As VoxHammer: the rest follows the original's own path and the new area "
+                                          "attends to exactly the original around it")],
+        default="inversion")
     model: bpy.props.PointerProperty(name="Model", type=bpy.types.Object, description="The model being changed")
     connection: bpy.props.EnumProperty(
         name="Connection",
@@ -956,11 +955,144 @@ def open_image_window(path):
     area.spaces.active.image = image
 
 
+# ---------------------------------------------------------------- the picture of the change, without any AI
+
+GREY = (0.745, 0.745, 0.753)
+
+
+def read_image(path):
+    """A picture as rows x columns x 4, top row first, as stored in the file."""
+    image = bpy.data.images.load(path, check_existing=False)
+    width, height = image.size
+    pixels = np.empty(width * height * 4, np.float32)
+    image.pixels.foreach_get(pixels)
+    bpy.data.images.remove(image)
+    return pixels.reshape(height, width, 4)[::-1]
+
+
+def write_image(pixels, path):
+    height, width = pixels.shape[:2]
+    image = bpy.data.images.new("inpaint_picture", width, height, alpha=True)
+    image.colorspace_settings.name = "sRGB"
+    image.pixels.foreach_set(pixels[::-1].astype(np.float32).ravel())
+    image.filepath_raw = path
+    image.file_format = "PNG"
+    image.save()
+    bpy.data.images.remove(image)
+
+
+def cut_out(pixels):
+    """The object of a picture, cropped: its alpha, or else everything that isn't the plain background around it."""
+    if pixels[..., 3].min() > 0.9:
+        border = np.concatenate([pixels[0, :, :3], pixels[-1, :, :3], pixels[:, 0, :3], pixels[:, -1, :3]])
+        plain = np.linalg.norm(pixels[..., :3] - np.median(border, 0), axis=2) < 0.12
+        reach = lambda a, axis: np.flip(np.logical_and.accumulate(np.flip(a, axis), axis), axis)
+        outside = (np.logical_and.accumulate(plain, 0) | reach(plain, 0)
+                   | np.logical_and.accumulate(plain, 1) | reach(plain, 1))  # only background the edge can reach
+        pixels = np.dstack([pixels[..., :3], (~outside).astype(np.float32)])
+    rows, cols = np.nonzero(pixels[..., 3] > 0.5)
+    if not len(rows):
+        return None
+    return pixels[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+
+
+def resized(pixels, width, height):
+    ys = np.linspace(0, pixels.shape[0] - 1, height)
+    xs = np.linspace(0, pixels.shape[1] - 1, width)
+    y0, x0 = ys.astype(int), xs.astype(int)
+    y1, x1 = np.minimum(y0 + 1, pixels.shape[0] - 1), np.minimum(x0 + 1, pixels.shape[1] - 1)
+    fy, fx = (ys - y0)[:, None, None], (xs - x0)[None, :, None]
+    top = pixels[y0][:, x0] * (1 - fx) + pixels[y0][:, x1] * fx
+    return top * (1 - fy) + (pixels[y1][:, x0] * (1 - fx) + pixels[y1][:, x1] * fx) * fy
+
+
+def render_view(model, rotation, path, size=1024):
+    """The model alone from the view's direction, without perspective, so every pixel is a known place.
+    Returns (centre, right, up, span) of the camera."""
+    scene = bpy.data.scenes.new("InpaintView")
+    scene.collection.objects.link(model)
+    corners = [model.matrix_world @ Vector(c) for c in model.bound_box]
+    center = sum(corners, Vector()) / 8
+    span = max((a - b).length for a in corners for b in corners) * 1.3  # room for a new part
+    world = bpy.data.worlds.new("InpaintView")
+    world.use_nodes = True
+    world.node_tree.nodes["Background"].inputs[0].default_value = (1, 1, 1, 1)
+    world.node_tree.nodes["Background"].inputs[1].default_value = 0.9
+    scene.world = world
+    sun = bpy.data.objects.new("InpaintSun", bpy.data.lights.new("InpaintSun", "SUN"))
+    sun.data.energy = 2.0
+    sun.rotation_euler = rotation.to_euler()
+    scene.collection.objects.link(sun)
+    camera = bpy.data.objects.new("InpaintCamera", bpy.data.cameras.new("InpaintCamera"))
+    camera.data.type = "ORTHO"
+    camera.data.ortho_scale = span
+    camera.data.clip_end = span * 10
+    camera.location = center + rotation @ Vector((0, 0, span * 2))
+    camera.rotation_euler = rotation.to_euler()
+    scene.collection.objects.link(camera)
+    scene.camera = camera
+    scene.render.engine = "CYCLES"
+    scene.cycles.device = "CPU"
+    scene.cycles.samples = 16
+    scene.cycles.use_denoising = True
+    scene.render.resolution_x = scene.render.resolution_y = size
+    scene.render.film_transparent = True
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
+    scene.render.filepath = path
+    bpy.ops.render.render(write_still=True, scene=scene.name)
+    right, up = rotation @ Vector((1, 0, 0)), rotation @ Vector((0, 1, 0))
+    for thing, where in ((camera.data, bpy.data.cameras), (sun.data, bpy.data.lights)):
+        where.remove(thing)
+    scene.collection.objects.unlink(model)
+    bpy.data.scenes.remove(scene)
+    bpy.data.worlds.remove(world)
+    return center, right, up, span
+
+
+def picture_of_change(model, rotation, points, reference, stem):
+    """BEFORE, AFTER and the 2D MASK of the whole model from this view (as the crown on the bee): the reference's
+    object is put into the marked area of a render of the model. Writes <stem>_before.png, <stem>.png, <stem>_mask.png."""
+    render = stem + "_render.png"
+    center, right, up, span = render_view(model, rotation, render)
+    view = read_image(render)
+    os.remove(render)
+    size = view.shape[0]
+    alpha = view[..., 3:4]
+    grey = np.array(GREY, np.float32)
+    before = view[..., :3] * alpha + grey * (1 - alpha)
+    part = cut_out(read_image(reference))
+    if part is None:
+        return "The reference picture shows no object"
+    world = np.stack([points[:, 0], -points[:, 2], points[:, 1]], 1) - np.array(center)  # glTF back to Blender's axes
+    xs = (world @ np.array(right) / span + 0.5) * size
+    ys = (0.5 - world @ np.array(up) / span) * size
+    left, top, wide, tall = xs.min(), ys.min(), np.ptp(xs), np.ptp(ys)
+    scale = min(wide / part.shape[1], tall / part.shape[0])
+    width, height = max(2, int(part.shape[1] * scale)), max(2, int(part.shape[0] * scale))
+    x, y = int(left + (wide - width) / 2), int(top + tall - height)  # middle of the area, standing on its floor
+    if x < 0 or y < 0 or x + width > size or y + height > size:
+        return "The marked area is outside the view"
+    part = resized(part, width, height)
+    after, mask = before.copy(), np.zeros((size, size), bool)
+    share = part[..., 3:4]
+    after[y:y + height, x:x + width] = part[..., :3] * share + after[y:y + height, x:x + width] * (1 - share)
+    mask[y:y + height, x:x + width] = part[..., 3] > 0.1
+    for _ in range(4):  # a little wider, as an outline
+        mask = mask | np.roll(mask, 1, 0) | np.roll(mask, -1, 0) | np.roll(mask, 1, 1) | np.roll(mask, -1, 1)
+    opaque = np.ones((size, size, 1), np.float32)
+    write_image(np.dstack([before, opaque]), stem + "_before.png")
+    write_image(np.dstack([after, opaque]), stem + ".png")
+    write_image(np.dstack([np.repeat(mask[..., None], 3, 2).astype(np.float32), opaque]), stem + "_mask.png")
+    return None
+
+
 class INPAINT_OT_make_picture(bpy.types.Operator):
     bl_idname = "inpaint.make_picture"
-    bl_label = "1. Make picture from prompt"
-    bl_description = ("Picture the model from the current view and paint the prompt into the marked area "
-                      "(Qwen-Image-Edit in ComfyUI); the result becomes the Picture")
+    bl_label = "1. Make picture"
+    bl_description = ("Picture the whole model from the current view, with the Reference put into the marked area: "
+                      "the picture before, after and the 2D mask (no AI, on every PC). Without a Reference: "
+                      "the prompt is painted in by Qwen-Image-Edit in ComfyUI (only on This PC)")
 
     @classmethod
     def poll(cls, context):
@@ -968,19 +1100,30 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
 
     def execute(self, context):
         settings = context.scene.inpaint
-        if not settings.prompt.strip():
-            self.report({"ERROR"}, "Write a prompt first")
-            return {"CANCELLED"}
         reference = bpy.path.abspath(settings.reference) if settings.reference else ""
         if reference and not os.path.isfile(reference):
             self.report({"ERROR"}, "The reference picture doesn't exist")
             return {"CANCELLED"}
-        if not is_local():  # the picture AI (ComfyUI) runs only on this PC: the uni server takes a ready picture
-            if reference:
-                settings.picture = settings.reference
-                self.report({"INFO"}, "Uni server: your reference picture is now the Picture (C). Press 2. Regenerate area")
-                return {"FINISHED"}
-            self.report({"ERROR"}, "Uni server: skip step 1, choose a picture in C. Picture, then 2. Regenerate area")
+        if reference:  # the collage: the whole model before, after and the 2D mask
+            area = area_points(self, context)
+            if area is None:
+                return {"CANCELLED"}
+            model, points = area[:2]
+            folder = bpy.path.abspath(settings.folder)
+            os.makedirs(folder, exist_ok=True)
+            stem = os.path.join(folder, f"{bpy.path.clean_name(model.name)}_picture_seed{settings.seed}")
+            problem = picture_of_change(model, context.space_data.region_3d.view_rotation.copy(), points, reference, stem)
+            if problem:
+                self.report({"ERROR"}, problem)
+                return {"CANCELLED"}
+            settings.picture = stem + ".png"
+            self.report({"INFO"}, "Picture ready (before, after, 2D mask). Press 2. Regenerate area")
+            return {"FINISHED"}
+        if not is_local():  # the picture AI (ComfyUI) runs only on this PC
+            self.report({"ERROR"}, "Uni server: choose a Reference picture of the new part")
+            return {"CANCELLED"}
+        if not settings.prompt.strip():
+            self.report({"ERROR"}, "Choose a Reference picture, or write a prompt")
             return {"CANCELLED"}
         if not server_ready(self):
             return {"CANCELLED"}
