@@ -75,7 +75,7 @@ def command_for(job, folder, zip_path, gpu):
     if job["kind"] == "pipeline":  # the whole grid loop for one character (scripts/pipeline/auto_pipeline.py)
         name = job.get("name", "")
         rounds, threshold = int(job.get("rounds", 3)), float(job.get("threshold", 85))
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name) or not 1 <= rounds <= 5 or not 50 <= threshold <= 100:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name) or not 0 <= rounds <= 5 or not 50 <= threshold <= 100:
             raise ValueError(f"bad pipeline job: {name}, {rounds} rounds, threshold {threshold}")
         pictures = os.path.join(folder, "pictures")
         if not os.path.isdir(pictures) or not os.listdir(pictures):
