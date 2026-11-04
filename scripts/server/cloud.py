@@ -145,10 +145,9 @@ def setup(args):
     """Asks for the cloud login (an app password, not the uni password), tests it, saves it privately."""
     print("Sciebo: avatar (top right) > Persönliche Einstellungen > Sicherheit > 'Neues App-Passwort erstellen'.")
     print("Use the login name and the password shown there.\n")
-    url = input(f"WebDAV address [{DEFAULT_URL}]: ").strip() or DEFAULT_URL
+    url, folder = args.url or DEFAULT_URL, args.folder or FOLDER  # almost never changed: only as options
     user = input("Login name (Anmeldename): ").strip()
     password = getpass.getpass("App password (not shown while typing): ").strip()
-    folder = input(f"Cloud folder for the jobs [{FOLDER}] (someone shared theirs with you: its path): ").strip() or FOLDER
     cloud = Cloud({"url": url, "user": user, "password": password, "folder": folder})
     try:
         cloud.make_folder()
@@ -410,7 +409,10 @@ def device(args):
 def main():
     parser = argparse.ArgumentParser(description="Uni GPU server jobs through the Sciebo cloud")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("setup", help="save the cloud login (once per computer)").set_defaults(run=setup)
+    p = sub.add_parser("setup", help="save the cloud login (once per computer): asks only login name and app password")
+    p.add_argument("--url", help=f"another WebDAV address (default {DEFAULT_URL})")
+    p.add_argument("--folder", help=f"another cloud folder for the jobs, e.g. one shared with you (default {FOLDER})")
+    p.set_defaults(run=setup)
     p = sub.add_parser("send", help="send a job .zip (e.g. from Blender's 'Save job for server')")
     p.add_argument("job")
     p.set_defaults(run=send)
