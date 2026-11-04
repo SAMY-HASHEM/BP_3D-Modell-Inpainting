@@ -79,6 +79,7 @@ def main():
     parser.add_argument("--threshold", type=float, default=85)
     parser.add_argument("--blocks", type=int, default=4, help="blocks per side of the cube (4 = 256 of 1024)")
     parser.add_argument("--frames", type=int, default=12, help="frames of a video")
+    parser.add_argument("--max-blocks", type=int, default=6, help="blocks redone per round (the worst first)")
     parser.add_argument("--zip", action="store_true", help="also a small zip of the results (for the cloud worker)")
     parser.add_argument("--live", help="the cloud job's name: send every in-between result at once")
     args = parser.parse_args()
@@ -121,7 +122,9 @@ def main():
                "--resolution", "1024", "--steps", "12", "--faces", "4000000", "--seed", "42", "--out", model]
     if base["shape_only"]:
         command += ["--shape-only", *map(view_path, base["shape_only"])]
-    if base["colour_only"]:
+    # colours from pictures of another pose only if the model's own pose has none: the robot fly's 7 action
+    # pictures made its base almost black
+    if base["colour_only"] and not base["both"]:
         command += ["--colour-only", *map(view_path, base["colour_only"])]
     if len(base["both"]) + len(base["shape_only"]) + len(base["colour_only"]) == 1:  # one picture: generate.py
         only = (base["both"] + base["colour_only"] + base["shape_only"])[0]
@@ -148,10 +151,12 @@ def main():
         live(args, os.path.join(grid_dir, "heatmap.jpg"), f"03_heatmap_r{r}.jpg")
         live(args, grid_path, f"03_grid_r{r}.json")
         bad = sorted((b for b in grid["blocks"] if b["bad"]), key=lambda b: b["score"])
+        all_bad = len(bad)
+        bad = bad[:args.max_blocks]  # the worst first: a round stays short (a block took 8-22 minutes)
         summary["rounds"].append({"round": r, "model": os.path.relpath(model, out),
                                   "scores": {"".join(map(str, b["block"])): b["score"] for b in grid["blocks"]},
                                   "bad": ["".join(map(str, b["block"])) for b in bad]})
-        print(f"  {len(grid['blocks'])} blocks, {len(bad)} bad", flush=True)
+        print(f"  {len(grid['blocks'])} blocks, {all_bad} bad, the worst {len(bad)} are redone", flush=True)
         if not bad:
             break
 
@@ -173,7 +178,7 @@ def main():
             block_out = os.path.join(block_dir, "block.glb")
             command = [script("inpainting/refine_region.py"), model, view_path(pick["view"]), "--box3d",
                        *[f"{v:.5f}" for v in b["box"][0] + b["box"][1]], "--role", role, "--method", how["method"],
-                       "--steps", "25", "--seed", str(42 + 7 * k), "--texture-guidance", "3", "--faces", "4000000",
+                       "--steps", "12", "--seed", str(42 + 7 * k), "--texture-guidance", "3", "--faces", "1500000",
                        "--grow", "1", "--out", block_out]
             if how["method"] == "inversion":
                 command += ["--start", how["start"], "--soft", str(how["soft"])]

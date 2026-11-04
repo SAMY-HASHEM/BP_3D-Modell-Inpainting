@@ -38,6 +38,9 @@ from project_texture import fit_camera, load_meshes, object_masks, render_meshes
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 JUDGE = "qwen3.6:27b"
 MIN_PIXELS = 600  # a block needs at least this many visible pixels in a picture to be judged there
+MIN_OVERLAP = 0.8  # a picture only judges if its camera fits this well (the model's pose; action poses fit 0.4-0.6)
+SHAPE_BROKEN = 30  # measured: only below this, on a big block, the shape counts and is regenerated too. DINOv3's number
+BIG_BLOCK = 15000  # is low on small or thin blocks whose shape is fine (the robot's antennae: 12), and rebuilding is risky
 
 QUESTION = """The first picture is a crop of the artist's picture of a character. The second picture shows the same spot
 of a 3D model of that character, from the same camera%s.
@@ -58,7 +61,39 @@ def encoded(image, size=512):
     return base64.b64encode(buffer.getvalue()).decode()
 
 
-BACKEND = {}  # "ollama" (Qwen3.6-27B, this PC) or "qwen3vl" (Qwen3-VL-8B through transformers, also on the server)
+BACKEND = {}  # "measured" (default), "ollama" (Qwen3.6-27B, this PC) or "qwen3vl" (Qwen3-VL-8B through transformers)
+
+
+def measure(picture, render, mask):
+    """The scores measured, on the object's pixels only (the same background on both sides). Qwen3-VL-8B gave a
+    completely white model 85; the measured colour difference tells it at once (robot fly: dark base 21, white 51).
+      colour: 100 - 1.5 x the difference of the mean colours (CIE Lab); 85 = a difference of 10
+      shape:  DINOv3's similarity of both crops, 0.30 -> 0, 0.85 -> 100; 85 = 0.77"""
+    from torchvision import transforms as T
+    from transformers import AutoModel
+    if "dino" not in BACKEND:
+        BACKEND["dino"] = AutoModel.from_pretrained("facebook/dinov3-vitl16-pretrain-lvd1689m").cuda().eval()
+        BACKEND["pre"] = T.Compose([T.Resize((512, 512)), T.ToTensor(), T.Normalize([.485, .456, .406], [.229, .224, .225])])
+
+    def feature(a):
+        with torch.no_grad():
+            out = BACKEND["dino"](BACKEND["pre"](Image.fromarray((a * 255).astype(np.uint8)))[None].cuda())
+        return torch.nn.functional.normalize(out.pooler_output, dim=-1)[0]
+
+    def lab(a):
+        linear = np.where(a <= 0.04045, a / 12.92, ((a + 0.055) / 1.055) ** 2.4)
+        m = np.array([[.4124, .3576, .1805], [.2126, .7152, .0722], [.0193, .1192, .9505]])
+        xyz = linear @ m.T / np.array([.9505, 1, 1.089])
+        f = np.where(xyz > .00886, np.cbrt(xyz), 7.787 * xyz + 16 / 116)
+        return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
+
+    a = np.asarray(picture.convert("RGB"), np.float32) / 255
+    b = np.asarray(render.convert("RGB"), np.float32) / 255
+    cosine = float(feature(a * mask[..., None]) @ feature(b * mask[..., None]))
+    difference = float(np.linalg.norm(lab(a[mask]).mean(0) - lab(b[mask]).mean(0)))
+    return {"shape": round(float(np.clip((cosine - 0.30) / 0.55 * 100, 0, 100))),
+            "colour": round(float(np.clip(100 - 1.5 * difference, 0, 100))),
+            "cosine": round(cosine, 3), "difference": round(difference, 1), "why": "measured"}
 
 
 def ask(images, question):
@@ -81,6 +116,8 @@ def ask(images, question):
 
 
 def unload():
+    if BACKEND.get("kind") == "measured":
+        return
     if BACKEND.get("kind") == "qwen3vl":
         BACKEND.clear()
         torch.cuda.empty_cache()
@@ -141,18 +178,12 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--blocks", type=int, default=4, help="blocks per side of the cube (4 = 256 of 1024)")
     parser.add_argument("--threshold", type=float, default=85)
-    parser.add_argument("--judge", choices=["auto", "ollama", "qwen3vl"], default="auto",
-                        help="auto: Ollama's qwen3.6:27b if it runs here, else Qwen3-VL-8B (e.g. on the uni server)")
+    parser.add_argument("--judge", choices=["measured", "ollama", "qwen3vl"], default="measured",
+                        help="measured (default): colour difference + DINOv3; or a vision AI")
     args = parser.parse_args()
     kind = args.judge
-    if kind == "auto":
-        try:
-            tags = json.load(urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=3))
-            kind = "ollama" if any(m["name"] == JUDGE for m in tags.get("models", [])) else "qwen3vl"
-        except Exception:  # noqa: BLE001 (no Ollama here)
-            kind = "qwen3vl"
     BACKEND["kind"] = kind
-    print(f"judge: {JUDGE if kind == 'ollama' else 'Qwen3-VL-8B (transformers)'}", flush=True)
+    print(f"judge: {kind}", flush=True)
     os.makedirs(args.out, exist_ok=True)
     start = time.time()
 
@@ -183,7 +214,8 @@ def main():
         picture = pictures[n]
         cam, overlap = fit_camera(ctx, meshes, picture, masks[n])
         print(f"  camera of {n}: outline overlap {overlap:.2f}", flush=True)
-        if overlap < 0.6:
+        if overlap < MIN_OVERLAP:
+            print(f"    left out: another pose than the model", flush=True)
             continue  # the camera doesn't fit: this picture can't judge
         w, h = picture.size
         ids = face_ids(ctx, meshes, cam, w, h)
@@ -220,7 +252,13 @@ def main():
             stem = f"b{i}{j}{k}_{kind}"
             ref.save(os.path.join(args.out, stem + "_picture.jpg"), quality=90)
             mine.save(os.path.join(args.out, stem + "_model.jpg"), quality=90)
-            answer = ask([ref, mine], QUESTION % (", in colour" if kind == "colour" else " as a grey clay render"))
+            if BACKEND["kind"] == "measured":
+                mask = renders[n]["blocks"][crop[1]:crop[3], crop[0]:crop[2]] >= 0
+                answer = measure(ref, mine, mask)
+                if kind == "shape":  # a grey picture says nothing about colours
+                    answer.pop("colour")
+            else:
+                answer = ask([ref, mine], QUESTION % (", in colour" if kind == "colour" else " as a grey clay render"))
             entry["scores"][kind] = {"view": n, "pixels": pixels, "crop": crop, **answer}
             print(f"  block {i}{j}{k} {kind:6s} ({n[-24:]}, {pixels} px): shape {answer.get('shape')}, "
                   f"colour {answer.get('colour')}  {answer.get('why', '')}", flush=True)
@@ -233,15 +271,24 @@ def main():
         if not numbers:
             continue
         entry["score"] = min(numbers)
+        if BACKEND["kind"] == "measured":  # the colours decide, the shape only when a big block is really broken
+            parts = list(entry["scores"].values())
+            broken = [s["shape"] for s in parts if s["pixels"] >= BIG_BLOCK and s.get("shape", 100) < SHAPE_BROKEN]
+            colours = [s["colour"] for s in parts if "colour" in s]
+            entry["score"] = min(broken + colours) if broken or colours else min(numbers)
         entry["bad"] = entry["score"] < args.threshold
         # what to redo: the shape too, or only the colours
         shapes = [s.get("shape") for s in entry["scores"].values() if isinstance(s.get("shape"), (int, float))]
-        entry["redo"] = ("shape" if shapes and min(shapes) < args.threshold else "colour") if entry["bad"] else None
+        if BACKEND["kind"] == "measured":
+            redo = "shape" if broken else "colour"
+        else:
+            redo = "shape" if shapes and min(shapes) < args.threshold else "colour"
+        entry["redo"] = redo if entry["bad"] else None
         grid.append(entry)
     unload()
 
     json.dump({"model": args.model, "threshold": args.threshold, "block_size": size, "counts": counts,
-               "judge": JUDGE if kind == "ollama" else "Qwen/Qwen3-VL-8B-Instruct", "blocks": grid, "seconds": round(time.time() - start)},
+               "judge": kind, "blocks": grid, "seconds": round(time.time() - start)},
               open(os.path.join(args.out, "grid.json"), "w"), indent=1)
 
     # heat map: every judged picture with each block's outline and score
