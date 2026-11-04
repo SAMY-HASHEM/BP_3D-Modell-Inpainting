@@ -94,14 +94,31 @@ The worker keeps running after you close the VDI.
    surface in the box stays exactly (no colour bleeding onto it). Needs `./install_mask.sh` once on this PC
    (a mask AI, about 4 GB VRAM). Box choices: *Everything in the box* / *Only the selected faces* /
    *Selected faces + empty space*.
-2. **Picture**: the model's picture, or one made with *Make picture from prompt* (it keeps the render
-   before the edit and the edit's 2D mask, which **Method: Inversion** uses).
-3. **Method**: *Repaint* (fast) or *Inversion* (the new part joins better, about 3× slower; 25 steps for
-   the best quality). At the top of the panel, *Where does the AI run?*: **Uni server** → **2. Regenerate area**.
+2. Turn the view to show the area. Choose a **Reference**: a picture of the new part alone (one view, plain
+   background). Press **1. Make picture**. It renders the whole model and puts the part into your box, no AI:
+   the picture **before**, **after** and the **2D mask**. This is how the crown came onto the bee. A picture of only
+   the new part must not go in as the Picture: TRELLIS.2 reads it as the whole object.
+3. **Method** is always *Inversion*, 25 steps. For something on top of the model set **Room above** (about 0.15).
+   At the top of the panel, *Where does the AI run?*: **Uni server** → **2. Regenerate area**.
 4. The panel shows the progress (`queued` → `running: GPU 2: …` → `done`); the result is downloaded
    and appears next to the hidden original.
 
-**Without Blender** (a terminal on your PC, in `~/inpainting-3D`):
+**Without Blender**, one line makes the three pictures, with the side, size and place measured:
+
+```
+python scripts/inpainting/make_edit.py model.glb crown.png --reference robot.png --out outputs/edits/robot_crown
+```
+
+`area_map.jpg` shows every small cube of the area: **green keep** (surface that stays exact), **red delete** (old surface
+under the mask, only with `--replace`), **blue edit** (empty room for the new part). Then send it:
+
+```
+E=outputs/edits/robot_crown
+python scripts/server/cloud.py inpaint model.glb $E/after.png --area $E/area.npy --source $E/before.png \
+    --picture-mask $E/mask.png --grow 0 --steps 25 --variant inversion,room=0.15,start=random,soft=2,texture_guidance=3
+```
+
+**Other commands** (a terminal on your PC, in `~/inpainting-3D`):
 
 ```
 python3 scripts/server/cloud.py generate front.png back.png --resolution 1024 --steps 25 --mirror   # picture(s) -> model
@@ -177,5 +194,5 @@ Never put the app password in a screenshot or a chat.
   fetch that branch's newest code from GitHub before the job, and restart itself if the worker changed.
 - **Safety:** the worker only runs our own scripts with checked settings, never commands from the
   cloud. An app password only opens your Sciebo; revoke it any time in Sciebo → Sicherheit.
-- **Make picture from prompt** only works with a server on your own PC (it needs ComfyUI there).
+- **1. Make picture** with a Reference works everywhere. Only painting from a *prompt* needs ComfyUI on your own PC.
 - The cloud folder keeps jobs and results; delete old ones in Sciebo from time to time.
