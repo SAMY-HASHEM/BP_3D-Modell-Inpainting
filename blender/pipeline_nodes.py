@@ -13,8 +13,8 @@ in order; a node whose result is already there (same settings) is done at once.
 On a computer without the project's environment (e.g. a Windows PC at the uni) the heavy work runs on the uni
 server: 3D view > sidebar (N) > BP > BP Server sends a picture folder, fetches the results and opens them.
 
-Install: Edit > Preferences > Add-ons > arrow at the top right > Install from Disk > this file, enable it.
-On Linux a link into Blender's add-on folder is better (see comfyui/README.md).
+Install: Edit > Preferences > Add-ons > arrow at the top right > Install from Disk > this one file, enable it. Then
+3D view > sidebar (N) > BP > BP Setup: the rest (the project, the Inpaint add-on, the login, the pictures) is buttons.
 """
 import importlib.util
 import json
@@ -29,7 +29,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, St
 bl_info = {
     "name": "BP Pipeline Nodes",
     "author": "Samy Hashem",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (4, 2, 0),
     "location": "Node Editor > BP Pipeline",
     "description": "Pictures -> data sheet -> base model -> refined parts -> final model, as nodes (TRELLIS.2)",
@@ -61,16 +61,25 @@ def load_module(name, path):
     return module
 
 
-PROJECT = find_project()
-if PROJECT:
-    core = load_module("bp_nodes_core", os.path.join(PROJECT, "scripts", "pipeline", "nodes_core.py"))  # standard library only
-else:  # the add-on still loads; the panel says what to do
-    class core:  # noqa: N801
-        PARTS = ["head", "hair", "bust", "belly", "back", "butt", "thighs", "lower_legs", "feet"]
-        VISION_MODELS = ["Qwen/Qwen3-VL-8B-Instruct"]
-# the nodes run here only where the project's environment is (Linux, with conda); else through the server
-CAN_RUN = bool(PROJECT) and os.name != "nt" and os.path.isfile(os.path.join(PROJECT, "activate.sh")) \
-    and os.path.isdir(os.path.join(PROJECT, "conda", "envs"))
+class core:  # noqa: N801 (until the project is there; the BP Setup box gets it)
+    PARTS = ["head", "hair", "bust", "belly", "back", "butt", "thighs", "lower_legs", "feet"]
+    VISION_MODELS = ["Qwen/Qwen3-VL-8B-Instruct"]
+
+
+PROJECT, CAN_RUN = None, False
+
+
+def use_project():
+    """Loads what the add-on needs from the project folder, if there is one."""
+    global PROJECT, core, CAN_RUN
+    PROJECT = find_project()
+    if PROJECT:
+        core = load_module("bp_nodes_core", os.path.join(PROJECT, "scripts", "pipeline", "nodes_core.py"))  # standard library only
+    # the nodes run here only where the project's environment is (Linux, with conda); else through the server
+    CAN_RUN = bool(PROJECT) and os.name != "nt" and os.path.isdir(os.path.join(PROJECT, "conda", "envs"))
+
+
+use_project()
 
 TREE = "BPPipelineTree"
 SEEDS = (42, 7, 123, 2024)  # the head's candidates for the Pick best node
@@ -620,12 +629,174 @@ def run_files(run, *types):
     return sorted(found)
 
 
+# ------------------------------------------------------------------ setup without a terminal
+
+CODE_ZIP = "https://github.com/SAMY-HASHEM/BP_3D-Modell-Inpainting/archive/refs/heads/main.zip"
+CONFIG = os.path.expanduser("~/.config/inpainting3d/cloud.json")  # the login, shared with the Inpaint add-on and cloud.py
+WEBDAV = "https://uni-duisburg-essen.sciebo.de/remote.php/webdav"
+setup = {"message": "", "busy": False, "enable_inpaint": False}
+
+
+def inpaint_ready():
+    import addon_utils
+    return "inpaint_addon" in bpy.context.preferences.addons or any(
+        m.__name__ == "inpaint_addon" for m in addon_utils.modules())
+
+
+def has_pictures():
+    folder = os.path.join(PROJECT or "", "pictures")
+    return bool(PROJECT) and os.path.isdir(folder) and any(os.scandir(folder))
+
+
+def get_code():
+    """The project from GitHub, into the home folder (no Git needed). A Git checkout is left to Git. Replaces only the
+    code: pictures/ and outputs/ stay."""
+    import io
+    import shutil
+    import urllib.request
+    import zipfile
+    target = PROJECT or os.path.join(os.path.expanduser("~"), "BP_3D-Modell-Inpainting")
+    if os.path.isdir(os.path.join(target, ".git")):
+        subprocess.run(["git", "-C", target, "pull", "-q"], check=True)
+    else:
+        setup["message"] = "downloading the project..."
+        data = urllib.request.urlopen(CODE_ZIP, timeout=300).read()
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            for item in z.infolist():
+                name = item.filename.split("/", 1)[1] if "/" in item.filename else ""
+                if not name or item.is_dir():
+                    continue
+                path = os.path.join(target, *name.split("/"))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with z.open(item) as source, open(path, "wb") as out:
+                    shutil.copyfileobj(source, out)
+    for folder in ("pictures", "outputs", os.path.join("outputs", "server_runs"), os.path.join("outputs", "cloud")):
+        os.makedirs(os.path.join(target, folder), exist_ok=True)
+    os.makedirs(os.path.dirname(PROJECT_NOTE), exist_ok=True)
+    with open(PROJECT_NOTE, "w") as f:
+        f.write(target)
+
+
+def finish_setup():
+    """Timer, in Blender's main thread: the Inpaint add-on (installed from the project) and its project folder."""
+    if setup["busy"]:
+        return 0.5
+    if not setup["enable_inpaint"]:
+        return None
+    setup["enable_inpaint"] = False
+    use_project()
+    try:
+        if not inpaint_ready():
+            bpy.ops.preferences.addon_install(filepath=os.path.join(PROJECT, "blender", "inpaint_addon.py"), overwrite=True)
+        bpy.ops.preferences.addon_enable(module="inpaint_addon")
+        bpy.context.preferences.addons["inpaint_addon"].preferences.project = PROJECT
+        bpy.ops.wm.save_userpref()
+        setup["message"] = "set up: now the Sciebo login" if not os.path.isfile(CONFIG) else "everything is set up"
+    except Exception as e:  # noqa: BLE001 (shown in the panel)
+        setup["message"] = f"{type(e).__name__}: {e}"[:120]
+    for area in bpy.context.screen.areas if bpy.context.screen else []:
+        area.tag_redraw()
+    return None
+
+
+def setup_work(work):
+    def run():
+        setup["busy"] = True
+        try:
+            work()
+        except Exception as e:  # noqa: BLE001 (shown in the panel)
+            setup["message"] = f"{type(e).__name__}: {e}"[:120]
+        setup["busy"] = False
+    threading.Thread(target=run, daemon=True).start()
+    bpy.app.timers.register(finish_setup, first_interval=0.5)
+
+
+class BP_OT_setup(bpy.types.Operator):
+    """Get or update the project and set up the Inpaint add-on: nothing else to install, no terminal"""
+    bl_idname, bl_label = "bp.setup", "Set up everything"
+
+    def execute(self, context):
+        def work():
+            get_code()
+            setup["enable_inpaint"] = True
+            setup["message"] = "project ready"
+        setup_work(work)
+        return {"FINISHED"}
+
+
+class BP_OT_login(bpy.types.Operator):
+    """Test the Sciebo login and save it for both add-ons"""
+    bl_idname, bl_label = "bp.login", "Save and test"
+
+    def execute(self, context):
+        wm = context.window_manager
+        user, password = wm.bp_user.strip(), wm.bp_password.strip()
+        wm.bp_password = ""  # never kept in a field
+
+        def work():
+            config = {"url": WEBDAV, "user": user, "password": password, "folder": "inpainting-jobs"}
+            module = cloud_module()
+            cloud = module.Cloud(config)
+            try:
+                cloud.make_folder()
+                cloud.list()
+            except Exception as e:  # noqa: BLE001
+                setup["message"] = f"Sciebo refused the login: {e}"[:120]
+                return
+            os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+            with open(os.open(CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+                json.dump(config, f)
+            setup["message"] = "login works"
+        setup_work(work)
+        return {"FINISHED"}
+
+
+class BP_OT_pictures(bpy.types.Operator):
+    """Fetch the picture folders from Sciebo"""
+    bl_idname, bl_label = "bp.pictures", "Get pictures"
+
+    def execute(self, context):
+        def work():
+            import types
+            cloud_module().pictures_sync(types.SimpleNamespace(direction="down"))
+            setup["message"] = "pictures ready"
+        setup_work(work)
+        return {"FINISHED"}
+
+
+class BP_PT_setup(bpy.types.Panel):
+    """A checklist: only what is still missing needs a click"""
+    bl_space_type, bl_region_type, bl_category, bl_label = "VIEW_3D", "UI", "BP", "BP Setup"
+
+    def draw(self, context):
+        layout = self.layout
+        check = lambda done, text: layout.label(text=text, icon="CHECKMARK" if done else "CHECKBOX_DEHLT")
+        login = os.path.isfile(CONFIG)
+        check(bool(PROJECT), "Project")
+        check(inpaint_ready(), "Inpaint add-on")
+        check(login, "Sciebo login")
+        check(has_pictures(), "Pictures")
+        layout.operator("bp.setup", text="Update project" if PROJECT and inpaint_ready() else "Set up everything", icon="IMPORT")
+        if PROJECT and not login:
+            box = layout.box()
+            box.label(text="Sciebo > Einstellungen > Sicherheit > App-Passwort")
+            box.prop(context.window_manager, "bp_user", text="Login name")
+            box.prop(context.window_manager, "bp_password", text="App password")
+            box.operator("bp.login", icon="CHECKMARK")
+        if PROJECT and login and not has_pictures():
+            layout.operator("bp.pictures", icon="IMAGE_DATA")
+        if setup["busy"]:
+            layout.label(text="working...", icon="TIME")
+        if setup["message"]:
+            layout.label(text=setup["message"])
+
+
 class BP_OT_server_send(bpy.types.Operator):
     """Send a picture folder to the uni server: the whole pipeline (one job at a time, one GPU)"""
     bl_idname, bl_label = "bp.server_send", "Send to the server"
 
     def execute(self, context):
-        folder = bpy.path.abspath(context.scene.bp_pictures)
+        folder = core.project_path(bpy.path.abspath(context.scene.bp_pictures))
         if not os.path.isdir(folder):
             self.report({"ERROR"}, f"no folder {folder}")
             return {"CANCELLED"}
@@ -692,9 +863,7 @@ class BP_PT_server(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         if not PROJECT:
-            layout.label(text="Project not found:", icon="ERROR")
-            layout.label(text="run  python scripts/server/cloud.py device")
-            layout.label(text="in the project folder, restart Blender")
+            layout.label(text="First: BP Setup above", icon="INFO")
             return
         layout.prop(context.scene, "bp_pictures", text="Pictures")
         layout.operator("bp.server_send", icon="EXPORT")
@@ -727,6 +896,7 @@ def add_menu(self, context):
 
 CLASSES = (BPPipelineTree, PicturesSocket, SortedSocket, ModelSocket, *NODES, BP_OT_run, BP_OT_cancel,
            BP_OT_view_picture, BP_OT_show_model, BP_OT_new_pipeline, BP_PT_pipeline, BP_MT_add,
+           BP_OT_setup, BP_OT_login, BP_OT_pictures, BP_PT_setup,
            BP_OT_server_send, BP_OT_server_fetch, BP_OT_server_auto, BP_OT_server_open, BP_PT_server)
 
 
@@ -735,9 +905,13 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.NODE_MT_add.append(add_menu)
     bpy.types.Scene.bp_pictures = StringProperty(name="Pictures", default="pictures/monster", subtype="DIR_PATH")
+    bpy.types.WindowManager.bp_user = StringProperty(name="Login name")
+    bpy.types.WindowManager.bp_password = StringProperty(name="App password", subtype="PASSWORD")
 
 
 def unregister():
+    del bpy.types.WindowManager.bp_user
+    del bpy.types.WindowManager.bp_password
     del bpy.types.Scene.bp_pictures
     bpy.types.NODE_MT_add.remove(add_menu)
     for cls in reversed(CLASSES):
