@@ -39,7 +39,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 14, 0),
+    "version": (1, 14, 1),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -971,12 +971,16 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
         if not settings.prompt.strip():
             self.report({"ERROR"}, "Write a prompt first")
             return {"CANCELLED"}
-        if not is_local():
-            self.report({"ERROR"}, "Making a picture needs an inpaint server on this computer (with ComfyUI)")
-            return {"CANCELLED"}
         reference = bpy.path.abspath(settings.reference) if settings.reference else ""
         if reference and not os.path.isfile(reference):
             self.report({"ERROR"}, "The reference picture doesn't exist")
+            return {"CANCELLED"}
+        if not is_local():  # the picture AI (ComfyUI) runs only on this PC: the uni server takes a ready picture
+            if reference:
+                settings.picture = settings.reference
+                self.report({"INFO"}, "Uni server: your reference picture is now the Picture (C). Press 2. Regenerate area")
+                return {"FINISHED"}
+            self.report({"ERROR"}, "Uni server: skip step 1, choose a picture in C. Picture, then 2. Regenerate area")
             return {"CANCELLED"}
         if not server_ready(self):
             return {"CANCELLED"}
