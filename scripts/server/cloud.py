@@ -17,6 +17,10 @@ Usage:
     python3 scripts/server/cloud.py generate front.png --code voxhammer   # with the newest code of a branch (GitHub)
     python3 scripts/server/cloud.py status                         # all jobs and how far they are
     python3 scripts/server/cloud.py fetch                          # download finished results to outputs/cloud/
+    python3 scripts/server/cloud.py pipeline "pictures/robot fly"  # the whole grid loop for a character
+    python3 scripts/server/cloud.py watch                          # every 10 minutes: all new server results
+    python3 scripts/server/cloud.py pictures up                    # this computer's pictures to Sciebo (down: back)
+    python3 scripts/server/cloud.py device                         # a new computer: folders, pictures, results
 
 In the cloud: <job>.zip (the job), <job>.status (written by the worker: queued, running, done or
 failed, with a message), <job>__<file>.glb (the results).
@@ -306,6 +310,99 @@ def fetch(args):
                 print(f"    -> {os.path.relpath(local, PROJECT_DIR)}")
 
 
+PICTURES = "inpainting-pictures"  # cloud folder: the pictures are not in Git (they belong to other artists)
+
+
+def pictures_sync(args):
+    """The picture folders through Sciebo (private), so every computer has them: up = this computer's pictures/ to
+    the cloud, down = the cloud's to this computer. Only files that are missing on the other side are copied."""
+    cloud = Cloud()
+    cloud.make_folder(PICTURES)
+    root = os.path.join(PROJECT_DIR, "pictures")
+    os.makedirs(root, exist_ok=True)
+    if args.direction == "up":
+        for folder in sorted(os.listdir(root)):
+            if not os.path.isdir(os.path.join(root, folder)):
+                continue
+            remote = f"{PICTURES}/{folder}"
+            cloud.make_folder(remote)
+            there = set(cloud.list(remote))
+            for name in sorted(os.listdir(os.path.join(root, folder))):
+                if name not in there and os.path.isfile(os.path.join(root, folder, name)):
+                    print(f"up: {folder}/{name}", flush=True)
+                    cloud.upload(os.path.join(root, folder, name), name, remote)
+    else:
+        for folder in sorted(cloud.list(PICTURES)):
+            remote = f"{PICTURES}/{folder}"
+            os.makedirs(os.path.join(root, folder), exist_ok=True)
+            for name in sorted(cloud.list(remote)):
+                local = os.path.join(root, folder, name)
+                if not os.path.exists(local):
+                    print(f"down: {folder}/{name}", flush=True)
+                    cloud.download(name, local, remote)
+
+
+def fetch_results(cloud):
+    """In-between results and finished pipeline zips to outputs/server_runs/<job>/ (a zip is unpacked there)."""
+    new = 0
+    names = cloud.list()
+    for name in names:
+        if "__" not in name:
+            continue
+        job, rest = name.split("__", 1)
+        if rest.startswith("live_"):
+            label = rest[len("live_"):]
+        elif "_pipeline_" in job and name.endswith(".zip"):
+            label = "result.zip"
+        else:
+            continue
+        folder = os.path.join(PROJECT_DIR, "outputs", "server_runs", job)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, label)
+        if os.path.exists(path):
+            continue
+        print(f"{time.strftime('%H:%M')} new: {job}: {label}", flush=True)
+        cloud.download(name, path + ".part")
+        os.replace(path + ".part", path)
+        new += 1
+        if label == "result.zip":
+            zipfile.ZipFile(path).extractall(folder)
+    return new
+
+
+def jobs_now(cloud):
+    """The pipeline jobs and how far they are, one line each."""
+    for name in sorted(cloud.list()):
+        if name.endswith(".status") and "_pipeline_" in name:
+            status = cloud.read_status(name[:-7]) or {}
+            if status.get("state") != "done":
+                print(f"    {name[:-7]}: {status.get('state')}, {status.get('message', '')[:90]}", flush=True)
+
+
+def watch(args):
+    """Every --every minutes: everything new from the server. Stop it with Ctrl+C."""
+    cloud = Cloud()
+    print(f"Fetching every {args.every} minutes into outputs/server_runs/ (stop: Ctrl+C)", flush=True)
+    while True:
+        try:
+            if not fetch_results(cloud):
+                print(f"{time.strftime('%H:%M')} nothing new", flush=True)
+            jobs_now(cloud)
+        except Exception as e:  # noqa: BLE001 (the network comes and goes: try again next time)
+            print(f"{time.strftime('%H:%M')} not reachable: {type(e).__name__}: {e}", flush=True)
+        time.sleep(args.every * 60)
+
+
+def device(args):
+    """A new computer after git clone / git pull: the folders Git doesn't have, the pictures and all results."""
+    for folder in ("outputs", "pictures", os.path.join("outputs", "server_runs"), os.path.join("outputs", "cloud")):
+        os.makedirs(os.path.join(PROJECT_DIR, folder), exist_ok=True)
+    args.direction = "down"
+    pictures_sync(args)
+    print(f"{fetch_results(Cloud())} new results in outputs/server_runs/", flush=True)
+    print("Ready. Next: python3 scripts/server/cloud.py watch", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Uni GPU server jobs through the Sciebo cloud")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -335,6 +432,14 @@ def main():
     p.add_argument("--threshold", type=float, default=85)
     p.add_argument("--code", default="main", help="the branch the server runs it with (default: main, newest)")
     p.set_defaults(run=pipeline)
+    p = sub.add_parser("pictures", help="the picture folders through Sciebo: up (from here) or down (to here)")
+    p.add_argument("direction", choices=["up", "down"])
+    p.set_defaults(run=pictures_sync)
+    p = sub.add_parser("device", help="a new computer: make the folders, get the pictures and all results")
+    p.set_defaults(run=device)
+    p = sub.add_parser("watch", help="fetch everything new from the server, again and again")
+    p.add_argument("--every", type=int, default=10, help="minutes between fetches (default 10)")
+    p.set_defaults(run=watch)
     p = sub.add_parser("live", help="download the in-between results of pipeline jobs to outputs/server_runs/")
     p.add_argument("job", nargs="?", help="part of the job's name (default: all)")
     p.set_defaults(run=live)
