@@ -166,7 +166,8 @@ nohup python -u scripts/server/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
 tail -n 5 outputs/cloud_worker.log                         # after 1 minute: no "401 Unauthorized"
 ```
 
-Setup says "Works" but the log shows `401 Unauthorized` → an old worker is still running: stop all and start one again.
+Setup says "Works" but the log shows `401 Unauthorized` → stop all workers and start one again (an old worker, or Sciebo
+needed a moment for the new password; a restart fixed it on Nov 4).
 Never put the app password in a screenshot or a chat.
 
 ## Good to know

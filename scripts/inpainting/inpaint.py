@@ -442,8 +442,17 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
                                   original_kwargs={"concat_cond": original.replace(original_shape)})
         tex = tex * tstd + tmean
 
-        report("6/6 Decoding and saving (takes a few minutes)")
+        report("6/6 Decoding and saving" + (" the colours on the same mesh" if keep_shape else " (takes a few minutes)"))
         result = pipeline.decode_latent(shape, tex, RESOLUTION)[0]
+    if keep_shape:  # the mesh stays: no new mesh and no UV unwrapping (xatlas took over an hour per block on the server)
+        del shape, tex, shape_norm, noise, z, shape_known, tex_known, ss_known, cond_512, cond_1024, source_512, source_1024
+        gc.collect()
+        torch.cuda.empty_cache()
+        save_colours_on_mesh(result, mesh, vertices, out)
+        del result
+        torch.cuda.empty_cache()
+        report(f"Done in {time.time() - start_time:.0f} s")
+        return out
     # the export needs most of the GPU: drop everything else first
     del shape, tex, shape_norm, noise, z, shape_known, tex_known, ss_known, cond_512, cond_1024, source_512, source_1024
     gc.collect()
@@ -457,6 +466,54 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     scene.export(out, extension_webp=True)
     report(f"Done in {time.time() - start_time:.0f} s")
     return out
+
+
+def save_colours_on_mesh(result, mesh, cube_vertices, out, chunk=8_000_000):
+    """The regenerated colours written into the model's own texture (its own UV map), as TRELLIS.2's texturing
+    pipeline does it: the same mesh comes out, only the textures are new."""
+    import flex_gemm
+    import nvdiffrast.torch as dr
+    material = mesh.visual.material
+    base = material.baseColorTexture.convert("RGB")
+    width, height = base.size
+    uv = torch.from_numpy(np.mod(np.asarray(mesh.visual.uv, np.float32), 1.0)).cuda()
+    clip = torch.stack([uv[:, 0] * 2 - 1, (1 - uv[:, 1]) * 2 - 1, torch.zeros_like(uv[:, 0]), torch.ones_like(uv[:, 0])], 1)[None]
+    faces = torch.from_numpy(np.asarray(mesh.faces, np.int32)).cuda()
+    positions = torch.from_numpy(np.asarray(cube_vertices, np.float32)).cuda()
+    rast, _ = dr.rasterize(dr.RasterizeCudaContext(), clip, faces, resolution=[height, width])
+    covered = rast[0, ..., 3] > 0
+    points = dr.interpolate(positions[None], rast, faces)[0][0][covered]
+    coords = torch.cat([torch.zeros_like(result.coords[:, :1]), result.coords], 1).int().cuda()
+    feats = result.attrs.cuda()
+    values = []
+    for k in range(0, len(points), chunk):
+        grid = ((points[k:k + chunk] + 0.5) * RESOLUTION).reshape(1, -1, 3)
+        values.append(flex_gemm.ops.grid_sample.grid_sample_3d(feats, coords, shape=result.voxel_shape, grid=grid,
+                                                               mode="trilinear").reshape(-1, feats.shape[1]).cpu())
+    values = torch.cat(values).numpy()
+    found = np.abs(values).sum(1) > 1e-6  # texels outside the voxels keep their old colour
+    mask = covered.cpu().numpy()
+    where = np.argwhere(mask)[found]
+    rows, cols = where[:, 0], where[:, 1]
+
+    def write(image, picks):
+        pixels = np.array(image)
+        for channel, value in picks:
+            pixels[rows, cols, channel] = np.clip(values[found, value] * 255, 0, 255).astype(np.uint8)
+        return Image.fromarray(pixels)
+
+    layout = result.layout
+    colour = write(base, [(k, layout["base_color"].start + k) for k in range(3)])
+    surface = getattr(material, "metallicRoughnessTexture", None)
+    surface = surface.convert("RGB") if surface is not None else Image.new("RGB", base.size, (0, 128, 0))
+    surface = surface.resize(base.size, Image.BILINEAR)
+    surface = write(surface, [(1, layout["roughness"].start), (2, layout["metallic"].start)])
+    new = trimesh.visual.material.PBRMaterial(baseColorTexture=colour, metallicRoughnessTexture=surface,
+                                              metallicFactor=1.0, roughnessFactor=1.0)
+    result_mesh = trimesh.Trimesh(mesh.vertices, mesh.faces, process=False,
+                                  visual=trimesh.visual.TextureVisuals(uv=mesh.visual.uv, material=new))
+    trimesh.Scene(result_mesh).export(out, extension_webp=True)
+    print(f"    {found.sum():,} texels of {mask.sum():,} repainted on the same mesh", flush=True)
 
 
 def kept_tokens(coords, inside, distance, soft, known_coords, known_feats):
