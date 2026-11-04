@@ -88,12 +88,15 @@ def show_area(front, side_view, info, side, points, keep, delete, edit, origin, 
         picture = on_grey(view)
         right = np.array(info["views"][index]["right"])
         right = np.array([right[0], right[2], -right[1]])
-        tint = np.asarray(picture).copy()
+        tint = picture
         for chosen, colour in ((edit, (70, 120, 255)), (delete, (235, 50, 40)), (keep, (40, 200, 90))):
             u, v = pixels(points[chosen], origin, right, size, per_pixel)
             good = (u >= 0) & (u < size) & (v >= 0) & (v < size)
-            tint[v[good], u[good]] = colour
-        sheet.paste(Image.fromarray(tint), (k * size, 0))
+            spots = np.zeros((size, size), np.uint8)
+            spots[v[good], u[good]] = 150
+            spots = Image.fromarray(spots).filter(ImageFilter.MaxFilter(7))
+            tint = Image.composite(Image.new("RGB", tint.size, colour), tint, spots)
+        sheet.paste(tint, (k * size, 0))
     sheet.resize((1400, 700), Image.LANCZOS).save(path, quality=92)
 
 
