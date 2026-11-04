@@ -39,8 +39,6 @@ OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 JUDGE = "qwen3.6:27b"
 MIN_PIXELS = 600  # a block needs at least this many visible pixels in a picture to be judged there
 MIN_OVERLAP = 0.8  # a picture only judges if its camera fits this well (the model's pose; action poses fit 0.4-0.6)
-SHAPE_BROKEN = 30  # measured: only below this, on a big block, the shape counts and is regenerated too. DINOv3's number
-BIG_BLOCK = 15000  # is low on small or thin blocks whose shape is fine (the robot's antennae: 12), and rebuilding is risky
 
 QUESTION = """The first picture is a crop of the artist's picture of a character. The second picture shows the same spot
 of a 3D model of that character, from the same camera%s.
@@ -62,6 +60,22 @@ def encoded(image, size=512):
 
 
 BACKEND = {}  # "measured" (default), "ollama" (Qwen3.6-27B, this PC) or "qwen3vl" (Qwen3-VL-8B through transformers)
+
+
+def measure_shape(object_mask, model_mask, tolerance=4):
+    """The shape measured without colours or light (DINOv3's number was 12 for the robot's good antennae), inside the
+    block's 3D box projected into the picture (a crop around the model's own pixels can't see a missing part):
+    which share of the picture's object has no model next to it, or of the model no object. `tolerance` pixels of
+    the small camera error don't count."""
+    import cv2
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * tolerance + 1, 2 * tolerance + 1))
+    a, b = object_mask.astype(np.uint8), model_mask.astype(np.uint8)
+    wide_a, wide_b = cv2.dilate(a, kernel) > 0, cv2.dilate(b, kernel) > 0
+    missing = float((a.astype(bool) & ~wide_b).sum()) / max(1, int(a.sum()))  # picture has it, the model doesn't
+    extra = float((b.astype(bool) & ~wide_a).sum()) / max(1, int(b.sum()))    # the model has it, the picture doesn't
+    outline = float(np.clip(100 - 300 * max(missing, extra), 0, 100))         # 85 = 5 % of the pixels wrong
+
+    return {"outline": round(outline), "missing": round(missing, 3), "extra": round(extra, 3)}
 
 
 def measure(picture, render, mask):
@@ -130,6 +144,26 @@ def unload():
         pass
 
 
+def box_in_picture(box, cam, width, height):
+    """The pixels of a 3D block in a picture: the bounding box of its 8 corners."""
+    from project_texture import to_camera, to_pixels
+    low, high = box
+    corners = torch.tensor([[x, y, z] for x in (low[0], high[0]) for y in (low[1], high[1]) for z in (low[2], high[2])],
+                           dtype=torch.float32, device="cuda")
+    u, v, _ = to_pixels(to_camera(corners, cam), cam, width, height)
+    x0, x1, y0, y1 = int(u.min()), int(u.max()) + 1, int(v.min()), int(v.max()) + 1
+    return max(0, x0), max(0, y0), max(1, min(width, x1)), max(1, min(height, y1))
+
+
+def save_cameras(path, cams):
+    json.dump({n: {k: v.tolist() for k, v in cam.items()} for n, cam in cams.items()}, open(path, "w"))
+
+
+def load_cameras(path):
+    return {n: {k: torch.tensor(v, device="cuda", dtype=torch.float32) for k, v in cam.items()}
+            for n, cam in json.load(open(path)).items()}
+
+
 def clay(ctx, meshes, cam, width, height):
     """A grey render of the shape alone (like a sculpt render): light from the camera's side."""
     image = torch.zeros((height, width, 3), device="cuda")
@@ -178,6 +212,8 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--blocks", type=int, default=4, help="blocks per side of the cube (4 = 256 of 1024)")
     parser.add_argument("--threshold", type=float, default=85)
+    parser.add_argument("--cameras", help="a file for the pictures' cameras: fitted once, then the same for every "
+                                          "round, so the rounds' scores can be compared")
     parser.add_argument("--judge", choices=["measured", "ollama", "qwen3vl"], default="measured",
                         help="measured (default): colour difference + DINOv3; or a vision AI")
     args = parser.parse_args()
@@ -210,13 +246,19 @@ def main():
     masks = dict(zip(names, object_masks([pictures[n] for n in names])))
     seen = {}  # block -> [(pixels, view name)]
     cams, renders = {}, {}
+    known = load_cameras(args.cameras) if args.cameras and os.path.isfile(args.cameras) else None
     for n in names:
         picture = pictures[n]
-        cam, overlap = fit_camera(ctx, meshes, picture, masks[n])
-        print(f"  camera of {n}: outline overlap {overlap:.2f}", flush=True)
-        if overlap < MIN_OVERLAP:
-            print(f"    left out: another pose than the model", flush=True)
-            continue  # the camera doesn't fit: this picture can't judge
+        if known is not None:
+            if n not in known:
+                continue
+            cam = known[n]
+        else:
+            cam, overlap = fit_camera(ctx, meshes, picture, masks[n])
+            print(f"  camera of {n}: outline overlap {overlap:.2f}", flush=True)
+            if overlap < MIN_OVERLAP:
+                print(f"    left out: another pose than the model", flush=True)
+                continue  # the camera doesn't fit: this picture can't judge
         w, h = picture.size
         ids = face_ids(ctx, meshes, cam, w, h)
         blocks = torch.where(ids >= 0, block_of_face[ids.clamp(min=0)], torch.full_like(ids, -1))
@@ -229,6 +271,8 @@ def main():
         for b, c in zip(values.tolist(), number.tolist()):
             seen.setdefault(b, []).append((c, n))
 
+    if args.cameras and known is None:
+        save_cameras(args.cameras, cams)
     grid = []
     for b in sorted(seen):
         i, j, k = b // (counts[1] * counts[2]), (b // counts[2]) % counts[1], b % counts[2]
@@ -255,6 +299,10 @@ def main():
             if BACKEND["kind"] == "measured":
                 mask = renders[n]["blocks"][crop[1]:crop[3], crop[0]:crop[2]] >= 0
                 answer = measure(ref, mine, mask)
+                answer["dino"] = answer.pop("shape")
+                x0, y0, x1, y1 = box_in_picture(box, cams[n], w, h)
+                answer.update(measure_shape(masks[n][y0:y1, x0:x1] > 0.5, renders[n]["blocks"][y0:y1, x0:x1] >= 0))
+                answer["shape"] = answer["outline"]
                 if kind == "shape":  # a grey picture says nothing about colours
                     answer.pop("colour")
             else:
@@ -271,19 +319,10 @@ def main():
         if not numbers:
             continue
         entry["score"] = min(numbers)
-        if BACKEND["kind"] == "measured":  # the colours decide, the shape only when a big block is really broken
-            parts = list(entry["scores"].values())
-            broken = [s["shape"] for s in parts if s["pixels"] >= BIG_BLOCK and s.get("shape", 100) < SHAPE_BROKEN]
-            colours = [s["colour"] for s in parts if "colour" in s]
-            entry["score"] = min(broken + colours) if broken or colours else min(numbers)
         entry["bad"] = entry["score"] < args.threshold
         # what to redo: the shape too, or only the colours
         shapes = [s.get("shape") for s in entry["scores"].values() if isinstance(s.get("shape"), (int, float))]
-        if BACKEND["kind"] == "measured":
-            redo = "shape" if broken else "colour"
-        else:
-            redo = "shape" if shapes and min(shapes) < args.threshold else "colour"
-        entry["redo"] = redo if entry["bad"] else None
+        entry["redo"] = ("shape" if shapes and min(shapes) < args.threshold else "colour") if entry["bad"] else None
         grid.append(entry)
     unload()
 

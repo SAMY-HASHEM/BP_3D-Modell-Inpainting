@@ -8,8 +8,10 @@
     04 re-inpaint every bad block zoomed in (refine_region.py --box3d), the picture crop at least 1024 px:
                   1st try inversion with a soft edge (the user's VoxHammer idea), 2nd try repaint, 3rd try
                   inversion from new noise; only the colours when only the colours are bad
-    05 combine    the blocks put back into ONE mesh (combine_parts.py --single) -> the next round's model
-    back to 03, at most --rounds rounds or until no block is bad
+                  a block with a bad shape gets shape + colours regenerated, one with bad colours only its colours
+    05 combine    the blocks put back into ONE mesh (combine_parts.py --single) and judged at once: a repair stays
+                  only if its block got better, else the old block stays -> the next round's model
+    back to 03, at most --rounds rounds or until no block is bad; the final model is judged too
 
 Every step is its own process (the GPU is free again after it). Results: <out>/<step>/..., summary.json and
 summary.md (the scores of every round). With --zip: a small zip for the cloud worker (models, sheets, scores).
@@ -139,15 +141,29 @@ def main():
 
     live(args, os.path.join(sort_dir, "contact.jpg"), "01_data_sheet.jpg")
     live(args, model, "02_base.glb")
+    cameras = os.path.join(out, "03_judge", "cameras.json")  # fitted once: the rounds' scores stay comparable
+
+    def judge(path, name):
+        """The block scores of a model, or None if the judge failed."""
+        folder = os.path.join(out, "03_judge", name)
+        grid_path = os.path.join(folder, "grid.json")
+        if not run([script("pipeline/grid_judge.py"), path, "--sorted", sorted_path, "--out", folder, "--cameras", cameras,
+                    "--blocks", args.blocks, "--threshold", args.threshold], os.path.join(folder, "log.txt"), grid_path):
+            return None
+        return json.load(open(grid_path))
+
+    def combine(path, parts, new_path):
+        return run([script("pipeline/combine_parts.py"), path, *parts, "--out", new_path, "--single"],
+                   os.path.splitext(new_path)[0] + "_log.txt", new_path)
+
     tries = {}  # block -> how often it was re-inpainted
     for r in range(1, args.rounds + 1):
         print(f"03 judge, round {r}", flush=True)
         grid_dir = os.path.join(out, "03_judge", f"r{r}")
         grid_path = os.path.join(grid_dir, "grid.json")
-        if not run([script("pipeline/grid_judge.py"), model, "--sorted", sorted_path, "--out", grid_dir,
-                    "--blocks", args.blocks, "--threshold", args.threshold], os.path.join(grid_dir, "log.txt"), grid_path):
+        grid = judge(model, f"r{r}")
+        if grid is None:
             return 1
-        grid = json.load(open(grid_path))
         live(args, os.path.join(grid_dir, "heatmap.jpg"), f"03_heatmap_r{r}.jpg")
         live(args, grid_path, f"03_grid_r{r}.json")
         bad = sorted((b for b in grid["blocks"] if b["bad"]), key=lambda b: b["score"])
@@ -161,7 +177,8 @@ def main():
             break
 
         print(f"04 re-inpaint {len(bad)} blocks, round {r}", flush=True)
-        results = []
+        results = {}
+        before = {"".join(map(str, b["block"])): b["score"] for b in grid["blocks"]}
         for b in bad:
             key = "".join(map(str, b["block"]))
             k = tries.get(key, 0)
@@ -182,21 +199,47 @@ def main():
                        "--grow", "1", "--out", block_out]
             if how["method"] == "inversion":
                 command += ["--start", how["start"], "--soft", str(how["soft"])]
-            if b["redo"] == "colour":
+            if b["redo"] == "colour":  # the shape is fine: only the colours; a bad shape gets both regenerated
                 command += ["--keep-shape"]
             print(f"  block {key} (score {b['score']}, {b['redo']}): {how['method']}, try {k + 1}", flush=True)
             if run(command, os.path.join(block_dir, "log.txt"), block_out):
-                results.append(block_out)
+                results[key] = block_out
         if not results:
-            break
+            continue  # nothing new: the next round tries the next method
 
-        print(f"05 combine, round {r}", flush=True)
-        new_model = os.path.join(out, "05_model", f"r{r}.glb")
-        if not run([script("pipeline/combine_parts.py"), model, *results, "--out", new_model, "--single"],
-                   os.path.join(out, "05_model", f"r{r}_log.txt"), new_model):
+        print(f"05 combine, round {r}: a repair stays only if its block got better", flush=True)
+        candidate = os.path.join(out, "05_model", f"r{r}_all.glb")
+        if not combine(model, list(results.values()), candidate):
             return 1
+        check = judge(candidate, f"r{r}_check")
+        if check is None:
+            return 1
+        after = {"".join(map(str, b["block"])): b["score"] for b in check["blocks"]}
+        kept = {k: p for k, p in results.items() if after.get(k, -1) > before.get(k, 0)}
+        rejected = [k for k in results if k not in kept]
+        summary["rounds"][-1].update(kept=sorted(kept), rejected=rejected,
+                                     change={k: [before.get(k), after.get(k)] for k in results})
+        print("  " + ", ".join(f"{k} {before.get(k)} -> {after.get(k)}" + ("" if k in kept else " (rejected)")
+                               for k in results), flush=True)
+        if len(kept) == len(results):
+            new_model = candidate
+        elif kept:
+            new_model = os.path.join(out, "05_model", f"r{r}.glb")
+            if not combine(model, list(kept.values()), new_model):
+                return 1
+        else:
+            print("  no repair was better: the model stays", flush=True)
+            continue
         model = new_model
         live(args, model, f"05_model_r{r}.glb")
+
+    print("03 judge, the final model", flush=True)
+    grid = judge(model, "final")
+    if grid:
+        live(args, os.path.join(out, "03_judge", "final", "heatmap.jpg"), "03_heatmap_final.jpg")
+        live(args, os.path.join(out, "03_judge", "final", "grid.json"), "03_grid_final.json")
+        summary["rounds"].append({"round": "final", "model": os.path.relpath(model, out), "bad": [],
+                                  "scores": {"".join(map(str, b["block"])): b["score"] for b in grid["blocks"]}})
 
     final = os.path.join(out, "final.glb")
     shutil.copy(model, final)
@@ -207,13 +250,16 @@ def main():
     for entry in summary["rounds"]:
         lines.append(f"- round {entry['round']} ({entry['model']}): " + ", ".join(
             f"{k} {v}" + (" (bad)" if k in entry["bad"] else "") for k, v in sorted(entry["scores"].items())))
+        if entry.get("rejected"):
+            lines.append(f"  repairs rejected (not better): {', '.join(entry['rejected'])}")
     lines.append(f"\nfinal: {summary['final']}, {summary['seconds']} s")
     open(os.path.join(out, "summary.md"), "w").write("\n".join(lines) + "\n")
     print("\n".join(lines), flush=True)
 
     if args.zip:  # the small results: models, judge pictures, scores (the inputs and big work folders stay here)
         keep = lambda rel: (rel.endswith((".json", ".md", ".jpg", ".txt")) or rel in ("final.glb", "02_base/base.glb")
-                            or (rel.startswith("05_model/") and rel.endswith(".glb")) or rel.startswith("01_sort/contact"))
+                            or (rel.startswith("05_model/") and rel.endswith(".glb") and not rel.endswith("_all.glb"))
+                            or rel.startswith("01_sort/contact"))
         import zipfile
         archive = out + ".zip"
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:

@@ -14,6 +14,26 @@ the very end, from the pictures, in one pass over the finished model**, so the l
 front and the back and all parts match (no colour seams between parts, symmetric). The colours TRELLIS.2
 makes along the way in the shape nodes are ignored.
 
+## The grid loop (the user's idea, `scripts/pipeline/auto_pipeline.py`)
+No hand-made parts: the base model is cut into blocks (256 of TRELLIS.2's 1024 grid) and judged; only bad blocks
+are redone, and a repair stays only if it helped.
+
+```
+01 sort → 02 base → 03 judge every block (>= 85 stays) → 04 re-inpaint the worst blocks, zoomed, crop >= 1024 px
+                         ↑                                  bad shape: shape + colours; bad colours: colours only
+                         └── 05 combine into one mesh, judge at once; a repair that isn't better is rejected
+```
+- **Judge** (`grid_judge.py`): measured, not asked. Colour: the colour difference (CIE Lab) on the object's pixels.
+  Shape: inside the block's 3D box projected into the picture, the share of the object the model lacks, or of the
+  model the object lacks. Only pictures of the model's pose (camera fit >= 80 %); the cameras are fitted once, so
+  the rounds compare. Checked on the robot fly: cutting off a hand lowered only its blocks (94 → 68, 81 → 60, 69 →
+  58), all others stayed exact. Qwen3-VL-8B gave a white model 85; DINOv3 gave good thin antennae 12.
+- **Repairs:** inversion with a soft edge first (the user's VoxHammer idea), then repaint, then inversion from new
+  noise. The new block's region joins by `combine_parts.py --single` (own atlas).
+- **Heat map** per round: `heatmap.jpg`. Runs: `cloud.py pipeline <folder>`, results with `cloud.py watch`.
+- **Result, robot fly (run 3, colours only, before the shape repair was added):** average 72.8 → 79.1 → 82.9, worst
+  block 28 → 55 → 59, the wings got their colours and veins.
+
 ## How to run it (all on the local GPU)
 ```
 source activate.sh
