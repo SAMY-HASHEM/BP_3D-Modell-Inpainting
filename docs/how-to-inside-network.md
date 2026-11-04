@@ -25,30 +25,29 @@ server answers nothing. Everyone uses their own server account and their own ser
 
 ---
 
-## A uni PC (Windows): getting the project
+## A new PC (e.g. a uni PC with Windows): only Blender needed
 
-`pictures/` and `outputs/` are not in Git (the pictures belong to other artists, models are too big), so
-a fresh clone doesn't have them. They come from your private Sciebo. In a terminal (PowerShell):
+`pictures/` and `outputs/` are not in Git (the pictures belong to other artists, models are too big), so they
+come from your private Sciebo. All of it is buttons in Blender; no terminal, no Git, no Python.
 
-```
-git clone https://github.com/SAMY-HASHEM/BP_3D-Modell-Inpainting.git
-cd BP_3D-Modell-Inpainting
-python scripts/server/cloud.py setup      # once per PC: Sciebo login + app password
-python scripts/server/cloud.py device     # makes outputs/ and pictures/, fetches pictures and results (over 1 GB)
-```
+1. Download one file:
+   https://raw.githubusercontent.com/SAMY-HASHEM/BP_3D-Modell-Inpainting/main/blender/pipeline_nodes.py
+2. Blender: Edit → Preferences → Add-ons → arrow at the top right → *Install from Disk…* → that file → tick it.
+3. 3D view → N key → tab **BP** → *BP Setup*: a checklist. Click **Set up everything**: it gets the project and
+   installs the Inpaint add-on.
+4. Enter your Sciebo login name and app password → **Save and test** (Sciebo: Einstellungen → Sicherheit →
+   App-Passwort; never in a screenshot).
+5. **Get pictures**.
 
-Next time: `git pull`.
+Later: **Update project** in the same box (it replaces `git pull`).
 
-**Both add-ons in Blender:** Edit → Preferences → Add-ons → arrow at the top right → *Install from Disk…*
+| Tab | Gives you |
+|---|---|
+| **Inpaint** | inpainting a marked area (below) |
+| **BP** → *BP Server* | a picture folder through the whole pipeline; fetch (*Auto 10 min*); open models and heat maps |
 
-| File | Gives you | Where |
-|---|---|---|
-| `blender/inpaint_addon.py` | inpainting a marked area (below) | 3D view, N key, tab **Inpaint** |
-| `blender/pipeline_nodes.py` | sending a picture folder through the whole pipeline, fetching and opening the results | 3D view, N key, tab **BP** → *BP Server* |
-
-Run `cloud.py device` **before** installing `pipeline_nodes.py`: it notes where the project is. The
-add-on's *This PC* mode and running the nodes yourself need the Linux setup; on Windows the work runs on
-the server. *Find part in box* needs the mask AI on your PC, so it doesn't work on a uni PC.
+The add-on's *This PC* mode and running the nodes yourself need the Linux setup; on Windows the work runs on the
+server. *Find part in box* needs the mask AI on your PC, so it doesn't work on a uni PC.
 
 ---
 
@@ -80,8 +79,7 @@ cd ~/projects/bp_samy_hashem && git pull
 (First time ever: `git clone https://git.uni-due.de/students/bp_samy_hashem.git ~/projects/bp_samy_hashem`
 and `bash install.sh` there.)
 
-**2. The add-on in Blender on your PC:** Edit → Preferences → Add-ons → arrow at the top right →
-*Install from Disk…* → `blender/inpaint_addon.py` → tick it. Version 1.5 or newer.
+**2. The add-on in Blender on your PC:** see "A new PC" above.
 
 **3. Start the server once to get the token** (see "Every time" below). It prints:
 

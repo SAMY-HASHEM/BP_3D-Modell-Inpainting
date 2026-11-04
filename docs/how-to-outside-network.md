@@ -100,8 +100,9 @@ python3 scripts/server/cloud.py pictures up                     # new pictures t
 Results land in `outputs/server_runs/<job>/`, while the job runs. The same in Blender: add-on
 `blender/pipeline_nodes.py`, 3D view → N key → tab **BP** → *BP Server* (send, fetch, *Auto 10 min*, open).
 
-A new computer, after `git clone`: `python3 scripts/server/cloud.py setup`, then
-`python3 scripts/server/cloud.py device` (makes `outputs/` and `pictures/`, fetches pictures and results).
+A new computer: install `blender/pipeline_nodes.py` and click through *BP Setup* in Blender, see "A new PC" in
+[how-to-inside-network.md](how-to-inside-network.md). In a terminal instead: `python3 scripts/server/cloud.py setup`, then
+`python3 scripts/server/cloud.py device`.
 
 **Stop a running job** (VDI → JupyterLab terminal; the worker keeps running):
 
