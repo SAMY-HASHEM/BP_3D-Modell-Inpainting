@@ -148,6 +148,27 @@ pkill -u $USER -f cloud_worker.py
 source activate.sh && nohup python -u scripts/server/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
 ```
 
+## New app password for the server (old one deleted or blocked)
+
+1. Sciebo → avatar (top right) → *Persönliche Einstellungen* → *Sicherheit*.
+   Delete the old one with the trash icon. ("Marked for remote wipe" or "Could not delete" is fine: it's blocked anyway.)
+2. *App name*: a new name, e.g. `inpainting-server-2` → *Create new app password*. Keep the page open.
+3. On the server, one line at a time:
+
+```
+cd ~/projects/bp_samy_hashem
+git pull
+python3 scripts/server/cloud.py setup                      # asks only: login name, app password
+ps -u $USER -f | grep [c]loud_worker                       # workers still running?
+pkill -u $USER -f [c]loud_worker                           # stop them all (an old one still uses the old password)
+source activate.sh
+nohup python -u scripts/server/cloud_worker.py > outputs/cloud_worker.log 2>&1 &
+tail -n 5 outputs/cloud_worker.log                         # after 1 minute: no "401 Unauthorized"
+```
+
+Setup says "Works" but the log shows `401 Unauthorized` → an old worker is still running: stop all and start one again.
+Never put the app password in a screenshot or a chat.
+
 ## Good to know
 
 - **Which GPU?** The worker takes the GPU with the least memory in use, for every job anew.
