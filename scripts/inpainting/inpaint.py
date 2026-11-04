@@ -275,7 +275,7 @@ def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
             method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True,
             solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000, keep_shape=False,
-            split_sheet=True):
+            split_sheet=True, more_edits=()):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
     method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
@@ -293,6 +293,8 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     version). main_role is the role of `picture_path`. They are combined as in multi_image.py (mode), repaint only.
     texture_guidance: how strictly the colours follow the pictures (TRELLIS.2's default 1 = off).
     faces: faces of the saved region (more keeps finer detail).
+    more_edits: more sides of the same change, as (after, before, 2D mask) picture paths; each side has its own
+    picture swap, the new area looks at all of them (multidiffusion)
     split_sheet: a picture with several views side by side (a turnaround sheet) is split into single views
     (sheet_views.py); refine_region.py turns it off, its crops are single views already
     keep_shape: only the colours are regenerated; the structure and shape stay exactly the model's own
@@ -336,6 +338,14 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         image = generate.prepare_image(pipeline, picture_path, "inpaint")
         source = generate.prepare_image(pipeline, source_path, "inpaint_source") if source_path else image
     images, roles = [image], [main_role]
+    swaps = [(source, picture_mask)] if picture_mask_path else []
+    for after, before, change in more_edits:
+        assert picture_mask_path, "more sides need the first side's picture mask too"
+        one, render, area = picture_pair(pipeline, after, before, change)
+        images.append(one)
+        roles.append(main_role)
+        swaps.append((render, area))
+        mode = "multidiffusion"
     for k, (path, role) in enumerate(more_pictures):
         assert role in ("both", "shape", "colour")
         images.append(generate.prepare_image(pipeline, path, f"inpaint_more{k + 1}"))
@@ -364,8 +374,12 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         source_512 = pipeline.get_cond([source], 512) if source_path or len(images) > 1 else cond_512
         source_1024 = pipeline.get_cond([source], 1024) if source_path or len(images) > 1 else cond_1024
         if picture_mask_path and swap:
-            cond_512 = mixed_cond(cond_512, source_512, picture_mask, 512)
-            cond_1024 = mixed_cond(cond_1024, source_1024, picture_mask, 1024)
+            def mixed_rows(cond, resolution):  # every side with its own render and its own 2D mask
+                rows = [mixed_cond({"cond": cond["cond"][i:i + 1], "neg_cond": cond["neg_cond"]},
+                                   pipeline.get_cond([render], resolution), area, resolution)["cond"]
+                        for i, (render, area) in enumerate(swaps)]
+                return {"cond": torch.cat(rows), "neg_cond": cond["neg_cond"]}
+            cond_512, cond_1024 = mixed_rows(cond_512, 512), mixed_rows(cond_1024, 1024)
             report("    picture: the edited one inside the 2D mask, the original's render outside")
 
         stage = "3/6 Structure"

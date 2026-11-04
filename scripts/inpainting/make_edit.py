@@ -73,6 +73,29 @@ def front_view(renders, reference):
     return int(np.argmin(scores))
 
 
+def turning_frames(video, folder):
+    """Four frames of a video of the part turning once: its four sides, a quarter turn apart."""
+    frames = json.loads(subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries",
+                                        "stream=nb_read_packets", "-of", "json", video], capture_output=True, text=True,
+                                       check=True).stdout)["streams"][0]["nb_read_packets"]
+    paths = []
+    for k in range(4):
+        paths.append(os.path.join(folder, f"part_{k}.png"))
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", video, "-vf", f"select=eq(n\\,{k * int(frames) // 4})", "-frames:v", "1",
+                        paths[-1]], check=True)
+    return paths
+
+
+def collage(render, part, x, y):
+    """AFTER and the 2D MASK of one side."""
+    before = on_grey(render)
+    after = before.copy()
+    after.paste(part, (x, y), part)
+    mask = Image.new("L", before.size, 0)
+    mask.paste(part.getchannel("A").point(lambda v: 255 if v > 30 else 0), (x, y))
+    return before, after, mask.filter(ImageFilter.MaxFilter(9))
+
+
 def pixels(points, origin, right, size, per_pixel):
     """Where points of the model fall in a straight view (views.json): column and row."""
     u = ((points - origin) @ right / per_pixel + size / 2).astype(int)
@@ -103,7 +126,7 @@ def show_area(front, side_view, info, side, points, keep, delete, edit, origin, 
 def main():
     parser = argparse.ArgumentParser(description="BEFORE, AFTER and the 2D mask for inpainting by picture")
     parser.add_argument("model")
-    parser.add_argument("part", help="picture of the new part")
+    parser.add_argument("part", help="picture of the new part, or a video of it turning once: then all four sides are made")
     parser.add_argument("--reference", help="the model's own picture: picks the side the collage is made on")
     parser.add_argument("--side", type=int, choices=range(4), help="or the side by hand")
     parser.add_argument("--out", required=True)
@@ -138,7 +161,9 @@ def main():
     columns = np.nonzero(blob.any(0))[0]
     left, right = int(columns[0]), int(columns[-1])
 
-    part = cut_out(remover, args.part)
+    video = args.part.lower().endswith((".mp4", ".mov", ".webm", ".mkv"))
+    parts = [cut_out(remover, p) for p in (turning_frames(args.part, args.out) if video else [args.part])]
+    part = parts[0]
     width = int(args.width * (right - left))
     part_height = int(part.height * width / part.width)
     part = part.resize((width, part_height), Image.LANCZOS)
@@ -146,12 +171,7 @@ def main():
     y = top - part_height + int(args.sink * part_height)
     assert y > 0, "the part doesn't fit into the picture"
 
-    before = on_grey(render)
-    after = before.copy()
-    after.paste(part, (x, y), part)
-    mask = Image.new("L", before.size, 0)
-    mask.paste(part.getchannel("A").point(lambda v: 255 if v > 30 else 0), (x, y))
-    mask = mask.filter(ImageFilter.MaxFilter(9))
+    before, after, mask = collage(render, part, x, y)
     for picture, name in ((before, "before"), (after, "after")):
         picture.save(os.path.join(args.out, f"{name}.png"))
     mask.save(os.path.join(args.out, "mask.png"))
@@ -185,6 +205,11 @@ def main():
     surface = trimesh.sample.sample_surface(mesh, 2_000_000, seed=0)[0]
     surface = surface[surface[:, 1] > up[0] - 4 * voxel]
     on_surface = cKDTree(surface).query(points)[0] <= 1.5 * voxel if len(surface) else np.zeros(len(points), bool)
+    # under the model's surface is inside the model: it is no empty room (new parts grew out through the head)
+    columns = lambda p: tuple(((p[:, [0, 2]] - vertices[:, [0, 2]].min(0)) / voxel).astype(int).clip(0, GRID + 1).T)
+    roof = np.full((GRID + 2, GRID + 2), -np.inf)
+    np.maximum.at(roof, columns(surface), surface[:, 1])
+    on_surface |= points[:, 1] < roof[columns(points)]
     origin = to_gltf(center)
     u, v = pixels(points, origin, right_axis, size, per_pixel)
     changed = np.asarray(mask)[np.clip(v, 0, size - 1), np.clip(u, 0, size - 1)] > 127
@@ -195,10 +220,25 @@ def main():
     show_area(renders[side], renders[(side + 1) % 4], info, side, points, keep, delete, edit, origin, per_pixel,
               os.path.join(args.out, "area_map.jpg"))
 
+    sides = []
+    if video:  # the other sides: the same place, each with its own side of the part
+        for k in range(1, 4):
+            index = (side + k) % 4
+            right_k = to_gltf(np.array(info["views"][index]["right"]))
+            middle_x = pixels(middle[None], origin, right_k, size, per_pixel)[0][0]
+            one = parts[k].resize((max(2, int(parts[k].width * part_height / parts[k].height)), part_height), Image.LANCZOS)
+            pictures = collage(renders[index], one, int(middle_x - one.width / 2), y)
+            names = [os.path.join(args.out, f"{what}_{k}.png") for what in ("after", "before", "mask")]
+            pictures[1].save(names[0])
+            pictures[0].save(names[1])
+            pictures[2].save(names[2])
+            sides += ["--more-edit", *names]
+
     above = max(0.0, up[1] + 2 * voxel - vertices[:, 1].max())
     room = round(float(min(0.5, 1.05 * above / (above + model_size))), 3)
     report = {"side": side, "room": room, "keep": int(keep.sum()), "delete": int(delete.sum()), "edit": int(edit.sum()),
               "box_y": [float(up[0]), float(up[1])], "part_pixels": [x, y, width, part_height]}
+    report["more_edit"] = sides
     json.dump(report, open(os.path.join(args.out, "edit.json"), "w"), indent=1)
     sheet = Image.new("RGB", (1500, 500), "white")
     for k, picture in enumerate((before, after, mask.convert("RGB"))):

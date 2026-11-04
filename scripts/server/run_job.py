@@ -118,6 +118,11 @@ def main():
         for path in (source, picture_mask):
             if path and not os.path.isfile(path):
                 raise ValueError(f"the job's {os.path.basename(path)} is missing")
+        more_edits = [[os.path.join(folder, os.path.basename(name)) for name in side] for side in job.get("more_edits", [])]
+        for side in more_edits:
+            for path in side:
+                if not os.path.isfile(path):
+                    raise ValueError(f"the job's {os.path.basename(path)} is missing")
         pipeline = generate.load_pipeline()
         points = np.load(os.path.join(folder, job["points"]))
         for version in versions:
@@ -125,7 +130,7 @@ def main():
                 out = f"{base}_{name(version)}_seed{seed}.glb" if "variants" in job else f"{base}_seed{seed}.glb"
                 inpaint(pipeline, os.path.join(folder, job["model"]), os.path.join(folder, job["picture"]), points,
                         out, grow=job["grow"], seed=seed, steps=job["steps"], source_path=source,
-                        picture_mask_path=picture_mask, **version)
+                        picture_mask_path=picture_mask, more_edits=more_edits, **version)
                 print(f"Result: {out}")
 
 
