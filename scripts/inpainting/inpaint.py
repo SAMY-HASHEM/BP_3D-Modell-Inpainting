@@ -274,7 +274,8 @@ def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
 
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
             method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True,
-            solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000, keep_shape=False):
+            solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000, keep_shape=False,
+            split_sheet=True):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
     method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
@@ -292,6 +293,8 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     version). main_role is the role of `picture_path`. They are combined as in multi_image.py (mode), repaint only.
     texture_guidance: how strictly the colours follow the pictures (TRELLIS.2's default 1 = off).
     faces: faces of the saved region (more keeps finer detail).
+    split_sheet: a picture with several views side by side (a turnaround sheet) is split into single views
+    (sheet_views.py); refine_region.py turns it off, its crops are single views already
     keep_shape: only the colours are regenerated; the structure and shape stay exactly the model's own
     (for parts whose shape is already right but whose colours are not, e.g. clothes)."""
     assert method in METHODS and start in ("inverted", "random") and solver in ("midpoint", "euler")
@@ -320,6 +323,15 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     mask = voxel_mask(place.to_cube(points) if len(points) else points, grow if len(points) else 0)
     report(f"2/6 Mask: {int(mask.sum()):,} of {GRID ** 3:,} voxels will be regenerated ({method})")
 
+    if split_sheet and not picture_mask_path and not more_pictures:  # a sheet of several views: one picture per view
+        import sheet_views
+        views = sheet_views.split(pipeline, picture_path, generate.OUTPUT_DIR)
+        if views and method == "repaint":
+            picture_path, more_pictures, mode = views[0], [(v, main_role) for v in views[1:]], "multidiffusion"
+            report(f"    the picture shows {len(views)} views: all of them are used (multidiffusion)")
+        elif views:  # inversion follows one picture: the biggest view
+            picture_path = views[0]
+            report(f"    the picture shows {len(views)} views: inversion uses the biggest one (Repaint uses all)")
     if picture_mask_path:
         assert source_path, "a picture mask needs the original's render of the same view (source)"
         image, source, picture_mask = picture_pair(pipeline, picture_path, source_path, picture_mask_path)

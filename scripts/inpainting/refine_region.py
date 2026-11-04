@@ -256,7 +256,7 @@ def main():
     zoom_out = os.path.join(work, "zoom_out.glb")
     inpaint(pipeline, zoom_in, crop, points, zoom_out, grow=args.grow, seed=args.seed, steps=args.steps,
             method=args.method, start=args.start, soft=args.soft, more_pictures=more_pictures, main_role=main_role, mode=args.mode,
-            texture_guidance=args.texture_guidance, faces=args.faces, keep_shape=args.keep_shape)
+            texture_guidance=args.texture_guidance, faces=args.faces, keep_shape=args.keep_shape, split_sheet=False)
 
     print("5. Zoom out: the original outside the seam, the new region inside it", flush=True)
     new = load_model(zoom_out)
