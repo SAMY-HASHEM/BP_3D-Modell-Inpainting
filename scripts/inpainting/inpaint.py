@@ -326,12 +326,9 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     if split_sheet and not picture_mask_path and not more_pictures:  # a sheet of several views: one picture per view
         import sheet_views
         views = sheet_views.split(pipeline, picture_path, generate.OUTPUT_DIR)
-        if views and method == "repaint":
+        if views:
             picture_path, more_pictures, mode = views[0], [(v, main_role) for v in views[1:]], "multidiffusion"
             report(f"    the picture shows {len(views)} views: all of them are used (multidiffusion)")
-        elif views:  # inversion follows one picture: the biggest view
-            picture_path = views[0]
-            report(f"    the picture shows {len(views)} views: inversion uses the biggest one (Repaint uses all)")
     if picture_mask_path:
         assert source_path, "a picture mask needs the original's render of the same view (source)"
         image, source, picture_mask = picture_pair(pipeline, picture_path, source_path, picture_mask_path)
@@ -340,7 +337,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         source = generate.prepare_image(pipeline, source_path, "inpaint_source") if source_path else image
     images, roles = [image], [main_role]
     for k, (path, role) in enumerate(more_pictures):
-        assert method == "repaint" and role in ("both", "shape", "colour")
+        assert role in ("both", "shape", "colour")
         images.append(generate.prepare_image(pipeline, path, f"inpaint_more{k + 1}"))
         roles.append(role)
     shape_rows = [i for i, r in enumerate(roles) if r in ("both", "shape")]
@@ -363,8 +360,9 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     with torch.no_grad():
         cond_512 = pipeline.get_cond(images, 512)
         cond_1024 = pipeline.get_cond(images, 1024)
-        source_512 = pipeline.get_cond([source], 512) if source_path else cond_512
-        source_1024 = pipeline.get_cond([source], 1024) if source_path else cond_1024
+        # inversion follows the original with ONE picture, also when the new area looks at several
+        source_512 = pipeline.get_cond([source], 512) if source_path or len(images) > 1 else cond_512
+        source_1024 = pipeline.get_cond([source], 1024) if source_path or len(images) > 1 else cond_1024
         if picture_mask_path and swap:
             cond_512 = mixed_cond(cond_512, source_512, picture_mask, 512)
             cond_1024 = mixed_cond(cond_1024, source_1024, picture_mask, 1024)
@@ -487,11 +485,13 @@ def follow_original(sampler, flow, params, steps, cond, source_cond, original, k
     """One stage with inversion: invert the original's latent (with the original's picture, without
     guidance), then regenerate from `start` (None: the original's noise) along it, with the kept tokens'
     keys and values injected. Returns the new latent."""
+    from multi_image import MultiImageFlowModel
     original_kwargs = original_kwargs or {}
+    plain = flow.model if isinstance(flow, MultiImageFlowModel) else flow  # the original's pass: one picture, no mixing
     times = inversion.schedule(steps, params["rescale_t"])
     unguided = {"guidance_strength": 1.0, "guidance_interval": [0.0, 1.0], "guidance_rescale": 0.0}
     with OnGpu(flow):
-        source = inversion.Velocity(sampler, flow, source_cond["cond"], source_cond["neg_cond"], unguided,
+        source = inversion.Velocity(sampler, plain, source_cond["cond"], source_cond["neg_cond"], unguided,
                                     **original_kwargs)
         path = inversion.invert(source, original, times, progress("inverting"), step=step)
         edit = inversion.Velocity(sampler, flow, cond["cond"], cond["neg_cond"], params, **model_kwargs)
