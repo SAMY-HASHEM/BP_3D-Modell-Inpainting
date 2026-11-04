@@ -1,8 +1,12 @@
-# How to: inpainting from Blender **inside the uni network**
+# How to: working **inside the uni network** (a uni PC, Windows)
 
-Use this when your PC is **in the uni network** (on campus, uni WLAN, a uni PC). Blender on your PC
-talks **directly** to the inpaint server on the HCI GPU server. It's the fastest way: TRELLIS.2 stays
-loaded, so every job starts right away.
+Use this when your PC is **in the uni network** (on campus, uni WLAN, a uni PC). No VDI and no Sciebo are
+needed for the server: JupyterLab opens directly in the browser at https://nc.hcigroup.de, and Blender on
+your PC talks **directly** to the inpaint server on the HCI GPU server. It's the fastest way: TRELLIS.2
+stays loaded, so every job starts right away.
+
+The server is not your main PC: all heavy work (TRELLIS.2, the vision AI) runs there, a uni PC only needs
+Blender, Git and Python. The uni PCs run Windows: there `python` replaces `python3`, and paths use `\`.
 
 From home use [how-to-outside-network.md](how-to-outside-network.md) instead.
 
@@ -21,7 +25,51 @@ server answers nothing. Everyone uses their own server account and their own ser
 
 ---
 
-## Once: setup
+## A uni PC (Windows): getting the project
+
+`pictures/` and `outputs/` are not in Git (the pictures belong to other artists, models are too big), so
+a fresh clone doesn't have them. They come from your private Sciebo. In a terminal (PowerShell):
+
+```
+git clone https://github.com/SAMY-HASHEM/BP_3D-Modell-Inpainting.git
+cd BP_3D-Modell-Inpainting
+python scripts/server/cloud.py setup      # once per PC: Sciebo login + app password
+python scripts/server/cloud.py device     # makes outputs/ and pictures/, fetches pictures and results (over 1 GB)
+```
+
+Next time: `git pull`.
+
+**Both add-ons in Blender:** Edit → Preferences → Add-ons → arrow at the top right → *Install from Disk…*
+
+| File | Gives you | Where |
+|---|---|---|
+| `blender/inpaint_addon.py` | inpainting a marked area (below) | 3D view, N key, tab **Inpaint** |
+| `blender/pipeline_nodes.py` | sending a picture folder through the whole pipeline, fetching and opening the results | 3D view, N key, tab **BP** → *BP Server* |
+
+Run `cloud.py device` **before** installing `pipeline_nodes.py`: it notes where the project is. The
+add-on's *This PC* mode and running the nodes yourself need the Linux setup; on Windows the work runs on
+the server. *Find part in box* needs the mask AI on your PC, so it doesn't work on a uni PC.
+
+---
+
+## The whole pipeline directly on the server
+
+In a JupyterLab terminal, no Sciebo needed. Pictures: drag them into JupyterLab's file list, or
+`python3 scripts/server/cloud.py pictures down` on the server.
+
+```
+cd ~/projects/bp_samy_hashem && source activate.sh
+nohup python -u scripts/pipeline/auto_pipeline.py "pictures/monster" --name monster > outputs/monster.log 2>&1 &
+tail -f outputs/monster.log       # Ctrl+C only stops watching
+```
+
+Results: `outputs/pipeline/monster/auto/` on the server (right-click → Download in JupyterLab; big models
+are safer through *BP Server*). Only one job at a time: while the worker runs a job, don't start a second
+one, and don't `git pull` on the server (the worker fetches its code itself).
+
+---
+
+## Once: setup for inpainting from Blender
 
 **1. The project on the server** (JupyterLab → File → New → Terminal):
 

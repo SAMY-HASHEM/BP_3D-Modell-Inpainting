@@ -10,7 +10,11 @@ this is its own node editor; only the hair node uses real Geometry Nodes. Every 
 (data sheet, before / after) and can put its model into the scene. Run = every node up to the selected one,
 in order; a node whose result is already there (same settings) is done at once.
 
-Install: link this file into Blender's add-on folder and enable "BP Pipeline Nodes" (see comfyui/README.md).
+On a computer without the project's environment (e.g. a Windows PC at the uni) the heavy work runs on the uni
+server: 3D view > sidebar (N) > BP > BP Server sends a picture folder, fetches the results and opens them.
+
+Install: Edit > Preferences > Add-ons > arrow at the top right > Install from Disk > this file, enable it.
+On Linux a link into Blender's add-on folder is better (see comfyui/README.md).
 """
 import importlib.util
 import json
@@ -25,18 +29,48 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, St
 bl_info = {
     "name": "BP Pipeline Nodes",
     "author": "Samy Hashem",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (4, 2, 0),
     "location": "Node Editor > BP Pipeline",
     "description": "Pictures -> data sheet -> base model -> refined parts -> final model, as nodes (TRELLIS.2)",
     "category": "Node",
 }
 
-HERE = os.path.dirname(os.path.realpath(__file__))
-PROJECT = os.path.dirname(HERE)
-_spec = importlib.util.spec_from_file_location("bp_nodes_core", os.path.join(PROJECT, "scripts", "pipeline", "nodes_core.py"))
-core = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(core)  # standard library only
+PROJECT_NOTE = os.path.expanduser("~/.config/inpainting3d/project_path")  # written by `cloud.py device`
+
+
+def find_project():
+    """The project folder: next to this file when it is linked (Linux), or as noted by `cloud.py device` (on
+    Windows "Install from Disk" copies this file away from the project), or a usual place."""
+    here = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    candidates = [here]
+    if os.path.isfile(PROJECT_NOTE):
+        candidates.append(open(PROJECT_NOTE).read().strip())
+    home = os.path.expanduser("~")
+    candidates += [os.path.join(home, n) for n in ("inpainting-3D", "BP_3D-Modell-Inpainting", "bp_samy_hashem")]
+    for path in candidates:
+        if os.path.isfile(os.path.join(path, "scripts", "pipeline", "nodes_core.py")):
+            return path
+    return None
+
+
+def load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PROJECT = find_project()
+if PROJECT:
+    core = load_module("bp_nodes_core", os.path.join(PROJECT, "scripts", "pipeline", "nodes_core.py"))  # standard library only
+else:  # the add-on still loads; the panel says what to do
+    class core:  # noqa: N801
+        PARTS = ["head", "hair", "bust", "belly", "back", "butt", "thighs", "lower_legs", "feet"]
+        VISION_MODELS = ["Qwen/Qwen3-VL-8B-Instruct"]
+# the nodes run here only where the project's environment is (Linux, with conda); else through the server
+CAN_RUN = bool(PROJECT) and os.name != "nt" and os.path.isfile(os.path.join(PROJECT, "activate.sh")) \
+    and os.path.isdir(os.path.join(PROJECT, "conda", "envs"))
 
 TREE = "BPPipelineTree"
 SEEDS = (42, 7, 123, 2024)  # the head's candidates for the Pick best node
@@ -389,6 +423,9 @@ class BP_OT_run(bpy.types.Operator):
 
     def execute(self, context):
         tree = context.space_data.edit_tree
+        if not CAN_RUN:
+            self.report({"ERROR"}, "No project environment on this computer: use 3D view > sidebar > BP Server")
+            return {"CANCELLED"}
         if state["queue"]:
             self.report({"WARNING"}, "already running")
             return {"CANCELLED"}
@@ -532,6 +569,148 @@ class BP_PT_pipeline(bpy.types.Panel):
             layout.operator("bp.cancel", icon="CANCEL")
 
 
+# ------------------------------------------------------------------ the server (any computer, also Windows)
+
+server = {"message": "", "auto": False, "busy": False}
+
+
+def cloud_module():
+    return load_module("bp_cloud", os.path.join(PROJECT, "scripts", "server", "cloud.py"))
+
+
+def in_background(work):
+    """Network work in a thread, so that Blender stays usable; the panel shows its message."""
+    def run():
+        server["busy"] = True
+        try:
+            work()
+        except Exception as e:  # noqa: BLE001 (shown in the panel)
+            server["message"] = f"{type(e).__name__}: {e}"[:120]
+        server["busy"] = False
+    threading.Thread(target=run, daemon=True).start()
+
+
+def fetch_now():
+    def work():
+        module = cloud_module()
+        new = module.fetch_results(module.Cloud())
+        server["message"] = f"{time.strftime('%H:%M')}: {new} new file(s)"
+    in_background(work)
+
+
+def auto_fetch():
+    """Timer: every 10 minutes, while the switch is on."""
+    if not server["auto"]:
+        return None
+    if not server["busy"]:
+        fetch_now()
+    return 600.0
+
+
+def runs():
+    folder = os.path.join(PROJECT, "outputs", "server_runs") if PROJECT else ""
+    return sorted(os.listdir(folder), reverse=True) if folder and os.path.isdir(folder) else []
+
+
+def run_files(run, *types):
+    folder = os.path.join(PROJECT, "outputs", "server_runs", run)
+    found = []
+    for root, _, files in os.walk(folder):
+        found += [os.path.join(root, f) for f in files if f.lower().endswith(types)]
+    return sorted(found)
+
+
+class BP_OT_server_send(bpy.types.Operator):
+    """Send a picture folder to the uni server: the whole pipeline (one job at a time, one GPU)"""
+    bl_idname, bl_label = "bp.server_send", "Send to the server"
+
+    def execute(self, context):
+        folder = bpy.path.abspath(context.scene.bp_pictures)
+        if not os.path.isdir(folder):
+            self.report({"ERROR"}, f"no folder {folder}")
+            return {"CANCELLED"}
+
+        def work():
+            import types
+            module = cloud_module()
+            module.pipeline(types.SimpleNamespace(folder=folder, name=None, rounds=3, threshold=85.0, code="main"))
+            server["message"] = "sent: it starts within a minute if the worker runs"
+        in_background(work)
+        return {"FINISHED"}
+
+
+class BP_OT_server_fetch(bpy.types.Operator):
+    """Fetch everything new from the server now (Sciebo)"""
+    bl_idname, bl_label = "bp.server_fetch", "Fetch new results"
+
+    def execute(self, context):
+        fetch_now()
+        return {"FINISHED"}
+
+
+class BP_OT_server_auto(bpy.types.Operator):
+    """Fetch every 10 minutes, on or off"""
+    bl_idname, bl_label = "bp.server_auto", "Fetch every 10 minutes"
+
+    def execute(self, context):
+        server["auto"] = not server["auto"]
+        if server["auto"]:
+            bpy.app.timers.register(auto_fetch, first_interval=0.1)
+        return {"FINISHED"}
+
+
+class BP_OT_server_open(bpy.types.Operator):
+    """Load this result: a model into the scene, a picture into an Image Editor"""
+    bl_idname, bl_label = "bp.server_open", "Open"
+    path: StringProperty()
+
+    def execute(self, context):
+        if self.path.lower().endswith(".glb"):
+            name = "BP " + os.path.basename(os.path.dirname(self.path))[-22:] + " " + os.path.basename(self.path)[:-4]
+            collection = bpy.data.collections.new(name)
+            context.scene.collection.children.link(collection)
+            before = set(bpy.data.objects)
+            bpy.ops.import_scene.gltf(filepath=self.path)
+            for obj in set(bpy.data.objects) - before:
+                for c in obj.users_collection:
+                    c.objects.unlink(obj)
+                collection.objects.link(obj)
+        else:
+            image = bpy.data.images.load(self.path, check_existing=True)
+            areas = [a for w in context.window_manager.windows for a in w.screen.areas if a.type == "IMAGE_EDITOR"]
+            if areas:
+                areas[0].spaces.active.image = image
+            else:
+                self.report({"INFO"}, f"Loaded {image.name}: open it in an Image Editor")
+        return {"FINISHED"}
+
+
+class BP_PT_server(bpy.types.Panel):
+    """The same on every computer, also on Windows: the heavy work runs on the uni server"""
+    bl_space_type, bl_region_type, bl_category, bl_label = "VIEW_3D", "UI", "BP", "BP Server"
+
+    def draw(self, context):
+        layout = self.layout
+        if not PROJECT:
+            layout.label(text="Project not found:", icon="ERROR")
+            layout.label(text="run  python scripts/server/cloud.py device")
+            layout.label(text="in the project folder, restart Blender")
+            return
+        layout.prop(context.scene, "bp_pictures", text="Pictures")
+        layout.operator("bp.server_send", icon="EXPORT")
+        row = layout.row(align=True)
+        row.operator("bp.server_fetch", icon="FILE_REFRESH")
+        row.operator("bp.server_auto", text="Auto 10 min", icon="CHECKBOX_HLT" if server["auto"] else "CHECKBOX_DEHLT")
+        if server["message"]:
+            layout.label(text=server["message"])
+        for run in runs()[:4]:
+            box = layout.box()
+            box.label(text=run[-34:], icon="FILE_FOLDER")
+            for path in run_files(run, ".glb", "heatmap_r1.jpg", "heatmap_r2.jpg", "heatmap_r3.jpg", "contact.jpg", "01_data_sheet.jpg"):
+                label = os.path.relpath(path, os.path.join(PROJECT, "outputs", "server_runs", run))
+                box.operator("bp.server_open", text=label[-36:], icon="MESH_DATA" if path.endswith(".glb") else "IMAGE_DATA").path = path
+
+
 class BP_MT_add(bpy.types.Menu):
     bl_idname, bl_label = "BP_MT_add", "BP Pipeline"
 
@@ -547,16 +726,19 @@ def add_menu(self, context):
 
 
 CLASSES = (BPPipelineTree, PicturesSocket, SortedSocket, ModelSocket, *NODES, BP_OT_run, BP_OT_cancel,
-           BP_OT_view_picture, BP_OT_show_model, BP_OT_new_pipeline, BP_PT_pipeline, BP_MT_add)
+           BP_OT_view_picture, BP_OT_show_model, BP_OT_new_pipeline, BP_PT_pipeline, BP_MT_add,
+           BP_OT_server_send, BP_OT_server_fetch, BP_OT_server_auto, BP_OT_server_open, BP_PT_server)
 
 
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.NODE_MT_add.append(add_menu)
+    bpy.types.Scene.bp_pictures = StringProperty(name="Pictures", default="pictures/monster", subtype="DIR_PATH")
 
 
 def unregister():
+    del bpy.types.Scene.bp_pictures
     bpy.types.NODE_MT_add.remove(add_menu)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)

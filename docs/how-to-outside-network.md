@@ -88,6 +88,28 @@ python3 scripts/server/cloud.py status                  # every job: queued / ru
 python3 scripts/server/cloud.py fetch                   # finished models -> outputs/cloud/
 ```
 
+**The whole pipeline** (pictures or a video → data sheet → base model → judge → re-inpaint bad blocks; one
+job at a time, it uses one GPU):
+
+```
+python3 scripts/server/cloud.py pipeline "pictures/robot fly"   # send one character's folder
+python3 scripts/server/cloud.py watch                           # every 10 minutes: new models, heat maps, zips
+python3 scripts/server/cloud.py pictures up                     # new pictures to Sciebo (down: back to this PC)
+```
+
+Results land in `outputs/server_runs/<job>/`, while the job runs. The same in Blender: add-on
+`blender/pipeline_nodes.py`, 3D view → N key → tab **BP** → *BP Server* (send, fetch, *Auto 10 min*, open).
+
+A new computer, after `git clone`: `python3 scripts/server/cloud.py setup`, then
+`python3 scripts/server/cloud.py device` (makes `outputs/` and `pictures/`, fetches pictures and results).
+
+**Stop a running job** (VDI → JupyterLab terminal; the worker keeps running):
+
+```
+pkill -u $USER -f auto_pipeline.py
+pkill -u $USER -f refine_region.py
+```
+
 ---
 
 ## If something goes wrong

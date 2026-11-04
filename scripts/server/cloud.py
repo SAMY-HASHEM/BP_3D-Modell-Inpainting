@@ -397,6 +397,10 @@ def device(args):
     """A new computer after git clone / git pull: the folders Git doesn't have, the pictures and all results."""
     for folder in ("outputs", "pictures", os.path.join("outputs", "server_runs"), os.path.join("outputs", "cloud")):
         os.makedirs(os.path.join(PROJECT_DIR, folder), exist_ok=True)
+    note = os.path.expanduser("~/.config/inpainting3d/project_path")  # for the Blender add-on on Windows
+    os.makedirs(os.path.dirname(note), exist_ok=True)
+    with open(note, "w") as f:
+        f.write(PROJECT_DIR)
     args.direction = "down"
     pictures_sync(args)
     print(f"{fetch_results(Cloud())} new results in outputs/server_runs/", flush=True)

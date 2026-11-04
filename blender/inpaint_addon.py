@@ -40,7 +40,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 12, 0),
+    "version": (1, 13, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -1807,6 +1807,9 @@ class INPAINT_OT_start_local(bpy.types.Operator):
         return not local_running()
 
     def execute(self, context):
+        if os.name == "nt":
+            self.report({"ERROR"}, "'This PC' needs the Linux setup: on Windows choose 'Uni (inside)' or 'Uni (from anywhere)'")
+            return {"CANCELLED"}
         project = project_folder()
         if not os.path.isfile(os.path.join(project, "activate.sh")):
             self.report({"ERROR"}, f"No project in {project}: set the project folder in the add-on preferences")
