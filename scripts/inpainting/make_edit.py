@@ -4,12 +4,13 @@ TRELLIS.2 needs the whole object in the picture: a picture of only the new part 
 
 Nothing is placed by hand. The new part's picture is cut out, the side of the model that fits the model's own
 picture is measured, the part is put on the top of the object at a size measured from the object, and the 3D area
-is the room the part takes: the empty space around it, without the model's own surface (protected, "Teil + leerer
-Raum" of week 2), so that the rest stays exact.
+is the room the part takes. Every small cube of that area gets one job (area_map.jpg shows them): KEEP the model's
+surface there (protected, "Teil + leerer Raum" of week 2), DELETE the old surface under the 2D mask (--replace),
+EDIT the empty room the new part grows into. Only DELETE + EDIT are regenerated, so the rest stays exact.
 
     python scripts/inpainting/make_edit.py model.glb crown.png --reference robot.png --out outputs/edits/robot_crown
 
-Writes before.png, after.png, mask.png, area.npy, edit.json, then send with cloud.py inpaint (edit.json has the line).
+Writes before.png, after.png, mask.png, area.npy, area_map.jpg, edit.json, then send with cloud.py inpaint (edit.json has the line).
 """
 import _paths  # noqa: F401  (the scripts of the other folders)
 
@@ -72,6 +73,30 @@ def front_view(renders, reference):
     return int(np.argmin(scores))
 
 
+def pixels(points, origin, right, size, per_pixel):
+    """Where points of the model fall in a straight view (views.json): column and row."""
+    u = ((points - origin) @ right / per_pixel + size / 2).astype(int)
+    v = (size / 2 - (points[:, 1] - origin[1]) / per_pixel).astype(int)
+    return u, v
+
+
+def show_area(front, side_view, info, side, points, keep, delete, edit, origin, per_pixel, path):
+    """The area's cubes on the model from two sides: green = KEEP, red = DELETE, blue = EDIT."""
+    size = info["size"]
+    sheet = Image.new("RGB", (2 * size, size), GREY)
+    for k, (view, index) in enumerate(((front, side), (side_view, (side + 1) % 4))):
+        picture = on_grey(view)
+        right = np.array(info["views"][index]["right"])
+        right = np.array([right[0], right[2], -right[1]])
+        tint = np.asarray(picture).copy()
+        for chosen, colour in ((edit, (70, 120, 255)), (delete, (235, 50, 40)), (keep, (40, 200, 90))):
+            u, v = pixels(points[chosen], origin, right, size, per_pixel)
+            good = (u >= 0) & (u < size) & (v >= 0) & (v < size)
+            tint[v[good], u[good]] = colour
+        sheet.paste(Image.fromarray(tint), (k * size, 0))
+    sheet.resize((1400, 700), Image.LANCZOS).save(path, quality=92)
+
+
 def main():
     parser = argparse.ArgumentParser(description="BEFORE, AFTER and the 2D mask for inpainting by picture")
     parser.add_argument("model")
@@ -82,7 +107,8 @@ def main():
     parser.add_argument("--width", type=float, default=0.75, help="the part's width, share of the top of the object")
     parser.add_argument("--sink", type=float, default=0.15, help="share of the part's height pushed down into the object")
     parser.add_argument("--head", type=float, default=0.12, help="what counts as the top: share of the object's height")
-    parser.add_argument("--no-protect", action="store_true", help="also regenerate the model's surface inside the area")
+    parser.add_argument("--replace", action="store_true", help="the model's surface under the 2D mask goes too (DELETE); "
+                        "without it the whole surface stays and the part grows only into the empty room")
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
@@ -152,24 +178,30 @@ def main():
     points[:, 1] = c.reshape(-1)
     points = points[np.hypot(a.reshape(-1), b.reshape(-1)) <= half]  # a round area for a round part
 
-    kept = len(points)
-    if not args.no_protect:
-        surface = trimesh.sample.sample_surface(mesh, 2_000_000, seed=0)[0]
-        surface = surface[surface[:, 1] > up[0] - 4 * voxel]
-        distance = cKDTree(surface).query(points)[0] if len(surface) else np.full(len(points), np.inf)
-        points = points[distance > 1.5 * voxel]
-    np.save(os.path.join(args.out, "area.npy"), points)
+    # every small cube of the area: KEEP (model surface that stays), DELETE (old surface under the 2D mask), EDIT (empty)
+    surface = trimesh.sample.sample_surface(mesh, 2_000_000, seed=0)[0]
+    surface = surface[surface[:, 1] > up[0] - 4 * voxel]
+    on_surface = cKDTree(surface).query(points)[0] <= 1.5 * voxel if len(surface) else np.zeros(len(points), bool)
+    origin = to_gltf(center)
+    u, v = pixels(points, origin, right_axis, size, per_pixel)
+    changed = np.asarray(mask)[np.clip(v, 0, size - 1), np.clip(u, 0, size - 1)] > 127
+    delete = on_surface & changed & args.replace
+    keep = on_surface & ~delete
+    edit = ~on_surface
+    np.save(os.path.join(args.out, "area.npy"), points[edit | delete])  # all the rest stays the model's own
+    show_area(renders[side], renders[(side + 1) % 4], info, side, points, keep, delete, edit, origin, per_pixel,
+              os.path.join(args.out, "area_map.jpg"))
 
     above = max(0.0, up[1] + 2 * voxel - vertices[:, 1].max())
     room = round(float(min(0.5, 1.05 * above / (above + model_size))), 3)
-    edit = {"side": side, "room": room, "area_points": len(points), "before_protection": kept,
-            "box_y": [float(up[0]), float(up[1])], "part_pixels": [x, y, width, part_height]}
-    json.dump(edit, open(os.path.join(args.out, "edit.json"), "w"), indent=1)
+    report = {"side": side, "room": room, "keep": int(keep.sum()), "delete": int(delete.sum()), "edit": int(edit.sum()),
+              "box_y": [float(up[0]), float(up[1])], "part_pixels": [x, y, width, part_height]}
+    json.dump(report, open(os.path.join(args.out, "edit.json"), "w"), indent=1)
     sheet = Image.new("RGB", (1500, 500), "white")
     for k, picture in enumerate((before, after, mask.convert("RGB"))):
         sheet.paste(picture.resize((500, 500), Image.LANCZOS), (k * 500, 0))
     sheet.save(os.path.join(args.out, "three.jpg"), quality=92)
-    print(json.dumps(edit), flush=True)
+    print(json.dumps(report), flush=True)
 
 
 if __name__ == "__main__":
