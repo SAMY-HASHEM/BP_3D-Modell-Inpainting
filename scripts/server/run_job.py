@@ -49,6 +49,7 @@ VARIANT_CHECKS = {
     "solver": lambda v: v if v in ("midpoint", "euler") else None,
     "inject": lambda v: float(v) if 0 <= float(v) <= 1 else None,
     "room": lambda v: float(v) if 0 <= float(v) <= 0.5 else None,
+    "texture_guidance": lambda v: float(v) if 1 <= float(v) <= 10 else None,
 }
 
 
