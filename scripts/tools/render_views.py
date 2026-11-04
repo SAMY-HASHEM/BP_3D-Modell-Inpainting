@@ -1,7 +1,7 @@
 """Four straight views of a model (orthographic, transparent background), for inpainting by picture: because the
 camera has no perspective, every pixel of these pictures can be turned back into a place on the model.
 
-    blender -b --python scripts/tools/render_views.py -- model.glb out_folder [--size 1024] [--samples 32]
+    blender -b --python scripts/tools/render_views.py -- model.glb out_folder [--size 1024] [--samples 32] [--frame views.json]
 
 Writes view_0.png ... view_3.png and views.json (see make_edit.py).
 """
@@ -27,6 +27,9 @@ low = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for 
 high = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
 center = (low + high) / 2
 span = max(high - low) * 1.4  # free space around the model: something new may be put on it
+if "--frame" in args:  # the frame of an earlier views.json: pictures of a changed model stay comparable
+    frame = json.load(open(args[args.index("--frame") + 1]))
+    center, span = Vector(frame["center"]), frame["span"]
 
 scene = bpy.context.scene
 scene.render.engine = "CYCLES"
