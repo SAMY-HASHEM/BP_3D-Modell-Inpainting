@@ -98,7 +98,10 @@ The worker keeps running after you close the VDI.
    background). Press **1. Make picture**. It renders the whole model and puts the part into your box, no AI:
    the picture **before**, **after** and the **2D mask**. This is how the crown came onto the bee. A picture of only
    the new part must not go in as the Picture: TRELLIS.2 reads it as the whole object.
-3. **Method** is always *Inversion*, 25 steps. For something on top of the model set **Room above** (about 0.15).
+   **More sides** (optional, best colours): a folder with up to 3 pictures of the part in turning order (right, back, left).
+3. Always Inversion, 25 steps. For something on top of the model set **Room above** (about 0.15).
+   **Colours only**: the shape stays, only the colours in the area change, about 8 minutes. Best as the last step:
+   tick it, **1. Make picture** again, **2. Regenerate area**.
    At the top of the panel, *Where does the AI run?*: **Uni server** → **2. Regenerate area**.
 4. The panel shows the progress (`queued` → `running: GPU 2: …` → `done`); the result is downloaded
    and appears next to the hidden original.

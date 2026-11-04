@@ -39,7 +39,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 15, 0),
+    "version": (1, 16, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -289,7 +289,13 @@ class InpaintSettings(bpy.types.PropertyGroup):
     prompt: bpy.props.StringProperty(name="Prompt", description="What the marked area should show, "
                                                                 "e.g. 'a stone statue of a kneeling woman'")
     reference: bpy.props.StringProperty(name="Reference", subtype="FILE_PATH",
-                                        description="Optional: a picture of the thing to add")
+                                        description="A picture of the new part, as seen from this view")
+    sides: bpy.props.StringProperty(name="More sides", subtype="DIR_PATH",
+                                    description="Optional: a folder with up to 3 pictures of the new part, in turning "
+                                                "order (right, back, left). All sides together give the best colours")
+    colours_only: bpy.props.BoolProperty(name="Colours only", default=False,
+                                         description="The shape stays exactly, only the colours in the area are "
+                                                     "regenerated, on the same mesh (fast). Best as the last step")
     seed: bpy.props.IntProperty(name="Seed", default=1, min=0, description="Another seed gives another result")
     grow: bpy.props.IntProperty(name="Grow", default=2, min=0, max=8,
                                 description="Grow the marked area by this many voxels (of 64 per side)")
@@ -1050,9 +1056,9 @@ def render_view(model, rotation, path, size=1024):
     return center, right, up, span
 
 
-def picture_of_change(model, rotation, points, reference, stem):
-    """BEFORE, AFTER and the 2D MASK of the whole model from this view (as the crown on the bee): the reference's
-    object is put into the marked area of a render of the model. Writes <stem>_before.png, <stem>.png, <stem>_mask.png."""
+def picture_of_side(model, rotation, points, part, stem):
+    """One side: BEFORE, AFTER and the 2D MASK of the whole model from this direction; the part is put into the
+    marked area. Writes <stem>_before.png, <stem>.png, <stem>_mask.png, or returns what went wrong."""
     render = stem + "_render.png"
     center, right, up, span = render_view(model, rotation, render)
     view = read_image(render)
@@ -1061,9 +1067,6 @@ def picture_of_change(model, rotation, points, reference, stem):
     alpha = view[..., 3:4]
     grey = np.array(GREY, np.float32)
     before = view[..., :3] * alpha + grey * (1 - alpha)
-    part = cut_out(read_image(reference))
-    if part is None:
-        return "The reference picture shows no object"
     world = np.stack([points[:, 0], -points[:, 2], points[:, 1]], 1) - np.array(center)  # glTF back to Blender's axes
     xs = (world @ np.array(right) / span + 0.5) * size
     ys = (0.5 - world @ np.array(up) / span) * size
@@ -1084,6 +1087,30 @@ def picture_of_change(model, rotation, points, reference, stem):
     write_image(np.dstack([before, opaque]), stem + "_before.png")
     write_image(np.dstack([after, opaque]), stem + ".png")
     write_image(np.dstack([np.repeat(mask[..., None], 3, 2).astype(np.float32), opaque]), stem + "_mask.png")
+    return None
+
+
+PICTURE_ENDS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def picture_of_change(model, rotation, points, reference, stem, sides=""):
+    """The change from this view and, with a folder of `sides`, from the sides a quarter turn further each (as the crown
+    on the simple robot: every side its own before, after and mask). The sides are <stem>_side1.png and so on."""
+    pictures = [reference]
+    if sides:
+        pictures += [os.path.join(sides, n) for n in sorted(os.listdir(sides)) if n.lower().endswith(PICTURE_ENDS)][:3]
+    for k in range(1, 4):  # nothing left of an earlier picture with more sides
+        for end in (".png", "_before.png", "_mask.png"):
+            if os.path.isfile(f"{stem}_side{k}{end}"):
+                os.remove(f"{stem}_side{k}{end}")
+    for k, picture in enumerate(pictures):
+        part = cut_out(read_image(picture))
+        if part is None:
+            return f"No object in {os.path.basename(picture)}"
+        turn = Matrix.Rotation(k * 1.5707963267948966, 4, "Z").to_quaternion()
+        problem = picture_of_side(model, turn @ rotation, points, part, stem if k == 0 else f"{stem}_side{k}")
+        if problem:
+            return problem
     return None
 
 
@@ -1112,7 +1139,11 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
             folder = bpy.path.abspath(settings.folder)
             os.makedirs(folder, exist_ok=True)
             stem = os.path.join(folder, f"{bpy.path.clean_name(model.name)}_picture_seed{settings.seed}")
-            problem = picture_of_change(model, context.space_data.region_3d.view_rotation.copy(), points, reference, stem)
+            sides = bpy.path.abspath(settings.sides) if settings.sides else ""
+            if sides and not os.path.isdir(sides):
+                self.report({"ERROR"}, "The folder of More sides doesn't exist")
+                return {"CANCELLED"}
+            problem = picture_of_change(model, context.space_data.region_3d.view_rotation.copy(), points, reference, stem, sides)
             if problem:
                 self.report({"ERROR"}, problem)
                 return {"CANCELLED"}
@@ -1307,6 +1338,15 @@ def pack_job(operator, context):
     before, picture_mask = (os.path.splitext(picture)[0] + end for end in ("_before.png", "_mask.png"))
     if os.path.isfile(before) and os.path.isfile(picture_mask):
         job.update(source="source.png", picture_mask="picture_mask.png")
+    # the settings that worked best: new noise in the area, soft edge, colours that follow the pictures
+    version = {"method": settings.method, "start": "random", "soft": 2, "texture_guidance": 3}
+    if settings.colours_only:
+        version["keep_shape"] = True
+    job["variants"] = [version]
+    stem = os.path.splitext(picture)[0]
+    sides = [k for k in range(1, 4) if all(os.path.isfile(f"{stem}_side{k}{end}") for end in (".png", "_before.png", "_mask.png"))]
+    if "source" in job and sides:
+        job["more_edits"] = [[f"side{k}_{what}.png" for what in ("after", "before", "mask")] for k in sides]
     out = os.path.join(folder, f"{name}_job.zip")
     with zipfile.ZipFile(out, "w") as z:  # stored, not compressed: the model is compressed already
         z.write(path, "model.glb")
@@ -1315,6 +1355,9 @@ def pack_job(operator, context):
         if "source" in job:
             z.write(before, "source.png")
             z.write(picture_mask, "picture_mask.png")
+        for k in sides if "more_edits" in job else ():
+            for what, end in (("after", ".png"), ("before", "_before.png"), ("mask", "_mask.png")):
+                z.write(f"{stem}_side{k}{end}", f"side{k}_{what}.png")
         z.writestr("job.json", json.dumps(job, indent=2))
     return out
 
@@ -2153,6 +2196,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
         box.label(text="B. What should be there (optional)", icon="TEXT")
         box.prop(settings, "prompt", text="")
         box.prop(settings, "reference")
+        box.prop(settings, "sides")
         box.label(text="Turn the view to show the area, then:")
         box.operator(INPAINT_OT_make_picture.bl_idname, icon="IMAGE_DATA")
 
@@ -2168,7 +2212,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
         row.prop(settings, "grow")
         box.prop(settings, "room")
         box.prop(settings, "steps")
-        box.prop(settings, "method")
+        box.prop(settings, "colours_only")
         box.operator(INPAINT_OT_regenerate.bl_idname, text="2. Regenerate area", icon="PLAY")
         if remote["message"]:
             box.label(text=remote["message"])
