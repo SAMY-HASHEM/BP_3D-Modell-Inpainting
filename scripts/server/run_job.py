@@ -85,6 +85,10 @@ def name(version):
         parts.append(version["solver"])
     if version.get("inject", 1.0) != 1.0:
         parts.append(f"inject{version['inject']:g}")
+    if version.get("texture_guidance") is not None:
+        parts.append(f"tg{version['texture_guidance']:g}")
+    if version.get("keep_shape"):
+        parts.append("colours")
     return "-".join(parts)
 
 
