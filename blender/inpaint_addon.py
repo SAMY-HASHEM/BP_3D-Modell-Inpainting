@@ -39,7 +39,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 16, 0),
+    "version": (1, 16, 1),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -219,6 +219,30 @@ def keep_the_rest(model, part, boxes, grow, room=0.0):
     return ((np.argwhere(mask) + 0.5) / GRID - 0.5 - lift) / scale + centre
 
 
+def only_empty_space(model, points):
+    """The points of a box that are empty room: not on the model's surface and not inside it (below its surface). The
+    model's surface and inside stay KEEP, so nothing old grows again (a second layer on a head)."""
+    vertices = np.empty(len(model.data.vertices) * 3)
+    model.data.vertices.foreach_get("co", vertices)
+    matrix = np.array(model.matrix_world)
+    vertices = vertices.reshape(-1, 3) @ matrix[:3, :3].T + matrix[:3, 3]
+    low = vertices.min(0)
+    cell = np.ptp(vertices, 0).max() / GRID
+    cells = ((vertices - low) / cell).astype(int)
+    full = np.zeros((GRID + 3, GRID + 3, GRID + 3), bool)
+    full[cells[:, 0] + 1, cells[:, 1] + 1, cells[:, 2] + 1] = True
+    for axis in range(3):  # one cube wider: the surface stays exact
+        full = full | np.roll(full, 1, axis) | np.roll(full, -1, axis)
+    roof = np.full((GRID + 3, GRID + 3), -1)
+    np.maximum.at(roof, (cells[:, 0] + 1, cells[:, 1] + 1), cells[:, 2] + 1)
+    where = ((points - low) / cell).astype(int) + 1
+    inside = np.all((where >= 0) & (where < GRID + 3), axis=1)
+    keep = np.zeros(len(points), bool)
+    a, b, c = where[inside].T
+    keep[inside] = full[a, b, c] | (c <= roof[a, b])
+    return points[~keep]
+
+
 def area_points(operator, context):
     """The model, the marked area (glTF coordinates), how many faces are selected, whether boxes count, and
     the grow the job must use; or None after reporting what's missing."""
@@ -231,13 +255,15 @@ def area_points(operator, context):
     settings = context.scene.inpaint
     faces, count = selected_points(model)
     boxes = np.zeros((0, 3)) if settings.box_use == "part" else box_points(model)
-    if settings.box_use != "all" and count == 0:
+    if settings.box_use not in ("all", "space") and count == 0:
         operator.report({"ERROR"}, "No faces selected: find the part first (or select faces), "
                                    "or set Box to 'Everything in the box'")
         return None
     if count == 0 and len(boxes) == 0:
         operator.report({"ERROR"}, "Mark an area: select faces (Edit Mode) or add a space box")
         return None
+    if settings.box_use == "space":  # all surfaces stay: the job grows 0
+        return model, to_gltf(only_empty_space(model, boxes)), count, True, 0
     if settings.box_use == "part_space":  # grown here already, around the protected surfaces: the job grows 0
         return model, keep_the_rest(model, faces, boxes, settings.grow, settings.room), count, True, 0
     return model, to_gltf(np.concatenate([faces, boxes])), count, len(boxes) > 0, settings.grow
@@ -324,13 +350,15 @@ class InpaintSettings(bpy.types.PropertyGroup):
                                      description="Run the mask AI without the GPU (slower: about 1-2 minutes)")
     box_use: bpy.props.EnumProperty(
         name="Box",
-        items=[("all", "Everything in the box", "Everything inside the space box is regenerated"),
+        items=[("space", "Only the empty space", "The model stays exactly (its surface and inside): the new part grows "
+                                                 "only into the empty room in the box. Best for adding something"),
+               ("all", "Everything in the box", "Everything inside the space box is regenerated, the old surface too"),
                ("part", "Only the selected faces", "The box only frames the part: just the selected faces (e.g. "
                                                    "the part the AI found) are regenerated, in their own place"),
                ("part_space", "Selected faces + empty space",
                 "The selected faces and the empty space in the box are regenerated; every other surface in the "
                 "box stays exactly as it is (no colour bleeding onto it). For replacing a part with something new")],
-        default="all")
+        default="space")
     folder: bpy.props.StringProperty(name="Work folder", subtype="DIR_PATH",
                                      default=os.path.expanduser("~/inpainting-3D/outputs/blender"),
                                      description="Where the model, the area, the pictures and the results are saved")
