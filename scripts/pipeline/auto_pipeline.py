@@ -53,6 +53,19 @@ def run(command, log, done=None):
     return ok
 
 
+def live(args, path, label):
+    """Sends an in-between result to the cloud at once (--live), so the user sees it while the job runs."""
+    if not args.live or not os.path.exists(path):
+        return
+    try:
+        sys.path.insert(0, os.path.join(SCRIPTS, "server"))
+        from cloud import Cloud
+        Cloud().upload(path, f"{args.live}__live_{label}")
+        print(f"  sent: {label}", flush=True)
+    except Exception as e:  # noqa: BLE001 (only the live copy is lost; the job goes on)
+        print(f"  not sent: {label} ({type(e).__name__}: {e})", flush=True)
+
+
 def script(path):
     return os.path.join(SCRIPTS, *path.split("/"))
 
@@ -67,6 +80,7 @@ def main():
     parser.add_argument("--blocks", type=int, default=4, help="blocks per side of the cube (4 = 256 of 1024)")
     parser.add_argument("--frames", type=int, default=12, help="frames of a video")
     parser.add_argument("--zip", action="store_true", help="also a small zip of the results (for the cloud worker)")
+    parser.add_argument("--live", help="the cloud job's name: send every in-between result at once")
     args = parser.parse_args()
     out = os.path.abspath(args.out or os.path.join(PROJECT, "outputs", "pipeline", args.name, "auto"))
     os.makedirs(out, exist_ok=True)
@@ -120,6 +134,8 @@ def main():
                        if f.endswith(".glb")), key=os.path.getmtime)[-1]
         shutil.move(made, model)
 
+    live(args, os.path.join(sort_dir, "contact.jpg"), "01_data_sheet.jpg")
+    live(args, model, "02_base.glb")
     tries = {}  # block -> how often it was re-inpainted
     for r in range(1, args.rounds + 1):
         print(f"03 judge, round {r}", flush=True)
@@ -129,6 +145,8 @@ def main():
                     "--blocks", args.blocks, "--threshold", args.threshold], os.path.join(grid_dir, "log.txt"), grid_path):
             return 1
         grid = json.load(open(grid_path))
+        live(args, os.path.join(grid_dir, "heatmap.jpg"), f"03_heatmap_r{r}.jpg")
+        live(args, grid_path, f"03_grid_r{r}.json")
         bad = sorted((b for b in grid["blocks"] if b["bad"]), key=lambda b: b["score"])
         summary["rounds"].append({"round": r, "model": os.path.relpath(model, out),
                                   "scores": {"".join(map(str, b["block"])): b["score"] for b in grid["blocks"]},
@@ -173,6 +191,7 @@ def main():
                    os.path.join(out, "05_model", f"r{r}_log.txt"), new_model):
             return 1
         model = new_model
+        live(args, model, f"05_model_r{r}.glb")
 
     final = os.path.join(out, "final.glb")
     shutil.copy(model, final)

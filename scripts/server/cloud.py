@@ -211,6 +211,23 @@ def pipeline(args):
     print(f"Sent as {job} ({len(files)} files of {name}). Follow it with:  python3 scripts/server/cloud.py status")
 
 
+def live(args):
+    """Downloads the in-between results of running pipeline jobs to outputs/server_runs/<job>/."""
+    cloud = Cloud()
+    for name in cloud.list():
+        if "__live_" not in name:
+            continue
+        job, label = name.split("__live_", 1)
+        if args.job and args.job not in job:
+            continue
+        folder = os.path.join(PROJECT_DIR, "outputs", "server_runs", job)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, label)
+        if not os.path.exists(path):
+            print(f"downloading {job}: {label}", flush=True)
+            cloud.download(name, path)
+
+
 def inpaint(args):
     """Packs a model, an area (a box in the model's coordinates, or a Blender area .npy) and a picture into
     the same job .zip that Blender's add-on makes, and sends it."""
@@ -318,6 +335,9 @@ def main():
     p.add_argument("--threshold", type=float, default=85)
     p.add_argument("--code", default="main", help="the branch the server runs it with (default: main, newest)")
     p.set_defaults(run=pipeline)
+    p = sub.add_parser("live", help="download the in-between results of pipeline jobs to outputs/server_runs/")
+    p.add_argument("job", nargs="?", help="part of the job's name (default: all)")
+    p.set_defaults(run=live)
     p = sub.add_parser("inpaint", help="send an inpainting job without Blender (TRELLIS.2 environment)")
     p.add_argument("model")
     p.add_argument("picture", help="picture that guides the new area")

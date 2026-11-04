@@ -81,7 +81,8 @@ def command_for(job, folder, zip_path, gpu):
         if not os.path.isdir(pictures) or not os.listdir(pictures):
             raise ValueError("no pictures in the job")
         return [sys.executable, "-u", "scripts/pipeline/auto_pipeline.py", pictures, "--name", name,
-                "--out", os.path.join(folder, name), "--rounds", str(rounds), "--threshold", str(threshold), "--zip"]
+                "--out", os.path.join(folder, name), "--rounds", str(rounds), "--threshold", str(threshold), "--zip",
+                "--live", os.path.basename(os.path.normpath(folder))]
     if job["kind"] != "generate":
         raise ValueError(f"unknown kind of job: {job['kind']}")
     pictures = [os.path.join(folder, os.path.basename(p)) for p in job["pictures"]]
