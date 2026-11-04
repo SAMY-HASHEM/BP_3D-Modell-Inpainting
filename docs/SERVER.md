@@ -82,10 +82,9 @@ rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/*   # empty Jupyte
 
 ## 8. Blender inpainting with the server
 
-Three ways, each with its own step-by-step guide:
+Two ways, each with its own step-by-step guide:
 
 | Where the AI runs | Guide | In Blender, *Where does the AI run?* |
 |---|---|---|
 | your own PC (its NVIDIA GPU) | [docs/how-to-this-pc.md](how-to-this-pc.md) | This PC |
-| in the uni network | [docs/how-to-inside-network.md](how-to-inside-network.md) | Uni (inside) |
-| anywhere else (home) | [docs/how-to-outside-network.md](how-to-outside-network.md) | Uni (from anywhere) |
+| anywhere (home or uni) | [docs/how-to-server.md](how-to-server.md) | Uni server |

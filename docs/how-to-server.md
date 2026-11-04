@@ -1,24 +1,45 @@
-# How to: inpainting from Blender **outside the uni network** (from home)
+# How to: using the uni GPU server
 
-Use this when your PC is **not** in the uni network (at home, anywhere). The HCI GPU server can't be
-reached from outside, but both your PC and the server can reach the **Sciebo cloud**. So the cloud
-folder `inpainting-jobs/` is the mailbox: Blender puts a job there, a worker on the server runs it and
-puts the result back.
-
-In the uni network use [how-to-inside-network.md](how-to-inside-network.md) instead (faster).
+One way, the same at home and at uni: **through Sciebo**. The HCI GPU server can't be reached from outside, but your
+computer and the server can both reach the **Sciebo cloud**, so the cloud folder `inpainting-jobs/` is the mailbox:
+your computer puts a job there, a worker on the server runs it and puts the result back. The server is not your main
+computer: all heavy work runs there.
 
 ```
 YOUR PC                              SCIEBO CLOUD                     HCI GPU SERVER (A40, 48 GB)
 ───────                              ────────────                     ──────────────────────────
 Blender + add-on                     inpainting-jobs/                 cloud_worker.py (keeps running)
-  AI runs: "Uni (from anywhere)"
+  AI runs: "Uni server"      
   "2. Regenerate area" ── job.zip ─► <job>.zip          ◄── checks ── every 30 s
   panel: progress      ◄─ status ──  <job>.status       ◄── writes ── runs it on the freest GPU
   result appears       ◄─ model ───  <job>__<file>.glb  ◄── uploads ─ done
 ```
 
-Each job takes 2-3 minutes longer than inside the network: uploading, the worker's 30 s look, and
-loading TRELLIS.2 for every job.
+Each job takes 2-3 minutes for uploading, the worker's 30 s look and loading TRELLIS.2.
+
+## A new computer (also a uni PC with Windows): only Blender needed
+
+`pictures/` and `outputs/` are not in Git (the pictures belong to other artists, models are too big), so they
+come from your private Sciebo. All of it is buttons in Blender; no terminal, no Git, no Python.
+
+1. Download one file:
+   https://raw.githubusercontent.com/SAMY-HASHEM/BP_3D-Modell-Inpainting/main/blender/pipeline_nodes.py
+2. Blender: Edit → Preferences → Add-ons → arrow at the top right → *Install from Disk…* → that file → tick it.
+3. 3D view → N key → tab **BP** → *BP Setup*: a checklist. Click **Set up everything**: it gets the project and
+   installs the Inpaint add-on.
+4. Enter your Sciebo login name and app password → **Save and test** (Sciebo: Einstellungen → Sicherheit →
+   App-Passwort; never in a screenshot).
+5. **Get pictures**.
+
+Later: **Update project** in the same box (it replaces `git pull`).
+
+| Tab | Gives you |
+|---|---|
+| **Inpaint** | inpainting a marked area (below) |
+| **BP** → *BP Server* | a picture folder through the whole pipeline; fetch (*Auto 10 min*); open models and heat maps |
+
+The add-on's *This PC* mode and running the nodes yourself need the Linux setup; on Windows the work runs on the
+server. *Find part in box* needs the mask AI on your PC, so it doesn't work on a uni PC.
 
 ---
 
@@ -32,7 +53,7 @@ log in with your uni account. Your cloud: https://uni-duisburg-essen.sciebo.de
 Copy them with the 📋 buttons straight into the fields below — **never as a screenshot**, never into a chat.
 
 **3. Your PC, in Blender:** Edit → Preferences → Add-ons → TRELLIS.2 Inpainting → section
-*Outside the network*:
+*Uni server*:
 
 | Field | Value |
 |---|---|
@@ -45,7 +66,8 @@ Copy them with the 📋 buttons straight into the fields below — **never as a 
 `~/.config/inpainting3d/cloud.json` (readable only by you) and empties the password field.
 (Without Blender: `python3 scripts/server/cloud.py setup` does the same.)
 
-**4. The server** (VDI → browser → nc.hcigroup.de → JupyterLab → File → New → Terminal):
+**4. The server** (JupyterLab at https://nc.hcigroup.de → File → New → Terminal; on campus directly in the
+browser, from home through the VDI):
 
 ```
 cd ~/projects/bp_samy_hashem && git pull
@@ -75,7 +97,7 @@ The worker keeps running after you close the VDI.
 2. **Picture**: the model's picture, or one made with *Make picture from prompt* (it keeps the render
    before the edit and the edit's 2D mask, which **Method: Inversion** uses).
 3. **Method**: *Repaint* (fast) or *Inversion* (the new part joins better, about 3× slower; 25 steps for
-   the best quality). At the top of the panel, *Where does the AI run?*: **Uni (from anywhere)** → **2. Regenerate area**.
+   the best quality). At the top of the panel, *Where does the AI run?*: **Uni server** → **2. Regenerate area**.
 4. The panel shows the progress (`queued` → `running: GPU 2: …` → `done`); the result is downloaded
    and appears next to the hidden original.
 
@@ -99,10 +121,6 @@ python3 scripts/server/cloud.py pictures up                     # new pictures t
 
 Results land in `outputs/server_runs/<job>/`, while the job runs. The same in Blender: add-on
 `blender/pipeline_nodes.py`, 3D view → N key → tab **BP** → *BP Server* (send, fetch, *Auto 10 min*, open).
-
-A new computer: install `blender/pipeline_nodes.py` and click through *BP Setup* in Blender, see "A new PC" in
-[how-to-inside-network.md](how-to-inside-network.md). In a terminal instead: `python3 scripts/server/cloud.py setup`, then
-`python3 scripts/server/cloud.py device`.
 
 **Stop a running job** (VDI → JupyterLab terminal; the worker keeps running):
 

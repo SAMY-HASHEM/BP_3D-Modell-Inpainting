@@ -11,9 +11,8 @@ says what should be there: the server then first paints it into a picture of the
 current view, and TRELLIS.2 builds that picture's change in 3D.
 
 Where the AI runs ("Where does the AI run?" at the top of the panel):
-  This PC              scripts/server/inpaint_server.py on this computer's GPU; the add-on starts and stops it
-  Uni (inside)         inpaint_server.py on the uni GPU server, reached directly from inside the uni network
-  Uni (from anywhere)  cloud_worker.py on the uni GPU server, reached through the Sciebo cloud
+  Uni server   cloud_worker.py on the uni GPU server, reached through the Sciebo cloud: the same from home and at uni
+  This PC      scripts/server/inpaint_server.py on this computer's GPU; the add-on starts and stops it
 
 Install: Edit > Preferences > Add-ons > (arrow at the top right) > Install from Disk... > this file.
 Use:     3D view sidebar (N key) > Inpaint tab.
@@ -40,7 +39,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 13, 0),
+    "version": (1, 14, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -68,19 +67,12 @@ LOCAL_ADDRESS = "127.0.0.1:8765"
 
 
 def server():
-    """The inpaint server's address and request headers (with its token), for the chosen connection:
-    "This PC" = the server on this computer (its token is in a file here), "Uni (inside)" = the address
-    and token from the add-on preferences."""
-    if is_local():
-        address, token = LOCAL_ADDRESS, ""
-        if os.path.isfile(LOCAL_TOKEN):
-            with open(LOCAL_TOKEN) as f:
-                token = f.read().strip()
-    else:
-        prefs = bpy.context.preferences.addons[__name__].preferences
-        address = prefs.server.strip().removeprefix("http://").rstrip("/") or "nc.hcigroup.de:8765"
-        token = prefs.token.strip()
-    return f"http://{address}", {"X-Token": token}
+    """The inpaint server on this computer: its address and request headers (its token is in a file here)."""
+    token = ""
+    if os.path.isfile(LOCAL_TOKEN):
+        with open(LOCAL_TOKEN) as f:
+            token = f.read().strip()
+    return f"http://{LOCAL_ADDRESS}", {"X-Token": token}
 
 
 def is_local():
@@ -267,9 +259,7 @@ def export_model(context, model, folder):
 def server_ready(operator):
     server = ask("/status")
     if server is None:
-        operator.report({"ERROR"}, "The server isn't running: press 'Start server on this PC'" if is_local() else
-                        "The uni server isn't running or can't be reached: start inpaint_server.py in JupyterLab "
-                        "(docs/how-to-inside-network.md); from home use 'Uni (from anywhere)'")
+        operator.report({"ERROR"}, "The server isn't running: press 'Start server on this PC'")
         return False
     if server["busy"]:
         operator.report({"ERROR"}, "The server is busy with another job")
@@ -316,12 +306,10 @@ class InpaintSettings(bpy.types.PropertyGroup):
     model: bpy.props.PointerProperty(name="Model", type=bpy.types.Object, description="The model being changed")
     connection: bpy.props.EnumProperty(
         name="Connection",
-        items=[("LOCAL", "This PC", "The GPU of this computer (e.g. an RTX 3090): the add-on starts the server here"),
-               ("UNI", "Uni (inside)", "Directly to the uni GPU server, when this PC is in the uni network "
-                                       "(inpaint_server.py runs in JupyterLab; address and token in the preferences)"),
-               ("CLOUD", "Uni (from anywhere)", "Through the Sciebo cloud to the uni GPU server, from home too "
-                                                "(cloud_worker.py runs there; login in the preferences)")],
-        default="LOCAL")
+        items=[("CLOUD", "Uni server", "Through the Sciebo cloud to the uni GPU server, the same from home and at uni "
+                                       "(cloud_worker.py runs there; login in the preferences)"),
+               ("LOCAL", "This PC", "The GPU of this computer (e.g. an RTX 3090): the add-on starts the server here")],
+        default="CLOUD")
     part: bpy.props.StringProperty(name="Part", description="What to find in the space box, in English "
                                                             "(e.g. helmet, sword, left wing)")
     clicks: bpy.props.CollectionProperty(type=InpaintClick, description="Spots on the part, for Find part")
@@ -1013,7 +1001,7 @@ class INPAINT_OT_regenerate(bpy.types.Operator):
     bl_idname = "inpaint.regenerate"
     bl_label = "Regenerate area"
     bl_description = ("Pack the model, the marked area and the Picture, send them the chosen way "
-                      "(inside the network: directly; outside: through the cloud) and load the result")
+                      "(the uni server through the cloud, or this PC) and load the result")
 
     @classmethod
     def poll(cls, context):
@@ -1546,10 +1534,6 @@ class InpaintPreferences(bpy.types.AddonPreferences):
                                        description="A Sciebo app password, not your uni password")
     folder: bpy.props.StringProperty(name="Job folder", default=CLOUD_FOLDER,
                                      description="The cloud folder the uni server watches (e.g. one shared with you)")
-    server: bpy.props.StringProperty(name="Server address", default="nc.hcigroup.de:8765",
-                                     description="Uni (inside): the inpaint server on the uni GPU server, e.g. nc.hcigroup.de:8765")
-    token: bpy.props.StringProperty(name="Server token", subtype="PASSWORD",
-                                    description="Printed by inpaint_server.py when it starts on the uni server")
     project: bpy.props.StringProperty(name="Project folder", subtype="DIR_PATH", default="~/inpainting-3D",
                                       description="This project on this computer (for the mask AI of 'Find part')")
 
@@ -1561,12 +1545,8 @@ class InpaintPreferences(bpy.types.AddonPreferences):
         installed = os.path.isfile(mask_ai()[0])
         box.label(text="Mask AI installed" if installed else "Not installed yet: run ./install_mask.sh in the project folder",
                   icon="CHECKMARK" if installed else "ERROR")
-        box = layout.box()
-        box.label(text="Uni (inside): the inpaint server directly", icon="LINKED")
-        box.prop(self, "server")
-        box.prop(self, "token")
         layout = layout.box()
-        layout.label(text="Uni (from anywhere): the Sciebo cloud", icon="WORLD")
+        layout.label(text="Uni server: the Sciebo cloud", icon="WORLD")
         if os.path.isfile(CLOUD_CONFIG):
             with open(CLOUD_CONFIG) as f:
                 saved = json.load(f)
@@ -1740,14 +1720,6 @@ SERVER_STEPS = {
                     "start the worker; it keeps running after the VDI is closed",
                     "show its first lines"],
         "expect": ["You should see: 'Watching the cloud folder", "inpainting-jobs/ every 30 s'. Then close the VDI."]},
-    "UNI": {
-        "commands": ["cd ~/projects/bp_samy_hashem && git pull",
-                     "source activate.sh",
-                     "python scripts/server/inpaint_server.py --host 0.0.0.0"],
-        "explain": ["",
-                    "turn on the project's Python",
-                    "start the server; keep this terminal open (Ctrl+C stops it)"],
-        "expect": ["Wait for 'Ready' (about a minute). The first time,", "copy the 'Token' into Login / address."]},
 }
 
 
@@ -1808,7 +1780,7 @@ class INPAINT_OT_start_local(bpy.types.Operator):
 
     def execute(self, context):
         if os.name == "nt":
-            self.report({"ERROR"}, "'This PC' needs the Linux setup: on Windows choose 'Uni (inside)' or 'Uni (from anywhere)'")
+            self.report({"ERROR"}, "'This PC' needs the Linux setup: on Windows choose 'Uni server'")
             return {"CANCELLED"}
         project = project_folder()
         if not os.path.isfile(os.path.join(project, "activate.sh")):
@@ -1890,8 +1862,8 @@ PING_WAIT = 150  # seconds: the worker looks every 30 s, and may be starting a j
 class INPAINT_OT_test_connection(bpy.types.Operator):
     bl_idname = "inpaint.test_connection"
     bl_label = "Test connection"
-    bl_description = ("Send a tiny test job and wait for the answer: This PC / Uni (inside) ask the server directly; "
-                      "Uni (from anywhere) goes through Sciebo to the worker on the uni server and back (up to a minute)")
+    bl_description = ("Send a tiny test job and wait for the answer: This PC asks the server here; "
+                      "Uni server goes through Sciebo to the worker on the server and back (up to a minute)")
 
     @classmethod
     def poll(cls, context):
@@ -1968,9 +1940,6 @@ class INPAINT_OT_check(bpy.types.Operator):
         if context.scene.inpaint.connection == "CLOUD":
             status["server"] = "cloud login saved" if os.path.isfile(CLOUD_CONFIG) else "no cloud login (preferences)"
             return {"FINISHED"}
-        if context.scene.inpaint.connection == "UNI" and not context.preferences.addons[__name__].preferences.token.strip():
-            status["server"] = "no token yet (preferences)"
-            return {"FINISHED"}
         state = ask("/status", timeout=5)
         if state is not None and "error" in state and "busy" not in state:
             status["server"] = state["error"]  # e.g. wrong token
@@ -1996,12 +1965,8 @@ class INPAINT_PT_panel(bpy.types.Panel):
             row = box.row(align=True)
             row.operator(INPAINT_OT_start_local.bl_idname, icon="PLAY")
             row.operator(INPAINT_OT_stop_local.bl_idname, text="", icon="SNAP_FACE")
-        elif settings.connection == "UNI":
-            box.label(text=f"Uni GPU server: {server()[0].split('//')[1]}")
-            box.label(text="Only in the uni network. First start the server:")
-            draw_steps(box, settings)
         else:
-            box.label(text="Uni GPU server through Sciebo (2-3 min slower)")
+            box.label(text="Uni GPU server through Sciebo")
             box.label(text="First start the worker on the server (once):")
             draw_steps(box, settings)
         row = box.row()
@@ -2010,7 +1975,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
         row = box.row()
         row.operator(INPAINT_OT_test_connection.bl_idname, icon="LINKED")
         if settings.connection != "LOCAL":
-            row.operator("preferences.addon_show", text="Login / address", icon="PREFERENCES").module = __name__
+            row.operator("preferences.addon_show", text="Login", icon="PREFERENCES").module = __name__
         if status["message"]:
             layout.label(text=status["message"])
 

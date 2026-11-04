@@ -3,8 +3,7 @@
 Use this when your computer has a big NVIDIA GPU (e.g. an RTX 3090, 24 GB). Everything stays on your PC:
 no uni server, no cloud. The add-on starts and stops the server by itself.
 
-For the uni GPU server see [how-to-inside-network.md](how-to-inside-network.md) (on campus) or
-[how-to-outside-network.md](how-to-outside-network.md) (from anywhere).
+For the uni GPU server see [how-to-server.md](how-to-server.md).
 
 ## Once: setup
 
