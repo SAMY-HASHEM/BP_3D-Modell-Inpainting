@@ -93,7 +93,7 @@ The worker keeps running after you close the VDI.
    *Selected faces + empty space*: the part and the empty space in the box are regenerated, every other
    surface in the box stays exactly (no colour bleeding onto it). Needs `./install_mask.sh` once on this PC
    (a mask AI, about 4 GB VRAM). Box choices: *Everything in the box* / *Only the selected faces* /
-   *Selected faces + empty space* / *Only the empty space* (the default: the model stays exact, the new part only grows into the empty room).
+   *Selected faces + empty space* / *Only the empty space* (the default: the model stays exact, the new part only grows into the empty room) / *Replace what the new part covers* (the old surface goes where the part covers it from every side, e.g. a helmet in place of hair).
 2. Turn the view to show the area. Choose a **Reference**: a picture of the new part alone (one view, plain
    background). Press **1. Make picture**. It renders the whole model and puts the part into your box, no AI:
    the picture **before**, **after** and the **2D mask**. This is how the crown came onto the bee. A picture of only

@@ -39,7 +39,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 16, 2),
+    "version": (1, 17, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -255,16 +255,16 @@ def area_points(operator, context):
     settings = context.scene.inpaint
     faces, count = selected_points(model)
     boxes = np.zeros((0, 3)) if settings.box_use == "part" else box_points(model)
-    if settings.box_use not in ("all", "space") and count == 0:
+    if settings.box_use not in ("all", "space", "replace") and count == 0:
         operator.report({"ERROR"}, "No faces selected: find the part first (or select faces), "
                                    "or set Box to 'Everything in the box'")
         return None
     if count == 0 and len(boxes) == 0:
         operator.report({"ERROR"}, "Mark an area: select faces (Edit Mode) or add a space box")
         return None
-    if settings.colours_only and settings.box_use == "space":  # the shape stays anyway: the new part in the box gets its colours
+    if settings.colours_only and settings.box_use in ("space", "replace"):  # the shape stays anyway: the new part in the box gets its colours
         return model, to_gltf(boxes), count, True, 0
-    if settings.box_use == "space":  # all surfaces stay: the job grows 0
+    if settings.box_use in ("space", "replace"):  # the surfaces stay (replace: pack_job adds what goes): the job grows 0
         return model, to_gltf(only_empty_space(model, boxes)), count, True, 0
     if settings.box_use == "part_space":  # grown here already, around the protected surfaces: the job grows 0
         return model, keep_the_rest(model, faces, boxes, settings.grow, settings.room), count, True, 0
@@ -354,6 +354,9 @@ class InpaintSettings(bpy.types.PropertyGroup):
         name="Box",
         items=[("space", "Only the empty space", "The model stays exactly (its surface and inside): the new part grows "
                                                  "only into the empty room in the box. Best for adding something"),
+               ("replace", "Replace what the new part covers", "The old surface goes where the new part covers it from "
+                                                               "every side of 1. Make picture; the rest of the model stays. "
+                                                               "For a helmet in place of hair"),
                ("all", "Everything in the box", "Everything inside the space box is regenerated, the old surface too"),
                ("part", "Only the selected faces", "The box only frames the part: just the selected faces (e.g. "
                                                    "the part the AI found) are regenerated, in their own place"),
@@ -1088,7 +1091,8 @@ def render_view(model, rotation, path, size=1024):
 
 def picture_of_side(model, rotation, points, part, stem):
     """One side: BEFORE, AFTER and the 2D MASK of the whole model from this direction; the part is put into the
-    marked area. Writes <stem>_before.png, <stem>.png, <stem>_mask.png, or returns what went wrong."""
+    marked area. Writes <stem>_before.png, <stem>.png, <stem>_mask.png. Returns which of `points` the mask covers,
+    or the text of what went wrong."""
     render = stem + "_render.png"
     center, right, up, span = render_view(model, rotation, render)
     view = read_image(render)
@@ -1117,7 +1121,7 @@ def picture_of_side(model, rotation, points, part, stem):
     write_image(np.dstack([before, opaque]), stem + "_before.png")
     write_image(np.dstack([after, opaque]), stem + ".png")
     write_image(np.dstack([np.repeat(mask[..., None], 3, 2).astype(np.float32), opaque]), stem + "_mask.png")
-    return None
+    return mask[np.clip(ys.astype(int), 0, size - 1), np.clip(xs.astype(int), 0, size - 1)]
 
 
 PICTURE_ENDS = (".png", ".jpg", ".jpeg", ".webp")
@@ -1133,14 +1137,17 @@ def picture_of_change(model, rotation, points, reference, stem, sides=""):
         for end in (".png", "_before.png", "_mask.png"):
             if os.path.isfile(f"{stem}_side{k}{end}"):
                 os.remove(f"{stem}_side{k}{end}")
+    covered = np.ones(len(points), bool)
     for k, picture in enumerate(pictures):
         part = cut_out(read_image(picture))
         if part is None:
             return f"No object in {os.path.basename(picture)}"
         turn = Matrix.Rotation(k * 1.5707963267948966, 4, "Z").to_quaternion()
-        problem = picture_of_side(model, turn @ rotation, points, part, stem if k == 0 else f"{stem}_side{k}")
-        if problem:
-            return problem
+        side = picture_of_side(model, turn @ rotation, points, part, stem if k == 0 else f"{stem}_side{k}")
+        if isinstance(side, str):
+            return side
+        covered &= side
+    np.save(stem + "_covered.npy", points[covered])  # what the part covers from every side (Box: Replace)
     return None
 
 
@@ -1173,7 +1180,9 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
             if sides and not os.path.isdir(sides):
                 self.report({"ERROR"}, "The folder of More sides doesn't exist")
                 return {"CANCELLED"}
-            problem = picture_of_change(model, context.space_data.region_3d.view_rotation.copy(), points, reference, stem, sides)
+            whole_box = to_gltf(box_points(model))  # also the old surface in it: the part may cover it
+            problem = picture_of_change(model, context.space_data.region_3d.view_rotation.copy(),
+                                        whole_box if len(whole_box) else points, reference, stem, sides)
             if problem:
                 self.report({"ERROR"}, problem)
                 return {"CANCELLED"}
@@ -1354,6 +1363,9 @@ def pack_job(operator, context):
     if area is None:
         return None
     model, points, _, _, grow = area
+    covered = os.path.splitext(picture)[0] + "_covered.npy"
+    if settings.box_use == "replace" and not settings.colours_only and os.path.isfile(covered):
+        points = np.concatenate([points, np.load(covered)])
     folder = bpy.path.abspath(settings.folder)
     path = export_model(context, model, folder)
     name = bpy.path.clean_name(model.name)
