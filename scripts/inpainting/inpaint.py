@@ -442,7 +442,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
             kept, original = kept_tokens(coords, inside, distance, soft, shape_known.coords, shape_feats)
             polish = keep_structure and start == "inverted"  # from the model's own noise: it stays close to the model
             shape = follow_original(sampler, flow, params, steps, cond_1024, source_1024, original, kept,
-                                    start=None if polish else noise, progress=progress, step=step, inject=inject)
+                                    start=noise, progress=progress, step=step, inject=inject, own_noise=polish)
         shape_norm = shape
         shape = shape * std + mean
 
@@ -558,7 +558,7 @@ def kept_tokens(coords, inside, distance, soft, known_coords, known_feats):
 
 
 def follow_original(sampler, flow, params, steps, cond, source_cond, original, kept, start, progress,
-                    original_kwargs=None, step=inversion.midpoint, inject=1.0, **model_kwargs):
+                    original_kwargs=None, step=inversion.midpoint, inject=1.0, own_noise=False, **model_kwargs):
     """One stage with inversion: invert the original's latent (with the original's picture, without
     guidance), then regenerate from `start` (None: the original's noise) along it, with the kept tokens'
     keys and values injected. Returns the new latent."""
@@ -574,6 +574,10 @@ def follow_original(sampler, flow, params, steps, cond, source_cond, original, k
         edit = inversion.Velocity(sampler, flow, cond["cond"], cond["neg_cond"], params, **model_kwargs)
         if start is None:
             start = path.at(1.0)
+        elif own_noise:  # every voxel that the model has starts from the model's noise, the others from `start`
+            at_end = path.at(1.0)
+            known, found = lookup(start.coords, at_end.coords, at_end.feats)
+            start = start.replace(torch.where(found[:, None], known, start.feats))
         # the kept tokens' keys and values of all layers: on the GPU if they fit well, else in the RAM
         size = len(kept.target) * len(flow.blocks) * 2 * flow.model_channels * 2
         offload = size > 0.35 * torch.cuda.mem_get_info()[0]
