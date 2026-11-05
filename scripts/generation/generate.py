@@ -31,7 +31,9 @@ from trellis2.representations.mesh import base as mesh_base
 
 from fix_normals import fix_face_directions
 
-PIPELINE_TYPES = {"512": "512", "1024": "1024_cascade", "1536": "1536_cascade"}
+# 2048: the fine stage on a grid of 128 voxels per side, as UltraShape's refinement (arXiv 2512.21185), with TRELLIS.2's
+# own models: its cascade already refines on fixed voxels, here on a finer grid than it was made for
+PIPELINE_TYPES = {"512": "512", "1024": "1024_cascade", "1536": "1536_cascade", "2048": "1536_cascade"}
 DEFAULT_STEPS = 12  # TRELLIS.2's default number of sampling steps per stage
 OUTPUT_DIR = os.path.join(PROJECT_DIR, "outputs")
 
@@ -151,12 +153,18 @@ def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=No
     # At 1024/1536, TRELLIS.2 lowers the resolution in steps of 128 until the fine stage has fewer
     # pieces (tokens) than this; fewer tokens = less GPU memory when the model is decoded.
     extra = {"max_num_tokens": max_tokens} if max_tokens else {}
+    cascade = pipeline.sample_shape_slat_cascade
+    if resolution == "2048":
+        def finer(lr_cond, cond, flow_lr, flow, lr_resolution, _, coords, *rest):
+            return cascade(lr_cond, cond, flow_lr, flow, lr_resolution, 2048, coords, *rest)
+        pipeline.sample_shape_slat_cascade = finer
     mesh = pipeline.run(
         image, seed=seed, preprocess_image=False, pipeline_type=PIPELINE_TYPES[resolution],
         sparse_structure_sampler_params=shape_params,
         shape_slat_sampler_params=shape_params,
         tex_slat_sampler_params=texture_params, **extra,
     )[0]
+    pipeline.sample_shape_slat_cascade = cascade
     return mesh, time.time() - start
 
 
@@ -164,7 +172,7 @@ def save_glb(mesh, resolution, glb_path, remesh=None, faces=1_000_000):
     # Remeshing rebuilds the mesh from the full voxel grid. At 1536 that gives ~51M faces,
     # which runs out of memory, so there we simplify the generated mesh directly instead.
     if remesh is None:
-        remesh = resolution != "1536"
+        remesh = resolution not in ("1536", "2048")
     mesh.simplify(16777216 if remesh else max(4_000_000, faces))
     torch.cuda.empty_cache()
     glb = o_voxel.postprocess.to_glb(

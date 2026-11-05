@@ -424,7 +424,7 @@ def main():
     p.set_defaults(run=send)
     p = sub.add_parser("generate", help="send picture(s) to make a model (one picture: generate.py, more: multi_image.py)")
     p.add_argument("pictures", nargs="+")
-    p.add_argument("--resolution", choices=["512", "1024", "1536"])
+    p.add_argument("--resolution", choices=["512", "1024", "1536", "2048"])
     p.add_argument("--steps", type=int)
     p.add_argument("--seed", type=int)
     p.add_argument("--guidance", type=float)

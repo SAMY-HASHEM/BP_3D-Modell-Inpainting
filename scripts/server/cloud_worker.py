@@ -42,7 +42,7 @@ CODE_URL = "https://github.com/SAMY-HASHEM/BP_3D-Modell-Inpainting.git"  # publi
 FREE_MIB = 2000  # a GPU with less memory in use than this is free
 # the settings a picture -> model job may use, with their checks, and which script knows them
 CHECKS = {
-    "resolution": lambda v: str(v) if str(v) in ("512", "1024", "1536") else None,
+    "resolution": lambda v: str(v) if str(v) in ("512", "1024", "1536", "2048") else None,
     "steps": lambda v: int(v) if 1 <= int(v) <= 100 else None,
     "seed": lambda v: int(v),
     "guidance": lambda v: float(v) if 0 <= float(v) <= 20 else None,
