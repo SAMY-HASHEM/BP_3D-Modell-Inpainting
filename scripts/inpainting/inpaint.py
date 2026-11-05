@@ -440,8 +440,9 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
                                        tqdm_desc="Sampling shape SLat").samples
         else:
             kept, original = kept_tokens(coords, inside, distance, soft, shape_known.coords, shape_feats)
+            polish = keep_structure and start == "inverted"  # from the model's own noise: it stays close to the model
             shape = follow_original(sampler, flow, params, steps, cond_1024, source_1024, original, kept,
-                                    start=noise, progress=progress, step=step, inject=inject)
+                                    start=None if polish else noise, progress=progress, step=step, inject=inject)
         shape_norm = shape
         shape = shape * std + mean
 
