@@ -39,7 +39,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 17, 0),
+    "version": (1, 18, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -262,7 +262,7 @@ def area_points(operator, context):
     if count == 0 and len(boxes) == 0:
         operator.report({"ERROR"}, "Mark an area: select faces (Edit Mode) or add a space box")
         return None
-    if settings.colours_only and settings.box_use in ("space", "replace"):  # the shape stays anyway: the new part in the box gets its colours
+    if settings.step != "shape" and settings.box_use in ("space", "replace"):  # the part is there now: the new part in the box gets its colours
         return model, to_gltf(boxes), count, True, 0
     if settings.box_use in ("space", "replace"):  # the surfaces stay (replace: pack_job adds what goes): the job grows 0
         return model, to_gltf(only_empty_space(model, boxes)), count, True, 0
@@ -321,9 +321,13 @@ class InpaintSettings(bpy.types.PropertyGroup):
     sides: bpy.props.StringProperty(name="More sides", subtype="DIR_PATH",
                                     description="Optional: a folder with up to 3 pictures of the new part, in turning "
                                                 "order (right, back, left). All sides together give the best colours")
-    colours_only: bpy.props.BoolProperty(name="Colours only", default=False,
-                                         description="The shape stays exactly, only the colours in the area are "
-                                                     "regenerated, on the same mesh (fast). Best as the last step")
+    step: bpy.props.EnumProperty(
+        name="Step",
+        items=[("shape", "1 Shape", "The new part grows in the marked area"),
+               ("details", "2 Details", "The part stays where it is, only its fine shape gets sharper"),
+               ("colours", "3 Colours", "The shape stays exactly, only the colours change, on the same mesh (fast). "
+                                        "Always the last step")],
+        default="shape")
     seed: bpy.props.IntProperty(name="Seed", default=1, min=0, description="Another seed gives another result")
     grow: bpy.props.IntProperty(name="Grow", default=2, min=0, max=8,
                                 description="Grow the marked area by this many voxels (of 64 per side)")
@@ -1364,7 +1368,7 @@ def pack_job(operator, context):
         return None
     model, points, _, _, grow = area
     covered = os.path.splitext(picture)[0] + "_covered.npy"
-    if settings.box_use == "replace" and not settings.colours_only and os.path.isfile(covered):
+    if settings.box_use == "replace" and settings.step == "shape" and os.path.isfile(covered):
         points = np.concatenate([points, np.load(covered)])
     folder = bpy.path.abspath(settings.folder)
     path = export_model(context, model, folder)
@@ -1382,8 +1386,10 @@ def pack_job(operator, context):
         job.update(source="source.png", picture_mask="picture_mask.png")
     # the settings that worked best: new noise in the area, soft edge, colours that follow the pictures
     version = {"method": settings.method, "start": "random", "soft": 2, "texture_guidance": 3}
-    if settings.colours_only:
+    if settings.step == "colours":
         version["keep_shape"] = True
+    elif settings.step == "details":
+        version["keep_structure"] = True
     job["variants"] = [version]
     stem = os.path.splitext(picture)[0]
     sides = [k for k in range(1, 4) if all(os.path.isfile(f"{stem}_side{k}{end}") for end in (".png", "_before.png", "_mask.png"))]
@@ -2254,7 +2260,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
         row.prop(settings, "grow")
         box.prop(settings, "room")
         box.prop(settings, "steps")
-        box.prop(settings, "colours_only")
+        box.prop(settings, "step")
         box.operator(INPAINT_OT_regenerate.bl_idname, text="2. Regenerate area", icon="PLAY")
         if remote["message"]:
             box.label(text=remote["message"])

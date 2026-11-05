@@ -51,6 +51,7 @@ VARIANT_CHECKS = {
     "room": lambda v: float(v) if 0 <= float(v) <= 0.5 else None,
     "texture_guidance": lambda v: float(v) if 1 <= float(v) <= 10 else None,
     "keep_shape": lambda v: bool(v),
+    "keep_structure": lambda v: bool(v),
 }
 
 
@@ -89,6 +90,8 @@ def name(version):
         parts.append(f"tg{version['texture_guidance']:g}")
     if version.get("keep_shape"):
         parts.append("colours")
+    if version.get("keep_structure"):
+        parts.append("details")
     return "-".join(parts)
 
 

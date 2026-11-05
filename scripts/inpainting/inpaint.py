@@ -274,7 +274,7 @@ def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
 
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
             method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True,
-            solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000, keep_shape=False,
+            solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000, keep_shape=False, keep_structure=False,
             split_sheet=True, more_edits=()):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
@@ -297,6 +297,9 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     picture swap, the new area looks at all of them (multidiffusion)
     split_sheet: a picture with several views side by side (a turnaround sheet) is split into single views
     (sheet_views.py); refine_region.py turns it off, its crops are single views already
+    keep_structure: the details step between shape and colours: the voxels stay where they are, only their fine shape
+    (and colours) in the area are regenerated from the picture, so the part gets sharper without moving. The idea of a
+    separate refinement on fixed voxels is from UltraShape (arXiv 2512.21185); this is our own code for TRELLIS.2.
     keep_shape: only the colours are regenerated; the structure and shape stay exactly the model's own
     (for parts whose shape is already right but whose colours are not, e.g. clothes)."""
     assert method in METHODS and start in ("inverted", "random") and solver in ("midpoint", "euler")
@@ -391,8 +394,8 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         noise = torch.randn(1, flow.in_channels, flow.resolution, flow.resolution, flow.resolution, device=device)
         cell = GRID // flow.resolution
         cell_mask = F.max_pool3d(mask[None, None].float(), cell, cell)[0, 0] > 0
-        if keep_shape:
-            report("    the structure stays the model's own (keep shape)")
+        if keep_shape or keep_structure:
+            report("    the structure stays the model's own")
             z = None
         elif method == "repaint":
             with KeepKnown(sampler, ~cell_mask[None, None], ss_known, noise, progress("step")), OnGpu(flow):
@@ -405,7 +408,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
             kept = inversion.Kept(cells, cells, weight)
             z = follow_original(sampler, flow, params, steps, cond_512, source_512, ss_known, kept,
                                 start=None if start == "inverted" else noise, progress=progress, step=step, inject=inject)
-        if keep_shape:
+        if keep_shape or keep_structure:
             occupied = occupied[0, 0] > 0
         else:
             with OnGpu(pipeline.models["sparse_structure_decoder"]) as decoder:

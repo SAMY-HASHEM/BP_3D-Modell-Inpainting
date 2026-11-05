@@ -103,8 +103,9 @@ The worker keeps running after you close the VDI.
    box's floor. A box smaller than the head gave a crown that floats.
    **More sides** (optional, best colours): a folder with up to 3 pictures of the part in turning order (right, back, left).
 3. Always Inversion, 25 steps. For something on top of the model set **Room above** (about 0.15).
-   **Colours only**: the shape stays, only the colours in the area change, about 8 minutes. Best as the last step:
-   tick it, **1. Make picture** again, **2. Regenerate area**.
+   **Step**, always in this order, each from the result of the one before: **1 Shape** → **2 Details** (the part stays
+   where it is, it only gets sharper) → **3 Colours** (only the colours, on the same mesh, about 10 minutes). Press
+   **1. Make picture** again before each step, so the picture before shows the newest model.
    At the top of the panel, *Where does the AI run?*: **Uni server** → **2. Regenerate area**.
 4. The panel shows the progress (`queued` → `running: GPU 2: …` → `done`); the result is downloaded
    and appears next to the hidden original.
@@ -117,11 +118,12 @@ python scripts/inpainting/make_edit.py model.glb crown.png --reference robot.png
 
 `area_map.jpg` shows every small cube of the area: **green keep** (surface and inside stay exact), **red delete** (old
 surface the part covers from every side, only with `--replace`), **blue edit** (empty room for the new part).
-A video of the part turning, or a folder of its sides, as the part gives all four sides. Then shape, then colours:
+A video of the part turning, or a folder of its sides, as the part gives all four sides. Then the three steps:
 
 ```
-python scripts/inpainting/send_edit.py outputs/edits/robot_crown model.glb --seeds 1 2     # the shape
-python scripts/inpainting/send_edit.py outputs/edits/robot_crown best_result.glb --colours # then the colours (keeps the mesh)
+python scripts/inpainting/send_edit.py outputs/edits/robot_crown model.glb --seeds 1 2   # 1 the shape
+python scripts/inpainting/send_edit.py outputs/edits/robot_crown shape.glb --details     # 2 sharper details
+python scripts/inpainting/send_edit.py outputs/edits/robot_crown details.glb --colours   # 3 the colours, last
 ```
 
 **Other commands** (a terminal on your PC, in `~/inpainting-3D`):
