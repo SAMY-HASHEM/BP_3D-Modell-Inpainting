@@ -98,6 +98,8 @@ The worker keeps running after you close the VDI.
    background). Press **1. Make picture**. It renders the whole model and puts the part into your box, no AI:
    the picture **before**, **after** and the **2D mask**. This is how the crown came onto the bee. A picture of only
    the new part must not go in as the Picture: TRELLIS.2 reads it as the whole object.
+   Make the box **wider than what the part sits on** and let its floor reach a little into the model: the part stands on the
+   box's floor. A box smaller than the head gave a crown that floats.
    **More sides** (optional, best colours): a folder with up to 3 pictures of the part in turning order (right, back, left).
 3. Always Inversion, 25 steps. For something on top of the model set **Room above** (about 0.15).
    **Colours only**: the shape stays, only the colours in the area change, about 8 minutes. Best as the last step:
