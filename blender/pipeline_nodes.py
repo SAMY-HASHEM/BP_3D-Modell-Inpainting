@@ -686,12 +686,15 @@ def finish_setup():
     setup["enable_inpaint"] = False
     use_project()
     try:
-        if not inpaint_ready():
+        installed = os.path.join(bpy.utils.user_resource("SCRIPTS", path="addons"), "inpaint_addon.py")
+        updated = inpaint_ready() and not os.path.islink(installed)  # a link to the project (Linux) is new already
+        if not inpaint_ready() or updated:  # every update also brings the new add-on
             bpy.ops.preferences.addon_install(filepath=os.path.join(PROJECT, "blender", "inpaint_addon.py"), overwrite=True)
         bpy.ops.preferences.addon_enable(module="inpaint_addon")
         bpy.context.preferences.addons["inpaint_addon"].preferences.project = PROJECT
         bpy.ops.wm.save_userpref()
-        setup["message"] = "set up: now the Sciebo login" if not os.path.isfile(CONFIG) else "everything is set up"
+        setup["message"] = ("updated: restart Blender for the new Inpaint add-on" if updated else
+                            "set up: now the Sciebo login" if not os.path.isfile(CONFIG) else "everything is set up")
     except Exception as e:  # noqa: BLE001 (shown in the panel)
         setup["message"] = f"{type(e).__name__}: {e}"[:120]
     for area in bpy.context.screen.areas if bpy.context.screen else []:

@@ -31,7 +31,8 @@ come from your private Sciebo. All of it is buttons in Blender; no terminal, no 
    App-Passwort; never in a screenshot).
 5. **Get pictures**.
 
-Later: **Update project** in the same box (it replaces `git pull`).
+Later: **Update project** in the same box (it replaces `git pull`, gets the project and the new Inpaint add-on), then
+restart Blender. If only the add-on is wanted, download `blender/inpaint_addon.py` from GitHub and *Install from Disk…* it.
 
 | Tab | Gives you |
 |---|---|
