@@ -439,8 +439,8 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
                 shape = sampler.sample(flow, noise, **cond_1024, **params, verbose=True,
                                        tqdm_desc="Sampling shape SLat").samples
         else:
-            kept, original = kept_tokens(coords, inside, distance, soft, shape_known.coords, shape_feats)
             polish = keep_structure and start == "inverted"  # from the model's own noise: it stays close to the model
+            kept, original = kept_tokens(coords, inside, distance, soft, shape_known.coords, shape_feats, whole=polish)
             shape = follow_original(sampler, flow, params, steps, cond_1024, source_1024, original, kept,
                                     start=noise, progress=progress, step=step, inject=inject, own_noise=polish)
         shape_norm = shape
@@ -546,14 +546,20 @@ def save_colours_on_mesh(result, mesh, cube_vertices, out, mask, chunk=8_000_000
     print(f"    {found.sum():,} texels repainted on the same mesh", flush=True)
 
 
-def kept_tokens(coords, inside, distance, soft, known_coords, known_feats):
+def kept_tokens(coords, inside, distance, soft, known_coords, known_feats, whole=False):
     """For inversion in the shape and colour stages: the kept tokens (voxels of the original outside the
     area) as a map between the edited latent and the original's latent of just these voxels, which is
-    what gets inverted (as VoxHammer does)."""
+    what gets inverted (as VoxHammer does). whole: all the original's voxels are inverted (the details step starts
+    from the model's own noise also inside the area), the kept ones stay the same."""
     position, found = positions(coords, known_coords)
     target = torch.nonzero(found & ~inside).squeeze(1)
-    original = SparseTensor(feats=known_feats[position[target]], coords=coords[target])
     weight = inversion.soft_weight(distance[target], soft)
+    if whole:
+        everything = torch.nonzero(found).squeeze(1)
+        rank = torch.cumsum(found.long(), 0) - 1  # a voxel's place among the inverted ones
+        original = SparseTensor(feats=known_feats[position[everything]], coords=coords[everything])
+        return inversion.Kept(target, rank[target], weight), original
+    original = SparseTensor(feats=known_feats[position[target]], coords=coords[target])
     return inversion.Kept(target, torch.arange(len(target), device=coords.device), weight), original
 
 
