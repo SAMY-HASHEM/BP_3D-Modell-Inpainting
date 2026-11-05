@@ -42,9 +42,12 @@ def background_remover():
 
 def cut_out(remover, path):
     """The object of a picture, on transparent, cropped to it."""
-    picture = remover(Image.open(path).convert("RGB")).convert("RGBA")
-    ys, xs = np.nonzero(np.asarray(picture)[..., 3] > 128)
-    return picture.crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
+    picture = np.array(remover(Image.open(path).convert("RGB")).convert("RGBA"))
+    labels, count = ndimage.label(picture[..., 3] > 128)
+    biggest = 1 + int(np.argmax(ndimage.sum(np.ones(labels.shape), labels, range(1, count + 1))))
+    picture[..., 3][ndimage.binary_dilation(labels == biggest, iterations=3) == 0] = 0  # loose bits of a neighbour go
+    ys, xs = np.nonzero(picture[..., 3] > 128)
+    return Image.fromarray(picture).crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
 
 
 def on_grey(view):
