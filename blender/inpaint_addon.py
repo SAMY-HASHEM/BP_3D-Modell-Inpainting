@@ -39,7 +39,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 16, 1),
+    "version": (1, 16, 2),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -262,6 +262,8 @@ def area_points(operator, context):
     if count == 0 and len(boxes) == 0:
         operator.report({"ERROR"}, "Mark an area: select faces (Edit Mode) or add a space box")
         return None
+    if settings.colours_only and settings.box_use == "space":  # the shape stays anyway: the new part in the box gets its colours
+        return model, to_gltf(boxes), count, True, 0
     if settings.box_use == "space":  # all surfaces stay: the job grows 0
         return model, to_gltf(only_empty_space(model, boxes)), count, True, 0
     if settings.box_use == "part_space":  # grown here already, around the protected surfaces: the job grows 0
