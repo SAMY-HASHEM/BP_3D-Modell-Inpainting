@@ -126,7 +126,7 @@ def show_area(front, side_view, info, side, points, keep, delete, edit, origin, 
 def main():
     parser = argparse.ArgumentParser(description="BEFORE, AFTER and the 2D mask for inpainting by picture")
     parser.add_argument("model")
-    parser.add_argument("part", help="picture of the new part, or a video of it turning once: then all four sides are made")
+    parser.add_argument("part", help="picture of the new part; a video of it turning once, or a folder of its sides in turning order: all four sides are made")
     parser.add_argument("--reference", help="the model's own picture: picks the side the collage is made on")
     parser.add_argument("--side", type=int, choices=range(4), help="or the side by hand")
     parser.add_argument("--out", required=True)
@@ -162,7 +162,11 @@ def main():
     left, right = int(columns[0]), int(columns[-1])
 
     video = args.part.lower().endswith((".mp4", ".mov", ".webm", ".mkv"))
-    parts = [cut_out(remover, p) for p in (turning_frames(args.part, args.out) if video else [args.part])]
+    if os.path.isdir(args.part):  # a folder: its pictures in turning order
+        paths = [os.path.join(args.part, n) for n in sorted(os.listdir(args.part)) if n.lower().endswith((".png", ".jpg", ".jpeg"))][:4]
+    else:
+        paths = turning_frames(args.part, args.out) if video else [args.part]
+    parts = [cut_out(remover, p) for p in paths]
     part = parts[0]
     width = int(args.width * (right - left))
     part_height = int(part.height * width / part.width)
@@ -201,6 +205,22 @@ def main():
     points[:, 1] = c.reshape(-1)
     points = points[np.hypot(a.reshape(-1), b.reshape(-1)) <= half]  # a round area for a round part
 
+    sides = []
+    masks = [mask]
+    origin = to_gltf(center)
+    for k in range(1, len(parts)):  # the other sides: the same place, each with its own side of the part
+        index = (side + k) % 4
+        right_k = to_gltf(np.array(info["views"][index]["right"]))
+        middle_x = pixels(middle[None], origin, right_k, size, per_pixel)[0][0]
+        one = parts[k].resize((max(2, int(parts[k].width * part_height / parts[k].height)), part_height), Image.LANCZOS)
+        pictures = collage(renders[index], one, int(middle_x - one.width / 2), y)
+        names = [os.path.join(args.out, f"{what}_{k}.png") for what in ("after", "before", "mask")]
+        pictures[1].save(names[0])
+        pictures[0].save(names[1])
+        pictures[2].save(names[2])
+        masks.append(pictures[2])
+        sides += ["--more-edit", *names]
+
     # every small cube of the area: KEEP (model surface that stays), DELETE (old surface under the 2D mask), EDIT (empty)
     surface = trimesh.sample.sample_surface(mesh, 2_000_000, seed=0)[0]
     surface = surface[surface[:, 1] > up[0] - 4 * voxel]
@@ -210,29 +230,17 @@ def main():
     roof = np.full((GRID + 2, GRID + 2), -np.inf)
     np.maximum.at(roof, columns(surface), surface[:, 1])
     on_surface |= points[:, 1] < roof[columns(points)]
-    origin = to_gltf(center)
-    u, v = pixels(points, origin, right_axis, size, per_pixel)
-    changed = np.asarray(mask)[np.clip(v, 0, size - 1), np.clip(u, 0, size - 1)] > 127
+    changed = np.ones(len(points), bool)  # under the new part from every side
+    for k, one in enumerate(masks):
+        right_k = to_gltf(np.array(info["views"][(side + k) % 4]["right"]))
+        u, v = pixels(points, origin, right_k, size, per_pixel)
+        changed &= np.asarray(one)[np.clip(v, 0, size - 1), np.clip(u, 0, size - 1)] > 127
     delete = on_surface & changed & args.replace
     keep = on_surface & ~delete
     edit = ~on_surface
     np.save(os.path.join(args.out, "area.npy"), points[edit | delete])  # all the rest stays the model's own
     show_area(renders[side], renders[(side + 1) % 4], info, side, points, keep, delete, edit, origin, per_pixel,
               os.path.join(args.out, "area_map.jpg"))
-
-    sides = []
-    if video:  # the other sides: the same place, each with its own side of the part
-        for k in range(1, 4):
-            index = (side + k) % 4
-            right_k = to_gltf(np.array(info["views"][index]["right"]))
-            middle_x = pixels(middle[None], origin, right_k, size, per_pixel)[0][0]
-            one = parts[k].resize((max(2, int(parts[k].width * part_height / parts[k].height)), part_height), Image.LANCZOS)
-            pictures = collage(renders[index], one, int(middle_x - one.width / 2), y)
-            names = [os.path.join(args.out, f"{what}_{k}.png") for what in ("after", "before", "mask")]
-            pictures[1].save(names[0])
-            pictures[0].save(names[1])
-            pictures[2].save(names[2])
-            sides += ["--more-edit", *names]
 
     above = max(0.0, up[1] + 2 * voxel - vertices[:, 1].max())
     room = round(float(min(0.5, 1.05 * above / (above + model_size))), 3)
