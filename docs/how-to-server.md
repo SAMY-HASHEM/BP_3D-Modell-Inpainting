@@ -114,13 +114,13 @@ The worker keeps running after you close the VDI.
 python scripts/inpainting/make_edit.py model.glb crown.png --reference robot.png --out outputs/edits/robot_crown
 ```
 
-`area_map.jpg` shows every small cube of the area: **green keep** (surface that stays exact), **red delete** (old surface
-under the mask, only with `--replace`), **blue edit** (empty room for the new part). Then send it:
+`area_map.jpg` shows every small cube of the area: **green keep** (surface and inside stay exact), **red delete** (old
+surface the part covers from every side, only with `--replace`), **blue edit** (empty room for the new part).
+A video of the part turning, or a folder of its sides, as the part gives all four sides. Then shape, then colours:
 
 ```
-E=outputs/edits/robot_crown
-python scripts/server/cloud.py inpaint model.glb $E/after.png --area $E/area.npy --source $E/before.png \
-    --picture-mask $E/mask.png --grow 0 --steps 25 --variant inversion,room=0.15,start=random,soft=2,texture_guidance=3
+python scripts/inpainting/send_edit.py outputs/edits/robot_crown model.glb --seeds 1 2     # the shape
+python scripts/inpainting/send_edit.py outputs/edits/robot_crown best_result.glb --colours # then the colours (keeps the mesh)
 ```
 
 **Other commands** (a terminal on your PC, in `~/inpainting-3D`):
