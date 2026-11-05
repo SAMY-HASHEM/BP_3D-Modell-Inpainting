@@ -105,6 +105,7 @@ def main():
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
         print(f"Using GPU {gpu}")
 
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")  # the models are here: a proxy hiccup must not end a job (Nov 5)
     import generate
     import numpy as np
     from inpaint import inpaint
