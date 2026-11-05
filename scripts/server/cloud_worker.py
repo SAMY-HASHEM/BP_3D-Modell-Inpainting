@@ -198,7 +198,8 @@ def run(job_name, folder, zip_path, job, gpu):
 def execute(cloud, job_name, folder, zip_path, job, gpu):
     command = command_for(job, folder, zip_path, gpu)
     print(f"[{time.strftime('%H:%M')}] {job_name} on GPU {gpu}: {' '.join(command[2:])}", flush=True)
-    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)}
+    # the models are on the server: a proxy hiccup must not end a job
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "HF_HUB_OFFLINE": "1"}
     process = subprocess.Popen(command, cwd=PROJECT_DIR, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     results, tail, line, last_report = [], [], b"", 0.0
     while True:
@@ -299,6 +300,10 @@ def main():
     parser.add_argument("--interval", type=int, default=30, help="seconds between looks into the cloud (default 30)")
     parser.add_argument("--once", action="store_true", help="look once, run what is there, then stop")
     args = parser.parse_args()
+    try:
+        import o_voxel  # noqa: F401
+    except ImportError:
+        raise SystemExit("Wrong Python: first run  source activate.sh  then start the worker again.")
     cloud = Cloud()
     print(f"Watching the cloud folder {cloud.folder}/ every {args.interval} s, one job per free GPU "
           f"(stop with Ctrl+C)", flush=True)
