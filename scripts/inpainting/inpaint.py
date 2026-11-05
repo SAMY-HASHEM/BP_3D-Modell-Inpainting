@@ -614,6 +614,8 @@ def main():
     parser.add_argument("--soft", type=int, default=0, help="inversion: soft edge in voxels (default 0: hard)")
     parser.add_argument("--room", type=float, default=0.0,
                         help="share of the cube kept free above the model, for new parts on top (e.g. 0.2)")
+    parser.add_argument("--keep-structure", action="store_true", help="the details step: the voxels stay, only the fine shape")
+    parser.add_argument("--texture-guidance", type=float, help="how strictly the colours follow the picture")
     parser.add_argument("--out", help="output file (default: <model>_inpaint_seed<N>.glb)")
     args = parser.parse_args()
 
@@ -627,7 +629,8 @@ def main():
         points.append(box_points(np.array(args.box), size))
     out = args.out or os.path.splitext(args.model)[0] + f"_inpaint_seed{args.seed}.glb"
     inpaint(pipeline, args.model, args.picture, np.concatenate(points), out, args.grow, args.seed, args.steps,
-            method=args.method, source_path=args.source, start=args.start, soft=args.soft, room=args.room)
+            method=args.method, source_path=args.source, start=args.start, soft=args.soft, room=args.room,
+            keep_structure=args.keep_structure, texture_guidance=args.texture_guidance)
     print(out)
 
 
