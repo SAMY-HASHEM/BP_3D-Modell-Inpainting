@@ -1,7 +1,7 @@
 """Four straight views of a model (orthographic, transparent background), for inpainting by picture: because the
 camera has no perspective, every pixel of these pictures can be turned back into a place on the model.
 
-    blender -b --python scripts/tools/render_views.py -- model.glb out_folder [--size 1024] [--samples 32] [--frame views.json]
+    blender -b --python scripts/tools/render_views.py -- model.glb out_folder [--size 1024] [--samples 32] [--frame views.json] [--turn 45]
 
 Writes view_0.png ... view_3.png and views.json (see make_edit.py).
 """
@@ -54,9 +54,10 @@ camera.data.clip_end = span * 10
 scene.collection.objects.link(camera)
 scene.camera = camera
 
+turn = float(args[args.index("--turn") + 1]) if "--turn" in args else None  # also the sides in between
 views = []
-for k in range(4):
-    a = math.radians(90 * k)
+for k in range(4 if turn is None else 8):
+    a = math.radians(90 * (k % 4) + (turn if k >= 4 else 0))
     toward = Vector((math.sin(a), -math.cos(a), 0))  # from the model towards the camera
     camera.location = center + toward * span * 2
     camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
