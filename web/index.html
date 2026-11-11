@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inpainting flows</title>
+<!-- The page of scripts/pipeline/flow_page.py: the node chain, every node's pictures, before / after with a slider. -->
+<style>
+:root {
+  --bg: #17181b; --panel: #212327; --raised: #2a2d32; --line: #383c43; --text: #e9eaec; --dim: #9da2ab;
+  --accent: #6aa6ff; --done: #4fae6a; --running: #e3a534; --failed: #e2594b; --wire: #6d727c; --stage: #3a3d43;
+  --mask: 235, 45, 45;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f2f2ef; --panel: #ffffff; --raised: #f6f6f4; --line: #dcdcd7; --text: #1b1c1f; --dim: #666a72;
+          --accent: #1f6fe0; --done: #2f8f4d; --running: #b97a0c; --failed: #c93a2c; --wire: #9a9ea6; --stage: #c9cacc; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, select { font: inherit; color: inherit; }
+a { color: var(--accent); }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+header select { background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+header .about { color: var(--dim); flex: 1 1 320px; min-width: 0; }
+header .live { color: var(--dim); font-size: 12px; white-space: nowrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); margin-right: 6px; }
+.dot.running { background: var(--running); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+main { padding: 16px 20px 60px; }
+.problem { background: color-mix(in srgb, var(--failed) 18%, transparent); border: 1px solid var(--failed); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
+
+/* the node chain */
+.graph { overflow-x: auto; padding: 4px 2px 14px; }
+.inner { position: relative; }
+.inner svg { position: absolute; left: 0; top: 0; pointer-events: none; }
+.wire { fill: none; stroke: var(--wire); stroke-width: 2; }
+.wire.lit { stroke: var(--accent); stroke-width: 2.5; }
+.card { position: absolute; background: var(--panel); border: 2px solid var(--line); border-radius: 9px; overflow: hidden; padding: 0;
+        text-align: left; cursor: pointer; display: flex; flex-direction: column; }
+.card:hover { border-color: var(--dim); }
+.card.done { border-color: color-mix(in srgb, var(--done) 70%, var(--line)); }
+.card.running, .card.starting { border-color: var(--running); }
+.card.failed { border-color: var(--failed); }
+.card.selected { outline: 3px solid var(--accent); outline-offset: 2px; }
+.card .head { color: #fff; font-weight: 600; font-size: 12.5px; padding: 5px 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .body { padding: 6px 9px 0; font-size: 12px; min-height: 0; }
+.card .where { color: var(--dim); font-size: 11px; height: 16px; overflow: hidden; }
+.card .note { color: var(--dim); font-size: 11px; line-height: 1.3; height: 29px; overflow: hidden; margin-top: 2px; }
+.card .thumb { margin-top: auto; height: 70px; background: var(--stage); }
+.card .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.state { font-weight: 600; }
+.state.done { color: var(--done); } .state.running, .state.starting { color: var(--running); } .state.failed { color: var(--failed); }
+.state.waiting { color: var(--dim); }
+
+/* the selected node */
+.detail { margin-top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px 20px; }
+.detail h2 { font-size: 16px; margin: 0 0 2px; }
+.detail h2 small { color: var(--dim); font-weight: 400; margin-left: 8px; }
+.detail h3 { font-size: 13px; margin: 20px 0 8px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.columns { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px; margin-top: 12px; }
+@media (max-width: 900px) { .columns { grid-template-columns: minmax(0, 1fr); } }
+.facts { font-size: 13px; }
+.facts table { border-collapse: collapse; width: 100%; }
+.facts td { padding: 3px 0; vertical-align: top; }
+.facts td:first-child { color: var(--dim); padding-right: 12px; white-space: nowrap; width: 1%; }
+.facts .path { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
+.verdict { overflow-wrap: anywhere; border-left: 3px solid var(--running); background: var(--raised); padding: 8px 12px; border-radius: 0 6px 6px 0; margin: 12px 0 0; }
+.verdict.good { border-color: var(--done); }
+.sheet { display: block; max-width: 100%; border-radius: 6px; background: var(--stage); }
+.empty { color: var(--dim); padding: 26px 0; }
+
+/* before / after */
+.tools { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 10px; user-select: none; }
+.tabs { display: inline-flex; background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+.tabs button { background: none; border: 0; border-radius: 5px; padding: 4px 11px; cursor: pointer; color: var(--dim); }
+.tabs button.on { background: var(--accent); color: #fff; }
+.tools label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.tools .what { color: var(--dim); font-size: 12px; margin-right: -8px; }
+.cmp { position: relative; width: 100%; max-width: 720px; aspect-ratio: 1; background: var(--stage); border-radius: 8px; overflow: hidden;
+       cursor: ew-resize; user-select: none; touch-action: pan-y; }
+.cmp:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.cmp img, .cmp canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.cmp .top { position: absolute; inset: 0; background: var(--stage); }
+.cmp canvas { display: none; } .cmp.masked canvas { display: block; }
+.cmp .bar { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px #0006; pointer-events: none; }
+.cmp .knob { position: absolute; top: 50%; left: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; background: #fff;
+             box-shadow: 0 1px 5px #0008; display: grid; place-items: center; color: #222; font-size: 13px; letter-spacing: 2px; }
+.cmp .tag { position: absolute; top: 10px; background: #000a; color: #fff; font-size: 12px; padding: 2px 9px; border-radius: 20px; pointer-events: none; }
+.cmp .tag.l { left: 10px; } .cmp .tag.r { right: 10px; }
+.hint { color: var(--dim); font-size: 12px; margin-top: 6px; max-width: 720px; }
+
+/* buttons, the run */
+.btn { background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 5px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--dim); }
+.btn.main { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.stop { border-color: var(--failed); color: var(--failed); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.small { padding: 1px 8px; font-size: 12px; margin-top: 3px; }
+.field { width: 100%; background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; font: inherit; }
+.facts label { cursor: pointer; }
+.titlebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.titlebar h2 { margin-right: auto; }
+.runlog { margin-top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.runlog summary { cursor: pointer; font-weight: 600; }
+.runlog pre { margin: 8px 0 0; font: 11.5px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim); max-height: 260px; overflow: auto; }
+
+/* the edit by hand */
+.stage { position: relative; width: 100%; max-width: 720px; aspect-ratio: 1; background: var(--stage); border-radius: 8px; overflow: hidden;
+         user-select: none; touch-action: none; }
+.stage:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.stage > img, .stage > canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.stage canvas.paint { opacity: .55; }
+.stage.made canvas.paint { opacity: .16; }  /* a picture made from a prompt is under it: it must stay visible */
+.stage canvas.was { opacity: .22; }
+.stage .part { position: absolute; cursor: move; outline: 1.5px dashed #fff; box-shadow: 0 0 0 1.5px #0007; }
+.stage .part img { width: 100%; height: 100%; display: block; pointer-events: none; }
+.stage .part .grip { position: absolute; right: -9px; bottom: -9px; width: 18px; height: 18px; border-radius: 50%; background: #fff;
+                     box-shadow: 0 1px 4px #0009; cursor: nwse-resize; }
+.stage.painting { cursor: crosshair; }
+.stage.painting .part { pointer-events: none; outline-color: #fff8; }
+.stage .ring { position: absolute; border: 1.5px solid #fff; box-shadow: 0 0 0 1px #0008; border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%); display: none; }
+.stage.painting:hover .ring { display: block; }
+.key { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin: 0 4px 0 10px; vertical-align: -1px; }
+.steps { margin: 0 0 12px; padding-left: 20px; max-width: 720px; } .steps li { margin: 2px 0; }
+input[type=range], input[type=checkbox] { accent-color: var(--accent); }
+textarea.prompt, input[type=number] { width: 100%; background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font: inherit; resize: vertical; }
+.made { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin-top: 10px; }
+.pick { background: var(--raised); border: 2px solid var(--line); border-radius: 8px; padding: 0; overflow: hidden; cursor: pointer; text-align: left; }
+.pick.on { border-color: var(--accent); }
+.pick img { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; background: var(--stage); }
+.pick span { display: block; font-size: 11px; padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* scores */
+.scores { width: 100%; border-collapse: collapse; font-size: 13px; }
+.scores th, .scores td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.scores th:first-child, .scores td:first-child { text-align: left; padding-left: 0; }
+.scores th { color: var(--dim); font-weight: 500; font-size: 12px; }
+.scores tr.shown td { font-weight: 650; }
+.low { color: var(--failed); }
+.badge { font-size: 11px; background: var(--done); color: #fff; border-radius: 20px; padding: 1px 7px; margin-left: 6px; font-weight: 600; }
+.defects { margin: 6px 0 0; padding-left: 18px; } .defects li { margin: 2px 0; }
+
+/* galleries */
+.views { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.views figure { margin: 0; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.views a { display: block; aspect-ratio: 1; background: var(--stage); }
+.views img, .views video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.views figcaption { padding: 6px 8px; font-size: 12px; }
+.views figcaption .sub { color: var(--dim); display: block; }
+.chip { display: inline-block; font-size: 10.5px; border: 1px solid var(--line); border-radius: 20px; padding: 0 6px; margin: 3px 4px 0 0; color: var(--dim); }
+.chip.used { border-color: var(--done); color: var(--done); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Inpainting flows</h1>
+  <a href="/app" title="The main page: add data, prompts, the total workflow; its developer view has these nodes too">Main page</a>
+  <select id="flows" aria-label="Flow"></select>
+  <div class="about" id="about"></div>
+  <div id="runs"></div>
+  <button class="btn" id="serverButton" title="The jobs on the uni GPU server and how far they are">Uni server</button>
+  <div class="live" id="live"></div>
+</header>
+<main>
+  <div id="problem"></div>
+  <div class="graph"><div class="inner" id="graph"></div></div>
+  <div id="runlog"></div>
+  <div id="server"></div>
+  <div id="detail"></div>
+</main>
+<script>
+"use strict";
+// card size and gaps of the node chain (as flow.py's structure picture)
+const W = 196, H = 172, GAP_X = 44, GAP_Y = 20;
+const view = { group: 0, side: 0, left: "before", position: 50, mask: false };  // what the slider shows; kept while the page refreshes
+let flow = null, selected = null, lastText = "", timer = null;
+let draft = null;  // settings of a node that are changed but not saved: {node, values}; the page then leaves them alone
+let hand = null;  // the edit by hand that is open: {node, side, place, layers, tool, brush, ...}; the page then leaves it alone
+
+function h(tag, props = {}, ...kids) {
+  const element = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (value == null || value === false) continue;
+    if (key === "class") element.className = value;
+    else if (key === "style") element.style.cssText = value;
+    else if (key.startsWith("on")) element.addEventListener(key.slice(2), value);
+    else element.setAttribute(key, value === true ? "" : value);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    element.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return element;
+}
+const post = async (address, body) => {
+  const answer = await fetch(address, { method: "POST", headers: { "Content-Type": "application/json", "X-Flow-Page": "1" }, body: JSON.stringify(body) });
+  const data = await answer.json();
+  if (data.error) throw new Error(data.error);
+  lastText = "";
+  await load();
+};
+const get = async address => { const answer = await fetch(address); const data = await answer.json(); if (data.error) throw new Error(data.error); return data; };
+const node = id => flow.nodes.find(n => n.id === id);
+
+// ---------------------------------------------------------------- loading
+
+async function start() {
+  const list = await get("/api/flows");
+  const select = document.getElementById("flows");
+  select.replaceChildren(...list.map(f => h("option", { value: f.file }, `${f.name} (${f.nodes} nodes)`)));
+  const [wanted, wantedNode] = decodeURIComponent(location.hash.slice(1)).split("/");
+  if (list.some(f => f.file === wanted)) { select.value = wanted; selected = wantedNode || null; }
+  select.addEventListener("change", () => { selected = null; hand = null; draft = null; lastText = ""; Object.assign(view, { group: 0, side: 0, left: "before" }); load(); });
+  if (!list.length) return problem("No flow files in flows/ yet.");
+  load();
+}
+
+async function load() {
+  clearTimeout(timer);
+  const file = document.getElementById("flows").value;
+  try {
+    const answer = await fetch(`/api/flow?name=${encodeURIComponent(file)}`);
+    const text = await answer.text();
+    const data = JSON.parse(text);
+    if (data.error) throw new Error(data.error);
+    problem("");
+    const same = JSON.stringify({ ...data, time: 0 }) === lastText;
+    lastText = JSON.stringify({ ...data, time: 0 });
+    flow = data;
+    if (!selected || !node(selected)) selected = pickFirst();
+    if (!same) { drawGraph(); drawRuns(); if (hand) handLive(); else if (!draft) drawDetail(); }
+    document.getElementById("about").textContent = flow.about;
+    document.getElementById("live").replaceChildren(h("span", { class: "dot" + (flow.running ? " running" : "") }),
+      busy() ? `running · read ${flow.time}` : `nothing running · read ${flow.time}`);
+  } catch (error) {
+    problem(`The page can't read the flow: ${error.message}. Is flow_page.py still running?`);
+  }
+  timer = setTimeout(load, flow && (busy() || flow.painting) ? 3000 : 20000);
+}
+
+function problem(text) {
+  document.getElementById("problem").replaceChildren(...(text ? [h("div", { class: "problem" }, text)] : []));
+}
+
+// the node to open first: the last one that has something to compare, else the last one that is done
+function pickFirst() {
+  const done = flow.nodes.filter(n => n.status === "done");
+  const best = [...done].reverse().find(n => n.compare) || done[done.length - 1] || flow.nodes[0];
+  return best.id;
+}
+
+function choose(id) {
+  if (hand && hand.changed && !confirm("Leave the edit by hand? What you changed there is not applied yet.")) return;
+  if (draft && !confirm("Leave this node? Its changed settings are not saved yet.")) return;
+  hand = null; draft = null;
+  selected = id;
+  Object.assign(view, { group: 0, side: 0, left: "before" });
+  history.replaceState(null, "", `#${encodeURIComponent(flow.file)}/${encodeURIComponent(id)}`);
+  drawGraph();
+  drawDetail();
+}
+
+// ---------------------------------------------------------------- running
+
+const busy = () => flow.running || (flow.run && flow.run.active);
+
+// the node and everything it needs
+function needed(id, found = new Set()) {
+  if (!found.has(id)) { found.add(id); Object.values(node(id).inputs).flat().forEach(source => needed(source, found)); }
+  return found;
+}
+
+// before a run: which nodes it would send to the uni server (the user says yes to that, never the page by itself)
+async function run(upto) {
+  const ids = upto ? [...needed(upto)] : flow.nodes.map(n => n.id);
+  const todo = ids.map(node).filter(n => n.status !== "done");
+  const server = todo.filter(n => (n.type === "base" || n.type === "inpaint") && (n.settings.where || "server") === "server");
+  if (!todo.length) return problem("Everything there is done already: a node with the same settings and inputs is never computed twice.");
+  if (server.length && !confirm(`This uses the uni GPU server for ${server.length} node(s):\n${server.map(n => "  " + n.label + " (" + n.id + ")").join("\n")}\n\nRun it?`)) return;
+  try { await post("/api/run", { flow: flow.file, upto: upto || null }); } catch (error) { problem(error.message); }
+}
+
+function drawRuns() {
+  const active = flow.run && flow.run.active;
+  document.getElementById("runs").replaceChildren(
+    active ? h("button", { class: "btn stop", onclick: async () => { try { await post("/api/stop", { flow: flow.file }); } catch (error) { problem(error.message); } } }, "Stop the run")
+           : h("button", { class: "btn", disabled: flow.running, onclick: () => run(null), title: "Every node that is not done yet, in order" }, "Run the whole flow"));
+  const last = flow.run;
+  document.getElementById("runlog").replaceChildren(...(last ? [h("details", { class: "runlog", open: last.active || last.code !== 0 },
+    h("summary", {}, last.active ? `Running since ${last.started}` + (last.upto ? `, up to ${node(last.upto) ? node(last.upto).label : last.upto}` : "")
+                     : last.code === 0 ? `The last run (${last.started}) is done` : `The last run (${last.started}) stopped or failed`),
+    h("pre", {}, last.log.join("\n")))] : []));
+}
+
+// the jobs on the uni server: only read when asked for (it goes through the cloud)
+let serverShown = false;
+async function showServer(again, all) {
+  const place = document.getElementById("server");
+  if (!again && serverShown) { serverShown = false; return place.replaceChildren(); }
+  serverShown = true;
+  place.replaceChildren(h("div", { class: "runlog" }, all ? "Reading every job on the uni server through the cloud, this takes over a minute…"
+                                                           : "Reading this flow's jobs on the uni server through the cloud…"));
+  let content;
+  try {
+    const data = await get(all ? "/api/server?all" : `/api/server?flow=${encodeURIComponent(flow.file)}`);
+    const mine = new Map(flow.nodes.filter(n => n.server_job).map(n => [n.server_job, n]));
+    content = [h("div", { class: "titlebar" }, h("b", { style: "margin-right:auto" }, `Uni server: ${data.jobs.length} job(s) ${all ? "in all" : "of this flow"}, read ${data.read}`),
+                 h("button", { class: "btn small", onclick: () => showServer(true, all) }, "Read again"),
+                 !all && h("button", { class: "btn small", title: "Every job in the cloud, also of other flows; takes over a minute", onclick: () => showServer(true, true) }, "All jobs"),
+                 h("button", { class: "btn small", onclick: () => showServer(false) }, "Close")),
+      data.jobs.length ? h("table", { class: "scores", style: "margin-top:8px" },
+        h("tr", {}, h("th", {}, "Job"), h("th", { style: "text-align:left" }, "State"), h("th", { style: "text-align:left" }, "Since"), h("th", { style: "text-align:left" }, "Message"), h("th", { style: "text-align:left" }, "Node here")),
+        [...data.jobs].reverse().map(job => h("tr", { class: mine.has(job.job) ? "shown" : "" },
+          h("td", { class: "path" }, job.job), h("td", { style: "text-align:left" }, h("span", { class: "state " + ({ done: "done", failed: "failed", running: "running" }[job.state] || "waiting") }, job.state)),
+          h("td", { style: "text-align:left" }, job.time), h("td", { style: "text-align:left" }, job.message),
+          h("td", { style: "text-align:left" }, mine.has(job.job) ? h("a", { href: `#${flow.file}/${mine.get(job.job).id}` }, mine.get(job.job).label) : ""))))
+      : h("pre", {}, data.text || "No jobs in the cloud.")];
+  } catch (error) { content = [h("span", { class: "low" }, error.message), " ", h("button", { class: "btn small", onclick: () => showServer(false) }, "Close")]; }
+  if (serverShown) place.replaceChildren(h("div", { class: "runlog" }, content));
+}
+document.getElementById("serverButton").addEventListener("click", () => showServer(false));
+
+// ---------------------------------------------------------------- the node chain
+
+function drawGraph() {
+  const at = n => [n.column * (W + GAP_X), n.row * (H + GAP_Y)];
+  const width = (Math.max(...flow.nodes.map(n => n.column)) + 1) * (W + GAP_X) - GAP_X;
+  const height = (Math.max(...flow.nodes.map(n => n.row)) + 1) * (H + GAP_Y) - GAP_Y;
+  let wires = "";
+  for (const n of flow.nodes) {
+    const [x, y] = at(n);
+    Object.values(n.inputs).forEach((sources, number) => sources.forEach(source => {
+      const [sx, sy] = at(node(source));
+      const x0 = sx + W, y0 = sy + 15, x1 = x, y1 = y + 15 + 9 * number;
+      const lit = n.id === selected || source === selected;
+      wires += `<path class="wire${lit ? " lit" : ""}" d="M${x0},${y0} C${x0 + 36},${y0} ${x1 - 36},${y1} ${x1},${y1}"/>`;
+    }));
+  }
+  const cards = flow.nodes.map(n => {
+    const [x, y] = at(n);
+    const minutes = n.minutes ? ` · ${n.minutes} min` : "";
+    return h("button", { class: `card ${n.status}${n.id === selected ? " selected" : ""}`, onclick: () => choose(n.id),
+                         style: `left:${x}px;top:${y}px;width:${W}px;height:${H}px`, title: n.id, "aria-pressed": String(n.id === selected) },
+      h("div", { class: "head", style: `background:${n.colour}` }, n.label),
+      h("div", { class: "body" },
+        h("div", { class: "where" }, n.where || "the files you give"),
+        h("div", {}, h("span", { class: `state ${n.status}` }, n.status), minutes),
+        h("div", { class: "note" }, n.note || "")),
+      n.picture && h("div", { class: "thumb" }, h("img", { src: n.picture, alt: "", loading: "lazy" })));
+  });
+  const inner = document.getElementById("graph");
+  inner.style.width = width + "px";
+  inner.style.height = height + "px";
+  inner.innerHTML = `<svg width="${width}" height="${height}">${wires}</svg>`;  // only numbers and class names
+  inner.append(...cards);
+  const chosen = inner.querySelector(".card.selected");  // a long chain: the chosen node is brought into sight
+  const frame = inner.parentElement;
+  if (chosen && (chosen.offsetLeft < frame.scrollLeft || chosen.offsetLeft + W > frame.scrollLeft + frame.clientWidth))
+    frame.scrollLeft = chosen.offsetLeft - (frame.clientWidth - W) / 2;
+}
+
+// ---------------------------------------------------------------- the selected node
+
+function drawDetail() {
+  const n = node(selected);
+  const left = h("div", {});
+  if (n.compare && n.compare.groups.some(g => g.sides.length)) left.append(compare(n));
+  if (n.sheet) left.append(sheetViews(n.sheet));
+  if (n.files) left.append(h("h3", {}, "The files"), gallery(n.files.map(f => ({ ...f, caption: f.name }))));
+  if (n.picture && !n.files) left.append(h("h3", {}, n.compare ? "All sides at a glance" : "Result"),
+    h("a", { href: n.picture, target: "_blank" }, h("img", { class: "sheet", src: n.picture, alt: `Result picture of ${n.label}` })));
+  if (n.area_map) left.append(h("h3", {}, "The 3D area"),
+    h("a", { href: n.area_map, target: "_blank" }, h("img", { class: "sheet", src: n.area_map, alt: "The area's small cubes: keep, delete, edit" })));
+  if (!left.children.length) left.append(h("div", { class: "empty" }, emptyText(n)));
+
+  const buttons = [];
+  if (n.hand) buttons.push(h("button", { class: "btn main", disabled: busy(), onclick: () => openHand(n) }, "Edit by hand"));
+  if (n.status !== "done") buttons.push(h("button", { class: "btn main", disabled: busy(), onclick: () => run(n.id) }, "Run up to here"));
+  document.getElementById("detail").replaceChildren(h("section", { class: "detail" },
+    h("div", { class: "titlebar" }, h("h2", {}, n.label, h("small", {}, n.id)), buttons),
+    h("div", { class: "columns" }, left, facts(n))));
+}
+
+function emptyText(n) {
+  if (n.status === "running" || n.status === "starting") return "This node is running. Its result shows here when it is done.";
+  if (n.status === "failed") return "This node failed in the last run, see the note on the right.";
+  const missing = Object.values(n.inputs).flat().filter(id => node(id).status !== "done").map(id => node(id).label);
+  return missing.length ? `No result yet. It waits for: ${missing.join(", ")}.` : "No result yet. Its inputs are ready, so it runs with the next flow run.";
+}
+
+function facts(n) {
+  const rows = [["State", h("span", { class: `state ${n.status}` }, n.status), n.minutes ? ` · ${n.minutes} min` : ""],
+                ["Runs on", n.where || "nothing to run"]];
+  for (const [socket, sources] of Object.entries(n.inputs)) rows.push([`In: ${socket}`, sources.map(id => node(id).label).join(", ")]);
+  const byHand = ["place", "side", "hand", "after"];  // set in "Edit by hand", shown there
+  for (const [key, value] of Object.entries(n.settings))
+    if (!(key in n.defaults) && !byHand.includes(key)) rows.push([key, Array.isArray(value) ? value.join(", ") : String(value)]);
+  for (const key of Object.keys(n.defaults)) rows.push([h("label", { for: "set_" + key, title: (NAMES[key] || [])[1] || "" }, (NAMES[key] || [key])[0]), setting(n, key)]);
+  if (n.hand) rows.push(["Placed", n.hand.by_hand ? "by hand" : "measured"],
+    ["Part", `left ${n.hand.part[0]}, top ${n.hand.part[1]}, ${n.hand.part[2]} × ${n.hand.part[3]} px`],
+    ["3D area", `${n.hand.cubes.edit} cubes empty room, ${n.hand.cubes.delete} old surface, ${n.hand.cubes.keep} kept`]);
+  const blender = path => h("button", { class: "btn small", title: "A new Blender window with only this model",
+    onclick: async event => { event.target.disabled = true; try { await post("/api/blender", { model: path }); } catch (error) { problem(error.message); } setTimeout(() => { event.target.disabled = false; }, 4000); } }, "Open in Blender");
+  if (n.model) rows.push(["Model", h("span", { class: "path" }, n.model), " ", blender(n.model)]);
+  if (n.models) rows.push(["Candidates", n.models.map(m => h("div", {}, m.label, " ", blender(m.path)))]);
+  if (n.folder) rows.push(["Folder", h("span", { class: "path" }, n.folder)]);
+  const box = h("div", { class: "facts" }, h("table", {}, rows.map(([name, ...value]) => h("tr", {}, h("td", {}, name), h("td", {}, value)))));
+  if (draft && draft.node === n.id) box.append(h("div", { class: "tools", style: "margin-top:10px" },
+    h("button", { class: "btn main", disabled: busy(), onclick: async () => {
+      try { const values = draft.values; await post("/api/settings", { flow: flow.file, node: n.id, settings: values }); draft = null; lastText = ""; await load(); }
+      catch (error) { problem(error.message); } } }, "Save settings"),
+    h("button", { class: "btn", onclick: () => { draft = null; drawDetail(); } }, "Undo"),
+    h("span", { class: "hint", style: "margin:0" }, "New settings give this node and the ones after it a new result; the old results stay on disk.")));
+  if (n.note && n.note !== n.verdict) box.append(h("p", { class: "verdict" + (n.status === "failed" ? "" : " good") }, n.note));
+  if (n.verdict) box.append(h("p", { class: "verdict" + (/^(ok|good|keep|accept)/i.test(n.verdict) ? " good" : "") }, h("b", {}, "Judge: "), n.verdict));
+  if (n.sheet) box.append(h("h3", {}, "What the local AI saw"), h("p", {}, n.sheet.what || "nothing said"),
+    h("ul", { class: "defects" }, n.sheet.why.map(line => h("li", {}, line))));
+  return box;
+}
+
+// the settings in words: [name, what it does]
+const NAMES = {
+  files: ["Files", "Pictures, videos or folders, one per line, from the project folder"],
+  role: ["Role", "object = what is built first, part = what is inpainted onto it"],
+  frames: ["Frames per video", "How many frames of a video are looked at"],
+  ai: ["Local AI looks too", "Off: only what is measured"],
+  seed: ["Seed", "Another seed gives another model from the same pictures"],
+  seeds: ["Seeds", "One candidate per seed, e.g. 1, 2, 3"],
+  where: ["Runs on", "server = the uni GPU server, pc = this PC"],
+  mode: ["Mode", "How several pictures are used together"],
+  resolution: ["Resolution", "512, 1024 or 1536"],
+  steps: ["Steps", "More steps take longer"],
+  replace: ["Replace the surface", "The model's surface under the 2D mask is deleted and made new"],
+  width: ["Part's width", "Share of the top of the object (measured place)"],
+  sink: ["Sunk in", "Share of the part's height pushed down into the object (measured place)"],
+  head: ["Top of the object", "What counts as the top: share of the object's height"],
+  fit: ["Fit", "between = into the free gap between things standing up, over = over them"],
+  keep_min: ["Kept at least", "Below this the judge says redo (0 to 100)"],
+  part_min: ["Part at least", "Below this the judge says redo (0 to 100)"],
+};
+
+// one setting of a node as something to change: a tick, a choice, a number or text (lists: numbers with commas)
+function setting(n, key) {
+  const standard = n.defaults[key];
+  const saved = key in n.settings ? n.settings[key] : standard;
+  const value = draft && draft.node === n.id && key in draft.values ? draft.values[key] : saved;
+  const change = (now, redraw) => {
+    if (!draft || draft.node !== n.id) draft = { node: n.id, values: {} };
+    draft.values[key] = now;
+    if (JSON.stringify(now) === JSON.stringify(saved)) delete draft.values[key];
+    const before = !!document.querySelector(".facts .btn.main");
+    if (!Object.keys(draft.values).length) draft = null;
+    if (redraw || before !== !!draft) { const at = document.activeElement && document.activeElement.id; drawDetail(); if (at) { const again = document.getElementById(at); if (again) { again.focus(); if (again.setSelectionRange && again.type === "text") again.setSelectionRange(again.value.length, again.value.length); } } }
+  };
+  const id = "set_" + key;
+  if (typeof standard === "boolean") return h("input", { id, type: "checkbox", checked: value, onchange: event => change(event.target.checked, true) });
+  if (flow.choices[key]) return h("select", { id, class: "field", onchange: event => change(event.target.value, true) },
+    flow.choices[key].map(choice => h("option", { value: choice, selected: choice === value }, choice)));
+  if (Array.isArray(standard)) return h(key === "files" ? "textarea" : "input", { id, class: "field", type: "text", rows: "2", value: key === "files" ? null : value.join(", "),
+    title: key === "files" ? "One file or folder per line, from the project folder" : "Numbers with commas, e.g. 1, 2, 3",
+    oninput: event => change(key === "files" ? event.target.value.split(/\n/).map(v => v.trim()).filter(Boolean) : event.target.value.split(/[,;\s]+/).filter(Boolean).map(Number)) },
+    key === "files" ? value.join("\n") : null);
+  if (typeof standard === "number") return h("input", { id, class: "field", type: "text", inputmode: "decimal", value: String(value),
+    oninput: event => change(event.target.value === "" || isNaN(Number(event.target.value)) ? event.target.value : Number(event.target.value)) });
+  return h("input", { id, class: "field", type: "text", value: String(value), oninput: event => change(event.target.value) });
+}
+
+// ---------------------------------------------------------------- before / after
+
+function compare(n) {
+  const groups = n.compare.groups.filter(g => g.sides.length);
+  view.group = Math.min(view.group, groups.length - 1);
+  const group = groups[view.group];
+  view.side = Math.min(view.side, group.sides.length - 1);
+  const side = group.sides[view.side];
+  if (!side.plan) view.left = "before";
+  if (!side.mask) view.mask = false;
+  const again = change => () => { Object.assign(view, change); drawDetail(); };
+  const tabs = (items, current, key, label) => h("div", { class: "tabs", role: "group", "aria-label": label },
+    items.map((text, index) => h("button", { class: index === current ? "on" : "", onclick: again({ [key]: index }) }, text)));
+
+  const tools = h("div", { class: "tools" });
+  if (groups.length > 1) tools.append(h("span", { class: "what" }, "Candidate"),
+    tabs(groups.map(g => g.name + (g.best ? " ★" : "")), view.group, "group", "Candidate"));
+  tools.append(h("span", { class: "what" }, "Side"), tabs(group.sides.map(s => s.name.replace("Side ", "")), view.side, "side", "Side"));
+  if (side.plan) tools.append(h("span", { class: "what" }, "Left"), h("div", { class: "tabs", role: "group", "aria-label": "Left picture" },
+    h("button", { class: view.left === "before" ? "on" : "", onclick: again({ left: "before" }) }, n.compare.left),
+    h("button", { class: view.left === "plan" ? "on" : "", onclick: again({ left: "plan" }) }, "Plan")));
+
+  const leftName = view.left === "plan" ? "Plan" : n.compare.left;
+  const box = slider(view.left === "plan" ? side.plan : side.before, side.after, leftName, n.compare.right, side.mask);
+  if (side.mask) tools.append(h("label", {},
+    h("input", { type: "checkbox", checked: view.mask, onchange: event => { view.mask = event.target.checked; box.classList.toggle("masked", view.mask); } }),
+    "Show the edit's area in red"));
+
+  const out = h("div", {}, tools, box,
+    h("div", { class: "hint" }, `Drag the line, or use the arrow keys: ${leftName.toLowerCase()} on the left, ${n.compare.right.toLowerCase()} on the right.`));
+  if (groups.some(g => g.scores)) out.append(h("h3", {}, "What the judge measured"), scores(n.compare, groups, side.name));
+  return out;
+}
+
+function slider(leftPicture, rightPicture, leftName, rightName, mask) {
+  const top = h("div", { class: "top" }, h("img", { src: leftPicture, alt: leftName, draggable: "false" }));
+  const right = h("img", { src: rightPicture, alt: rightName, draggable: "false" });
+  const canvas = h("canvas", {});
+  const bar = h("div", { class: "bar" }, h("div", { class: "knob" }, "‹›"));
+  const box = h("div", { class: "cmp" + (view.mask && mask ? " masked" : ""), tabindex: "0", role: "slider", "aria-valuemin": "0", "aria-valuemax": "100",
+                         "aria-label": `${leftName} and ${rightName}: how much of ${leftName} shows` },
+    right, top, canvas, bar, h("span", { class: "tag l" }, leftName), h("span", { class: "tag r" }, rightName));
+  const set = position => {
+    view.position = Math.max(0, Math.min(100, position));
+    top.style.clipPath = `inset(0 ${100 - view.position}% 0 0)`;
+    bar.style.left = view.position + "%";
+    box.setAttribute("aria-valuenow", String(Math.round(view.position)));
+  };
+  const under = event => { const frame = box.getBoundingClientRect(); set((event.clientX - frame.left) / frame.width * 100); };
+  box.addEventListener("pointerdown", event => { box.setPointerCapture(event.pointerId); under(event); box.onpointermove = under; });
+  for (const end of ["pointerup", "pointercancel"]) box.addEventListener(end, () => { box.onpointermove = null; });
+  box.addEventListener("keydown", event => {
+    const step = { ArrowLeft: -2, ArrowRight: 2, Home: -100, End: 100 }[event.key];
+    if (step) { set(view.position + step); event.preventDefault(); }
+  });
+  right.addEventListener("load", () => { box.style.aspectRatio = `${right.naturalWidth} / ${right.naturalHeight}`; });
+  if (mask) paintMask(canvas, mask);
+  set(view.position);
+  return box;
+}
+
+// the 2D mask (white = changed) as see-through red
+function paintMask(canvas, address) {
+  const picture = new Image();
+  picture.onload = () => {
+    canvas.width = picture.naturalWidth;
+    canvas.height = picture.naturalHeight;
+    const context = canvas.getContext("2d");
+    context.drawImage(picture, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    const [red, green, blue] = getComputedStyle(document.documentElement).getPropertyValue("--mask").split(",").map(Number);
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      pixels.data[i + 3] = pixels.data[i] * 0.5;
+      pixels.data[i] = red; pixels.data[i + 1] = green; pixels.data[i + 2] = blue;
+    }
+    context.putImageData(pixels, 0, 0);
+  };
+  picture.src = address;
+}
+
+function scores(compared, groups, sideName) {
+  const limits = compared.limits || {};
+  const low = (value, limit) => (limit != null && value != null && value < limit) ? "low" : "";
+  const cell = (value, limit) => h("td", { class: low(value, limit) }, value == null ? "–" : value);
+  const table = h("table", { class: "scores" },
+    h("tr", {}, h("th", {}, "Candidate"), h("th", { title: "Outside the area the model must stay the original" }, "Kept"),
+      h("th", { title: "Inside the mask the new part must be there" }, "Part"), h("th", { title: "Colours inside the mask against the plan" }, "Colour"),
+      h("th", { title: "The lower of kept and part" }, "Measured"), h("th", { title: "The local vision AI, 1 to 10" }, "AI")),
+    groups.map((g, index) => h("tr", { class: index === view.group ? "shown" : "" },
+      h("td", {}, g.name, g.best && h("span", { class: "badge" }, "best")),
+      cell(g.scores.kept, limits.keep_min ?? limits.kept), cell(g.scores.part, limits.part_min ?? limits.part), cell(g.scores.colour),
+      cell(g.scores.measured), h("td", {}, g.ai && g.ai.score != null ? `${g.ai.score}/10` : "–"))));
+  const group = groups[view.group];
+  const side = group.sides[view.side];
+  const out = h("div", {}, table);
+  if (side.scores && Object.keys(side.scores).length) out.append(h("p", { class: "hint" },
+    `${sideName} of ${group.name}: ` + Object.entries(side.scores).map(([name, value]) => `${name} ${value}`).join(", ") + ". All out of 100; the table is the mean of the four sides."));
+  if (group.ai && (group.ai.why || (group.ai.defects || []).length)) out.append(
+    h("p", {}, h("b", {}, `The local AI on ${group.name}: `), group.ai.why || ""),
+    h("ul", { class: "defects" }, (group.ai.defects || []).map(defect => h("li", {}, defect))));
+  return out;
+}
+
+// ---------------------------------------------------------------- the edit by hand
+//
+// The part is placed on the edit's main side (drag it, pull the corner); the other sides follow from its place in 3D.
+// The 2D mask of every side can be corrected with a brush: red = this changes too, blue = this stays.
+// Everything is in the pixels of the side's picture (as make_edit.py --place and --hand want it).
+
+const RED = "rgb(235,45,45)", BLUE = "rgb(40,120,255)";
+
+function loadPicture(address) {
+  return new Promise((resolve, reject) => { const picture = new Image(); picture.onload = () => resolve(picture); picture.onerror = reject; picture.src = address; });
+}
+
+function sheetOf(size) { const canvas = document.createElement("canvas"); canvas.width = canvas.height = size; return canvas; }
+
+// the part cut out of the plan, when the edit was made before the cut-outs were saved: what differs between before and after
+async function cutFromPlan(side, [x, y, width, height]) {
+  const [before, after] = await Promise.all([loadPicture(side.before), loadPicture(side.after)]);
+  const canvas = document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(before, -x, -y);
+  const old = context.getImageData(0, 0, width, height).data;
+  context.drawImage(after, -x, -y);
+  const now = context.getImageData(0, 0, width, height);
+  for (let i = 0; i < old.length; i += 4)
+    if (Math.abs(old[i] - now.data[i]) + Math.abs(old[i + 1] - now.data[i + 1]) + Math.abs(old[i + 2] - now.data[i + 2]) < 12) now.data[i + 3] = 0;
+  context.putImageData(now, 0, 0);
+  return canvas.toDataURL();
+}
+
+async function openHand(n) {
+  const size = n.hand.size, main = n.hand.sides[0];
+  hand = { node: n.id, size, side: 0, tool: "move", brush: 36, changed: false, replace: n.hand.replace, by_hand: n.hand.by_hand,
+           place: { x: n.hand.part[0], y: n.hand.part[1], width: n.hand.part[2] }, ratio: n.hand.part[3] / n.hand.part[2],
+           measured: n.hand.part.slice(), layers: [], cut: null,
+           after: n.hand.after, prompts: n.hand.prompts, job: n.hand.prompt_job, seed: 1, reference: true,
+           prompt: (n.hand.prompts.find(one => one.number === n.hand.after) || n.hand.prompts[n.hand.prompts.length - 1] || {}).prompt || "" };
+  for (const side of n.hand.sides) {  // what was painted before, to go on with it
+    const layer = { add: sheetOf(size), erase: sheetOf(size), used: { add: false, erase: false }, touched: false };
+    for (const [name, colour] of [["add", RED], ["erase", BLUE]]) if (side[name]) {
+      const context = layer[name].getContext("2d");
+      context.drawImage(await loadPicture(side[name]), 0, 0, size, size);
+      context.globalCompositeOperation = "source-in";
+      context.fillStyle = colour; context.fillRect(0, 0, size, size);
+      context.globalCompositeOperation = "source-over";
+      layer.used[name] = true;
+    }
+    hand.layers.push(layer);
+  }
+  hand.cut = main.cut || await cutFromPlan(main, n.hand.part);
+  drawHand();
+}
+
+// while the edit by hand is open the page leaves it alone, only the prompt's state is followed
+function handLive() {
+  const n = node(hand.node);
+  if (!n || !n.hand) return;
+  const before = JSON.stringify([hand.prompts, hand.job]);
+  const finished = hand.job && hand.job.active && n.hand.prompt_job && !n.hand.prompt_job.active && !n.hand.prompt_job.failed;
+  hand.prompts = n.hand.prompts; hand.job = n.hand.prompt_job;
+  if (finished && hand.prompts.length) { hand.after = hand.prompts[hand.prompts.length - 1].number; hand.changed = true; }  // the new picture is shown at once
+  if (JSON.stringify([hand.prompts, hand.job]) !== before) drawHand();
+}
+
+function drawHand() {
+  const n = node(hand.node), size = hand.size, side = n.hand.sides[hand.side], layer = hand.layers[hand.side], isMain = hand.side === 0;
+  const moved = () => hand.place.x !== hand.measured[0] || hand.place.y !== hand.measured[1] || hand.place.width !== hand.measured[2];
+  const again = change => () => { Object.assign(hand, change); drawHand(); };
+  const share = value => (100 * value / size) + "%";
+
+  // the stage: the model's picture, the mask so far (faint), what is painted now, and the part (main side)
+  const paint = h("canvas", { class: "paint", width: size, height: size });
+  const was = h("canvas", { class: "was" });
+  const ring = h("div", { class: "ring" });
+  const part = h("div", { class: "part" }, h("img", { src: hand.cut, alt: "The new part", draggable: "false" }), h("div", { class: "grip" }));
+  const fromPrompt = hand.prompts.find(one => one.number === hand.after);  // a picture made from a prompt takes the part's place
+  if (fromPrompt && hand.tool === "move") hand.tool = "add";
+  const stage = h("div", { class: "stage" + (hand.tool === "move" ? "" : " painting") + (fromPrompt && isMain ? " made" : ""), tabindex: "0", "aria-label": "The picture of this side" },
+    h("img", { src: isMain ? (fromPrompt ? fromPrompt.url : side.before) : side.after, draggable: "false",
+               alt: isMain ? (fromPrompt ? "The picture made from the prompt" : "The model before the edit") : "The plan of this side so far" }),
+    was, paint, isMain && !fromPrompt && part, ring);
+  if (side.mask && hand.tool !== "move") paintMask(was, side.mask);
+  const info = h("span", { class: "hint" });
+  const showPaint = () => {
+    const context = paint.getContext("2d");
+    context.clearRect(0, 0, size, size);
+    context.drawImage(layer.add, 0, 0);
+    context.drawImage(layer.erase, 0, 0);
+  };
+  const showPart = () => {
+    const height = Math.round(hand.place.width * hand.ratio);
+    Object.assign(part.style, { left: share(hand.place.x), top: share(hand.place.y), width: share(hand.place.width), height: share(height) });
+    info.textContent = `Part: left ${hand.place.x}, top ${hand.place.y}, ${hand.place.width} × ${height} px` + (moved() ? " (moved)" : "");
+  };
+  const put = (x, y, width) => {  // inside the picture, as make_edit.py asks
+    width = Math.round(Math.max(16, Math.min(width, size - 2, (size - 2) / hand.ratio)));
+    const height = Math.round(width * hand.ratio);
+    hand.place = { x: Math.round(Math.max(0, Math.min(x, size - width))), y: Math.round(Math.max(1, Math.min(y, size - height - 1))), width };
+    hand.changed = true;
+    showPart();
+  };
+  const spot = event => { const frame = stage.getBoundingClientRect(); return [(event.clientX - frame.left) / frame.width * size, (event.clientY - frame.top) / frame.height * size]; };
+
+  // moving and sizing the part
+  part.addEventListener("pointerdown", event => {
+    if (hand.tool !== "move") return;
+    const [x0, y0] = spot(event), from = { ...hand.place }, sizing = event.target.classList.contains("grip");
+    part.setPointerCapture(event.pointerId);
+    stage.focus({ preventScroll: true });
+    part.onpointermove = move => {
+      const [x, y] = spot(move);
+      if (sizing) put(from.x, from.y, from.width + (x - x0)); else put(from.x + x - x0, from.y + y - y0, from.width);
+    };
+    event.preventDefault();
+  });
+  for (const end of ["pointerup", "pointercancel"]) part.addEventListener(end, () => { part.onpointermove = null; });
+  stage.addEventListener("keydown", event => {
+    if (hand.tool !== "move" || !isMain) return;
+    const step = event.shiftKey ? 10 : 1, { x, y, width } = hand.place;
+    const to = { ArrowLeft: [x - step, y, width], ArrowRight: [x + step, y, width], ArrowUp: [x, y - step, width], ArrowDown: [x, y + step, width],
+                 "+": [x - step, y, width + 2 * step], "-": [x + step, y, width - 2 * step] }[event.key];
+    if (to) { put(...to); event.preventDefault(); }
+  });
+
+  // painting the mask: a stroke on one layer takes the same stroke off the other
+  let lastSpot = null;
+  const stroke = event => {
+    const [x, y] = spot(event), [fromX, fromY] = lastSpot || [x, y];
+    const [on, off, colour] = hand.tool === "add" ? [layer.add, layer.erase, RED] : [layer.erase, layer.add, BLUE];
+    for (const [sheet, mode] of [[on, "source-over"], [off, "destination-out"]]) {
+      const context = sheet.getContext("2d");
+      context.globalCompositeOperation = mode;
+      context.strokeStyle = colour; context.lineWidth = hand.brush; context.lineCap = context.lineJoin = "round";
+      context.beginPath(); context.moveTo(fromX, fromY); context.lineTo(x + 0.01, y + 0.01); context.stroke();
+    }
+    layer.used[hand.tool] = layer.touched = hand.changed = true;
+    lastSpot = [x, y];
+    showPaint();
+  };
+  stage.addEventListener("pointerdown", event => {
+    if (hand.tool === "move") return;
+    stage.setPointerCapture(event.pointerId);
+    lastSpot = null; stroke(event);
+    stage.onpointermove = stroke;
+  });
+  for (const end of ["pointerup", "pointercancel"]) stage.addEventListener(end, () => { stage.onpointermove = null; lastSpot = null; });
+  stage.addEventListener("pointermove", event => {
+    const frame = stage.getBoundingClientRect(), wide = hand.brush / size * frame.width;
+    Object.assign(ring.style, { left: (event.clientX - frame.left) + "px", top: (event.clientY - frame.top) + "px", width: wide + "px", height: wide + "px" });
+  });
+
+  // the tools
+  const tool = (name, text, title) => h("button", { class: hand.tool === name ? "on" : "", title, onclick: again({ tool: name }) }, text);
+  const tools = h("div", { class: "tools" },
+    h("span", { class: "what" }, "Side"), h("div", { class: "tabs", role: "group", "aria-label": "Side" },
+      n.hand.sides.map((one, index) => h("button", { class: index === hand.side ? "on" : "", onclick: again({ side: index, tool: index === 0 ? hand.tool : (hand.tool === "move" ? "add" : hand.tool) }) },
+        `${one.view + 1}` + (index === 0 ? " (main)" : "")))),
+    h("span", { class: "what" }, "Tool"), h("div", { class: "tabs", role: "group", "aria-label": "Tool" },
+      isMain && !fromPrompt && tool("move", "Move the part", "Drag the part, pull the white dot to size it; arrow keys move it by one pixel"),
+      tool("add", "Paint the area", "Red: this changes too"), tool("erase", "Protect", "Blue: this stays as it is")),
+    hand.tool !== "move" && h("label", {}, "Brush", h("input", { type: "range", min: "6", max: "140", value: hand.brush,
+      oninput: event => { hand.brush = Number(event.target.value); } })),
+    hand.tool !== "move" && h("button", { class: "btn", onclick: () => {
+      for (const sheet of [layer.add, layer.erase]) sheet.getContext("2d").clearRect(0, 0, size, size);
+      layer.used = { add: false, erase: false }; layer.touched = hand.changed = true; showPaint();
+    } }, "Clear this side's painting"));
+
+  const send = async (place, run) => {
+    const layers = {};
+    hand.layers.forEach((one, index) => { if (one.touched) for (const name of ["add", "erase"]) layers[`${name}_${n.hand.sides[index].view}`] = one.used[name] ? white(one[name]) : null; });
+    try {
+      await post("/api/edit", { flow: flow.file, node: n.id, side: n.hand.side, replace: hand.replace, layers, run,
+                                after: place && fromPrompt ? fromPrompt.number : null,
+                                place: place && !fromPrompt && (moved() || n.settings.place) ? [hand.place.x, hand.place.y, hand.place.width] : null });
+      hand = null;
+      Object.assign(view, { group: 0, side: 0, left: "before" });
+      drawDetail();
+    } catch (error) { problem(error.message); }
+  };
+  const buttons = [
+    h("button", { class: "btn main", onclick: () => send(true, true), title: "Writes it into the flow and makes the edit's pictures and 3D area again, about a minute on this PC" }, "Apply"),
+    h("button", { class: "btn", onclick: () => { hand = null; drawDetail(); } }, "Cancel"),
+    hand.by_hand && h("button", { class: "btn", title: "Takes the hand-made place out of the flow again; the painting stays",
+      onclick: () => { if (confirm("Back to the measured place of the part?")) send(false, true); } }, "Back to the measured place")];
+
+  // the prompt: the local picture AI paints it into the painted area of the main side
+  const working = hand.job && hand.job.active;
+  const makePicture = async () => {
+    if (!hand.layers[0].used.add) return problem("Paint the area on the main side first (Paint the area, red): the prompt is painted into it.");
+    try {
+      problem("");
+      await post("/api/prompt", { flow: flow.file, node: n.id, folder: n.hand.folder, prompt: hand.prompt, seed: hand.seed, reference: hand.reference,
+                                  area: white(hand.layers[0].add) });
+    } catch (error) { problem(error.message); }
+  };
+  const promptBox = h("div", {},
+    h("h3", {}, "Or describe the new part"),
+    h("textarea", { class: "prompt", rows: "3", placeholder: "e.g. a small silver tiara with a blue gem", "aria-label": "What should be there",
+                    oninput: event => { hand.prompt = event.target.value; } }, hand.prompt),
+    h("div", { class: "tools", style: "margin-top:8px" },
+      h("label", { title: "The picture AI also gets the part's own picture and makes it look like that" },
+        h("input", { type: "checkbox", checked: hand.reference, onchange: event => { hand.reference = event.target.checked; } }), "like the part's picture"),
+      h("label", { title: "Another seed gives another picture for the same words" }, "Seed",
+        h("input", { type: "number", min: "1", value: hand.seed, style: "width:64px", oninput: event => { hand.seed = Number(event.target.value) || 1; } })),
+      h("button", { class: "btn", disabled: working, onclick: makePicture }, working ? "Painting…" : "Paint it")),
+    h("p", { class: "hint" }, working ? `The local picture AI is painting “${hand.job.prompt}” (since ${hand.job.started}, about half a minute). ${hand.job.log.slice(-1)[0] || ""}`
+      : hand.job && hand.job.failed ? h("span", { class: "low" }, `The last picture failed: ${hand.job.log.slice(-2).join(" ")}`)
+      : "The local picture AI paints it into the red area of the main side, about half a minute. Only what differs inside the area becomes the new part."),
+    hand.prompts.length > 0 && h("div", { class: "made" },
+      h("button", { class: "pick" + (fromPrompt ? "" : " on"), onclick: again({ after: null, changed: true }), title: "The part's own picture, pasted where you put it" },
+        h("img", { src: hand.cut, alt: "" }), h("span", {}, "the part's picture")),
+      hand.prompts.map(one => h("button", { class: "pick" + (one.number === hand.after ? " on" : ""), title: `${one.prompt} (seed ${one.seed}, ${one.time})`,
+                                            onclick: again({ after: one.number, changed: true, side: 0, prompt: one.prompt }) },
+        h("img", { src: one.url, alt: "" }), h("span", {}, one.prompt)))));
+
+  showPaint(); showPart();
+  if (fromPrompt) info.textContent = `The new part is what the prompt made inside the red area: “${fromPrompt.prompt}”.`;
+  document.getElementById("detail").replaceChildren(h("section", { class: "detail" },
+    h("div", { class: "titlebar" }, h("h2", {}, "Edit by hand", h("small", {}, `${n.label} · ${n.id}`)), buttons),
+    h("div", { class: "columns" },
+      h("div", {}, tools, stage, h("div", {}, isMain ? info : h("span", { class: "hint" },
+        "This side shows the plan as it is now. It follows the main side when you apply; here you correct its area."))),
+      h("div", { class: "facts" },
+        h("ol", { class: "steps" },
+          h("li", {}, h("b", {}, "Move the part"), " on the main side to where it belongs. Pull the white dot to size it. The other three sides follow from its place in 3D."),
+          h("li", {}, h("b", {}, "Paint the area"), " where more of the model should change", h("span", { class: "key", style: `background:${RED}` }), "red",
+            ", or ", h("b", {}, "protect"), " what must stay", h("span", { class: "key", style: `background:${BLUE}` }), "blue. The faint red is the area so far."),
+          h("li", {}, h("b", {}, "Apply"), " makes the before / after pictures and the 3D area again (about a minute). The inpainting steps after it then wait for a new run.")),
+        h("label", { style: "display:flex;gap:8px;align-items:flex-start;cursor:pointer" },
+          h("input", { type: "checkbox", checked: hand.replace, onchange: event => { hand.replace = event.target.checked; hand.changed = true; } }),
+          h("span", {}, "Replace the model's surface under the area", h("span", { class: "hint", style: "display:block" },
+            "On: the old surface there is deleted and made new (the part may sink into the model). Off: the whole surface stays and the part only grows into the empty room."))),
+        h("p", { class: "hint" }, "Keys on the picture: arrows move the part by 1 pixel (Shift: 10), + and − size it."),
+        promptBox))));
+}
+
+// a painted layer as the white-on-nothing PNG make_edit.py reads
+function white(sheet) {
+  const copy = sheetOf(sheet.width), context = copy.getContext("2d");
+  context.drawImage(sheet, 0, 0);
+  context.globalCompositeOperation = "source-in";
+  context.fillStyle = "#fff"; context.fillRect(0, 0, copy.width, copy.height);
+  return copy.toDataURL("image/png");
+}
+
+// ---------------------------------------------------------------- galleries
+
+function gallery(items) {
+  return h("div", { class: "views" }, items.filter(item => item.url).map(item => h("figure", {},
+    item.video ? h("a", {}, h("video", { src: item.url, controls: true, muted: true, loop: true, preload: "metadata" }))
+               : h("a", { href: item.url, target: "_blank" }, h("img", { src: item.url, alt: item.caption, loading: "lazy" })),
+    h("figcaption", {}, item.caption, item.sub && h("span", { class: "sub" }, item.sub), (item.chips || []).map(([text, used]) => h("span", { class: "chip" + (used ? " used" : "") }, text))))));
+}
+
+function sheetViews(sheet) {
+  const items = sheet.views.map(v => ({ url: v.url, caption: v.side || v.name, sub: v.top ? `top: ${v.top}` : v.name,
+    chips: [v.base && ["base", true], v.sides && ["part side", true], v.colour && [v.colour, false],
+            ...v.cut_off.map(border => [`cut off: ${border}`, false])].filter(Boolean) }));
+  return h("div", {}, h("h3", {}, `The ${sheet.views.length} views`), gallery(items));
+}
+
+// an address with another node in it (a link, back and forward)
+window.addEventListener("hashchange", () => {
+  const [file, id] = decodeURIComponent(location.hash.slice(1)).split("/");
+  if (flow && file === flow.file && id && id !== selected && node(id)) choose(id);
+});
+
+start().catch(error => problem(`The page can't start: ${error.message}`));
+</script>
+</body>
+</html>

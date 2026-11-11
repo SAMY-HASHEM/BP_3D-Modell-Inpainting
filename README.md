@@ -18,6 +18,7 @@ Samy Hashem
 | `scripts/inpainting/` | changing one area of a model: `inpaint.py` (methods repaint and inversion), `inversion.py`, `picture_from_prompt.py` (the edited picture), `find_part.py` (the mask AI behind "Find part"), and the parts way: `cut_parts.py`, `cut_regions.py`, `transfer_parts.py`, `insert_part.py`, `replace_part.py` |
 | `scripts/server/` | the AI servers: `inpaint_server.py` (this PC, or the uni server inside the network), `cloud.py` + `cloud_worker.py` (uni server from anywhere, through Sciebo), `run_job.py` |
 | `scripts/pipeline/` | the node pipelines: `nodes_core.py` (what every node does), `flow.py` (runs a node flow from a file in `flows/`), the inpainting flow's nodes `data_sheet.py` (local AI: data sheet of the inputs) and `edit_judge.py` (local judge of an edit), and the character pipeline (`run_pipeline.py`, `auto_pipeline.py`, `grid_judge.py`, ...) |
+| `web/` | the web app's front end: `app.html` (the main page: add data, prompts, Run, the result in 3D; a friendly and a developer view) and `index.html` (the older node page). The back end is `scripts/pipeline/flow_page.py`; see `docs/web-app.md` |
 | `flows/` | node flows as files, e.g. `girl_crown.json`: a crown inpainted onto a generated head (see `docs/inpaint-flow.md`) |
 | `scripts/tools/` | `render_views.py`, `compare_in_blender.py/.sh`, `project_texture.py` (camera helpers) |
 | `blender/` | the Blender add-on |

@@ -6,39 +6,89 @@
 <title>Inpainting 3D</title>
 <!-- The main page of the project, after the sketch UI-skitch/main- panal.png:
      menu · logo · account on top, "Add data", the data rows (each with its own prompt) wired into the total workflow. -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23111'/%3E%3Cpath d='M76 18C52 16 30 20 27 33c-2 10 14 14 25 14s25 4 23 17c-2 14-24 19-51 19' fill='none' stroke='%23fff' stroke-width='9' stroke-linecap='round'/%3E%3Cpath d='M26 12v76M74 12v76M26 48c16 5 32-5 48 0' fill='none' stroke='%23e3262d' stroke-width='8' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' rx='40' fill='%2314100A'/%3E%3Crect x='48' y='6' width='104' height='176' rx='52' fill='none' stroke='%23D4A853' stroke-width='8'/%3E%3Cg transform='translate(100 94) scale(.56) translate(-100 -100)' fill='none' stroke='%23D4A853' stroke-linecap='round'%3E%3Cpath d='M150 32C104 32 56 44 52 86q0 14 14 14h68q14 0 14 14c-4 42-52 54-98 54' stroke-width='17'/%3E%3Cpath d='M50 30v140M150 30v140M50 100h100' stroke-width='17'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600&family=Reem+Kufi:wght@500;700&display=swap" rel="stylesheet">
+<!-- the 3D view of a result (a web component; without the internet the page shows the result's picture instead) -->
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
 <style>
+/* only two colors on the whole site: sand gold and black. A sand page with black signs, black panels with sand writing.
+   "light" in data-theme is the inverse: a black page with sand signs, sand panels with black writing. */
 :root {
-  --bg: #121316; --panel: #1b1d21; --raised: #24272c; --line: #33373e; --text: #eceef1; --dim: #9aa0aa;
-  --ink: #f4f4f4; --brand: #e3262d; --brand-soft: color-mix(in srgb, var(--brand) 16%, transparent);
-  --wire: #565b64; --radius: 14px;
+  --sand: #D4A853; --ink: #14100A;
+  --bg: var(--ink); --panel: var(--ink); --raised: color-mix(in srgb, var(--sand) 10%, var(--ink)); --line: color-mix(in srgb, var(--sand) 45%, var(--ink));
+  --text: var(--sand); --dim: color-mix(in srgb, var(--sand) 78%, var(--ink));
+  --brand: var(--sand); --brand-soft: color-mix(in srgb, var(--brand) 14%, transparent); --on-brand: var(--ink);
+  --accent: var(--sand); --wire: var(--ink); --radius: 14px;
 }
 :root[data-theme="light"] {
-  --bg: #f4f4f1; --panel: #ffffff; --raised: #f3f3f0; --line: #deded8; --text: #17181b; --dim: #686c74;
-  --ink: #111; --brand: #d81f26; --wire: #b5b8be;
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #f4f4f1; --panel: #ffffff; --raised: #f3f3f0; --line: #deded8; --text: #17181b; --dim: #686c74;
-    --ink: #111; --brand: #d81f26; --wire: #b5b8be;
-  }
+  --bg: var(--sand); --panel: var(--sand); --raised: color-mix(in srgb, var(--ink) 10%, var(--sand)); --line: color-mix(in srgb, var(--ink) 55%, var(--sand));
+  --text: var(--ink); --dim: color-mix(in srgb, var(--ink) 80%, var(--sand));
+  --brand: var(--ink); --on-brand: var(--sand); --accent: var(--ink);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh; }
+body { background: var(--bg); color: var(--text); font: 15px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh; }
+h1, h2, .display { font-family: Cinzel, Georgia, serif; }
+
+/* the hieroglyphs behind everything: ankh, Eye of Horus, Ma'at's feather, water, djed, lotus, scarab, cobra,
+   a cartouche, the sun on the horizon, a reed — one 240 px tile, repeated, very faint */
+:root { --page: var(--sand); --page-ink: var(--ink); --glyph: var(--ink); --glyph-alpha: .3; }
+:root[data-theme="light"] { --page: var(--ink); --page-ink: var(--sand); --glyph: var(--sand); --glyph-alpha: .26; }
+.row, .drop, .empty-rows, .more { border-color: var(--line) !important; }
+/* the switch between the two views, top right */
+.mode { justify-self: end; display: inline-flex; gap: 2px; padding: 3px; border: 1.5px solid var(--brand); border-radius: 999px; background: none; cursor: pointer; }
+.mode span { padding: 7px 14px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--text); }
+body:not([data-mode="dev"]) .mode .f, body[data-mode="dev"] .mode .d { background: var(--brand); color: var(--on-brand); }
+.mode:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+body:not([data-mode="dev"]) .dev-only { display: none !important; }
+body[data-mode="dev"] .friendly-only { display: none !important; }
+.meta { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin-top: 12px; }
+.settings label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); }
+.settings input, .settings select { background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; width: 100%; }
+.settings option { background: var(--panel); }
+/* the user, bottom left of the menu */
+.user { margin-top: auto; display: flex; align-items: center; gap: 12px; padding: 12px; border: 0; border-top: 1px solid var(--line); background: none; cursor: pointer; text-align: left; width: 100%; }
+.user:hover { background: var(--raised); }
+.user .avatar { width: 44px; height: 44px; flex: none; border-radius: 50%; border: 1.5px solid var(--brand); color: var(--brand); display: grid; place-items: center; }
+.user .who { display: flex; flex-direction: column; line-height: 1.3; } .user small { color: var(--dim); }
+@media (max-width: 600px) { .mode span { padding: 6px 9px; font-size: 12px; } }
+.stage .hint svg { color: var(--brand) !important; }
+::placeholder { color: var(--dim); opacity: .85; }
+.toast { background: var(--page-ink) !important; color: var(--page) !important; border: 2px solid var(--page); }
+body { background: var(--page); }
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--glyph); opacity: var(--glyph-alpha);
+  -webkit-mask: var(--glyphs) repeat 0 0 / max(7.5vw, 54px) auto; mask: var(--glyphs) repeat 0 0 / max(7.5vw, 54px) auto; }  /* 40 columns of signs across the window (a tile is 3 columns = 7.5vw), with the lines between them; on a phone fewer, so the signs stay readable */
+.band { background: var(--bg); }
+.work > div:first-of-type .col-title { display: inline-flex; background: var(--panel); padding: 6px 14px; border-radius: 10px; }
+body { display: flex; flex-direction: column; } main { flex: 1; width: 100%; }  /* the footer stays at the bottom */
+.wires path { stroke: var(--page-ink) !important; } .wires circle { fill: var(--page-ink) !important; }
+.drop { background: var(--panel) !important; } .drop:hover, .drop:focus-visible, .drop.over { background: var(--raised) !important; }
+.empty-rows, .more { background: var(--panel) !important; color: var(--text) !important; }
+:root { --glyphs: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='156' height='506' viewBox='0 0 156 506' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M0 0V506M52 0V506M104 0V506' stroke-width='1.5'/%3E%3Cg transform='translate(26 23)'%3E%3Cellipse cx='0' cy='-12' rx='7' ry='9'/%3E%3Cpath d='M-11 0H11M0 -3V22'/%3E%3C/g%3E%3Cg transform='translate(26 69)'%3E%3Cpath d='M-20 -6l7-7 7 7 7-7 7 7 6-7M-20 8l7-7 7 7 7-7 7 7 6-7'/%3E%3C/g%3E%3Cg transform='translate(26 115)'%3E%3Cpath d='M-18 6Q-14 -12 0 -12Q8 -12 10 -6L18 -3L10 0Q8 12 -6 14L-18 14Z' fill='black'/%3E%3Cpath d='M-6 14V22M2 12V22M-10 22H6'/%3E%3C/g%3E%3Cg transform='translate(26 161)'%3E%3Cpath d='M-20 0Q0 -12 20 0Q0 12 -20 0Z'/%3E%3C/g%3E%3Cg transform='translate(26 207)'%3E%3Cpath d='M2 -22Q-10 0 0 22Q10 0 2 -22Z' fill='black'/%3E%3C/g%3E%3Cg transform='translate(26 253)'%3E%3Ccircle r='14'/%3E%3Ccircle r='3.5' fill='black'/%3E%3C/g%3E%3Cg transform='translate(26 299)'%3E%3Cpath d='M-12 -12V12M0 -12V12M12 -12V12' stroke-width='5'/%3E%3C/g%3E%3Cg transform='translate(26 345)'%3E%3Cpath d='M-12 -18H12M-12 -11H12M-12 -4H12M-7 -18V20M7 -18V20M-14 20H14'/%3E%3C/g%3E%3Cg transform='translate(26 391)'%3E%3Cpath d='M-20 0Q0 -16 20 0Q0 12 -20 0Z'/%3E%3Ccircle r='5' fill='black'/%3E%3Cpath d='M-4 9Q-6 20 4 20'/%3E%3C/g%3E%3Cg transform='translate(26 437)'%3E%3Cpath d='M-14 8A14 14 0 0 1 14 8Z' fill='black'/%3E%3C/g%3E%3Cg transform='translate(26 483)'%3E%3Cpath d='M8 -20Q-10 -22 -8 -8Q-6 2 6 4Q16 8 10 18Q4 24 -10 20'/%3E%3C/g%3E%3Cg transform='translate(78 23)'%3E%3Cpath d='M-20 0Q0 -16 20 0Q0 12 -20 0Z'/%3E%3Ccircle r='5' fill='black'/%3E%3Cpath d='M-4 9Q-6 20 4 20'/%3E%3C/g%3E%3Cg transform='translate(78 69)'%3E%3Cpath d='M-20 -6H20A20 16 0 0 1 -20 -6Z' fill='black'/%3E%3C/g%3E%3Cg transform='translate(78 115)'%3E%3Cpath d='M2 -22C-12 -4 -10 12 0 22M2 -22C12 -4 10 12 0 22'/%3E%3C/g%3E%3Cg transform='translate(78 161)'%3E%3Cpath d='M-6 12H-18V-12H18V12H6'/%3E%3C/g%3E%3Cg transform='translate(78 207)'%3E%3Cellipse cx='0' cy='4' rx='9' ry='13' fill='black'/%3E%3Cpath d='M-7 -10Q0 -18 7 -10M-9 0L-18 -6M9 0L18 -6M-9 10L-18 16M9 10L18 16'/%3E%3C/g%3E%3Cg transform='translate(78 253)'%3E%3Cpath d='M-20 -6l7-7 7 7 7-7 7 7 6-7M-20 8l7-7 7 7 7-7 7 7 6-7'/%3E%3C/g%3E%3Cg transform='translate(78 299)'%3E%3Crect x='-10' y='-20' width='20' height='36' rx='10'/%3E%3Cpath d='M-12 21H12M-5 -4H5M-5 4H5'/%3E%3C/g%3E%3Cg transform='translate(78 345)'%3E%3Cpath d='M2 -22Q-10 0 0 22Q10 0 2 -22Z' fill='black'/%3E%3C/g%3E%3Cg transform='translate(78 391)'%3E%3Crect x='-10' y='-10' width='20' height='20' fill='black'/%3E%3C/g%3E%3Cg transform='translate(78 437)'%3E%3Cpath d='M-18 6Q-14 -12 0 -12Q8 -12 10 -6L18 -3L10 0Q8 12 -6 14L-18 14Z' fill='black'/%3E%3Cpath d='M-6 14V22M2 12V22M-10 22H6'/%3E%3C/g%3E%3Cg transform='translate(78 483)'%3E%3Ccircle cx='0' cy='-2' r='9' fill='black'/%3E%3Cpath d='M-20 12H20'/%3E%3C/g%3E%3Cg transform='translate(130 23)'%3E%3Cpath d='M0 22V0M-14 -18L0 0L14 -18M-6 -20L0 -6L6 -20'/%3E%3C/g%3E%3Cg transform='translate(130 69)'%3E%3Cpath d='M-20 0Q0 -12 20 0Q0 12 -20 0Z'/%3E%3C/g%3E%3Cg transform='translate(130 115)'%3E%3Cpath d='M-12 -12V12M0 -12V12M12 -12V12' stroke-width='5'/%3E%3C/g%3E%3Cg transform='translate(130 161)'%3E%3Cpath d='M8 -20Q-10 -22 -8 -8Q-6 2 6 4Q16 8 10 18Q4 24 -10 20'/%3E%3C/g%3E%3Cg transform='translate(130 207)'%3E%3Cpath d='M-14 8A14 14 0 0 1 14 8Z' fill='black'/%3E%3C/g%3E%3Cg transform='translate(130 253)'%3E%3Cellipse cx='0' cy='-12' rx='7' ry='9'/%3E%3Cpath d='M-11 0H11M0 -3V22'/%3E%3C/g%3E%3Cg transform='translate(130 299)'%3E%3Cpath d='M-6 -20H6V20'/%3E%3C/g%3E%3Cg transform='translate(130 345)'%3E%3Ccircle cx='0' cy='-2' r='9' fill='black'/%3E%3Cpath d='M-20 12H20'/%3E%3C/g%3E%3Cg transform='translate(130 391)'%3E%3Cpath d='M-20 -6l7-7 7 7 7-7 7 7 6-7M-20 8l7-7 7 7 7-7 7 7 6-7'/%3E%3C/g%3E%3Cg transform='translate(130 437)'%3E%3Ccircle r='14'/%3E%3Ccircle r='3.5' fill='black'/%3E%3C/g%3E%3Cg transform='translate(130 483)'%3E%3Cpath d='M2 -22C-12 -4 -10 12 0 22M2 -22C12 -4 10 12 0 22'/%3E%3C/g%3E%3C/svg%3E"); }
+
+/* the Egyptian border: a gold zigzag between two thin gold lines, as on a temple frieze */
+.band { height: 18px; border-top: 2px solid var(--brand); border-bottom: 2px solid var(--brand); position: relative; }
+.band::before { content: ""; position: absolute; inset: 3px 0; background: var(--brand);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='10'%3E%3Cpath d='M0 10 8 0l8 10z'/%3E%3C/svg%3E") repeat-x left center / 16px 10px;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='10'%3E%3Cpath d='M0 10 8 0l8 10z'/%3E%3C/svg%3E") repeat-x left center / 16px 10px; }
 button, input, textarea, select { font: inherit; color: inherit; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 /* 1-3: the top bar — menu, logo, account */
-header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 14px 24px; border-bottom: 1px solid var(--line); }
+header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 12px 24px; background: var(--bg); }
+footer { background: var(--bg); }
 .icon-btn { width: 44px; height: 44px; display: grid; place-items: center; background: none; border: 1px solid transparent; border-radius: 10px; cursor: pointer; }
 .icon-btn:hover { background: var(--raised); border-color: var(--line); }
 .icon-btn svg { width: 24px; height: 24px; }
-.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
-.brand svg { width: 40px; height: 40px; }
-.brand b { font-size: 18px; letter-spacing: .01em; }
-.brand span { color: var(--dim); font-weight: 400; }
-.account { justify-self: end; border: 1.5px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text); }
+.brand svg { width: 52px; height: 52px; }
+.brand .names { display: flex; flex-direction: column; line-height: 1.15; }
+.brand b { font-family: Cinzel, Georgia, serif; font-size: 19px; font-weight: 700; letter-spacing: .08em; }
+.brand b span { color: var(--brand); }
+.brand .ar { font-family: "Reem Kufi", sans-serif; font-size: 14px; color: var(--brand); }
+.account { justify-self: end; border: 1.5px solid var(--brand); border-radius: 50%; color: var(--brand); }
 
 /* the menu */
 .scrim { position: fixed; inset: 0; background: #0007; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
@@ -56,7 +106,8 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
 
 /* 4: add data */
 .drop { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 4px auto 30px; max-width: 640px; padding: 26px;
-        border: 2px dashed var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color .15s, background .15s; text-align: left; width: 100%; background: none; }
+        border: 2px dashed color-mix(in srgb, var(--brand) 55%, transparent); border-radius: var(--radius); cursor: pointer; transition: border-color .15s, background .15s; text-align: left; width: 100%; background: none; }
+.drop strong { font-family: Cinzel, Georgia, serif; }
 .drop:hover, .drop:focus-visible, .drop.over { border-color: var(--brand); background: var(--brand-soft); outline: none; }
 .drop svg { width: 54px; height: 54px; flex: none; color: var(--brand); }
 .drop strong { display: block; font-size: 26px; font-weight: 700; line-height: 1.15; }
@@ -67,7 +118,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
 .wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .wires path { fill: none; stroke: var(--wire); stroke-width: 2; }
 .wires circle { fill: var(--brand); }
-.col-title { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); font-weight: 600; }
+.col-title { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 15px; text-transform: uppercase; letter-spacing: .1em; color: var(--brand); font-weight: 700; }
 .col-title .count { background: var(--raised); border: 1px solid var(--line); border-radius: 20px; padding: 0 8px; font-size: 12px; letter-spacing: 0; }
 
 .rows { display: flex; flex-direction: column; gap: 14px; }
@@ -90,7 +141,11 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
 .more { margin-top: 12px; background: none; border: 1px dashed var(--line); border-radius: 10px; color: var(--dim); padding: 8px; cursor: pointer; width: 100%; }
 .more:hover { border-color: var(--brand); color: var(--brand); }
 
-.total { background: var(--panel); border: 1px solid var(--line); border-radius: calc(var(--radius) + 4px); padding: 16px; position: sticky; top: 16px; }
+.total { background: var(--panel); border: 2px solid var(--brand); border-radius: calc(var(--radius) + 4px); padding: 20px; position: sticky; top: 16px;
+         box-shadow: inset 0 0 0 5px var(--panel), inset 0 0 0 6px color-mix(in srgb, var(--brand) 60%, transparent); }  /* the double gold frame */
+.row { border-color: color-mix(in srgb, var(--brand) 22%, var(--line)); }
+.row .role option { background: var(--panel); }
+.row:has(.role option[value="part"]:checked) .thumb { border-color: var(--accent); }
 .big-prompt { width: 100%; background: var(--raised); border: 1px solid var(--line); border-radius: 11px; padding: 10px 13px; resize: vertical; min-height: 64px; }
 .stage { margin-top: 14px; aspect-ratio: 4 / 3; border-radius: 12px; background:
          radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--brand) 9%, var(--raised)), var(--raised) 70%);
@@ -105,13 +160,140 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
 .stack .chip svg { width: 34px; height: 34px; color: var(--dim); }
 .stage .caption { position: absolute; left: 12px; bottom: 10px; right: 12px; color: var(--dim); font-size: 13px; text-align: center; }
 .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-.run { background: var(--brand); color: #fff; border: 0; border-radius: 10px; padding: 10px 22px; font-weight: 650; cursor: pointer; }
+.run { background: var(--brand); color: var(--on-brand); border: 0; border-radius: 10px; padding: 10px 22px; font-weight: 650; cursor: pointer; }
 .run:disabled { opacity: .45; cursor: default; }
 .ghost { background: none; border: 1px solid var(--line); border-radius: 10px; padding: 9px 16px; cursor: pointer; }
 .ghost:hover { border-color: var(--dim); }
 .status { color: var(--dim); font-size: 13px; margin-left: auto; }
 
-.toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 30px); opacity: 0; background: var(--ink); color: var(--bg);
+/* a project that runs or ran: its name, the result in the stage, the steps under it */
+.pname { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); margin-bottom: 10px; }
+.pname input { background: var(--raised); border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; }
+.pname input:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+.stage model-viewer, .stage img.result { width: 100%; height: 100%; display: block; }
+.stage img.result { object-fit: contain; }
+.progress { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 3px; font-size: 13px; }
+.progress:empty { display: none; }
+.progress li { display: flex; gap: 8px; color: var(--dim); }
+.progress li.done { color: var(--text); }
+.progress li.running, .progress li.starting, .progress li.failed { color: var(--text); font-weight: 600; }
+.progress li.running .mark, .progress li.starting .mark { animation: pulse 1.2s infinite; }
+.progress .mark { flex: none; width: 16px; text-align: center; }
+.progress small { font-weight: 400; color: var(--dim); }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* ============ developer view: the nodes from top to bottom, a node's details, the edit by hand ============ */
+:root { --mask: 235, 45, 45; }
+.nodes { margin-top: 34px; background: var(--panel); color: var(--text); border: 2px solid var(--brand); border-radius: calc(var(--radius) + 4px); padding: 20px;
+         box-shadow: inset 0 0 0 5px var(--panel), inset 0 0 0 6px color-mix(in srgb, var(--brand) 60%, transparent); }
+.nodes-head { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin-bottom: 18px; }
+.nodes-head h2 { margin: 0 auto 0 0; font-size: 15px; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); }
+.level { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; }
+.down { width: 2px; height: 26px; margin: 2px auto 8px; background: var(--brand); position: relative; }
+.down::after { content: ""; position: absolute; left: -5px; bottom: -6px; border: 6px solid transparent; border-top-color: var(--brand); border-bottom: 0; }
+.ncard { flex: 0 1 330px; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; text-align: left; background: var(--raised);
+         color: var(--text); border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.ncard > b, .ncard > span { grid-column: 1; }
+.said { font-size: 13px; color: var(--dim); }
+.ncard:hover { border-color: var(--brand); }
+.ncard.selected { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand); }
+.ncard.failed { border-style: dashed; border-color: var(--brand); }
+.ncard b { font-family: Cinzel, Georgia, serif; font-size: 14px; letter-spacing: .03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ncard .nstate { font-size: 12px; font-weight: 600; }
+.ncard.waiting .nstate { color: var(--dim); font-weight: 400; }
+.ncard.running .nstate, .ncard.starting .nstate { animation: pulse 1.2s infinite; }
+.ncard .nnote { font-size: 11px; color: var(--dim); line-height: 1.3; max-height: 29px; overflow: hidden; }
+.ncard img { grid-column: 2; grid-row: 1 / span 3; width: 62px; height: 62px; object-fit: cover; border-radius: 8px; background: var(--panel); }
+#detail { margin: 14px 0 6px; }
+.detail { border: 1.5px solid var(--brand); border-radius: 12px; padding: 16px 18px 20px; }
+.detail h2 { font-size: 17px; margin: 0 0 2px; }
+.detail h2 small { color: var(--dim); font-weight: 400; margin-left: 8px; font-family: Inter, system-ui, sans-serif; font-size: 12px; }
+.detail h3 { font-size: 12px; margin: 20px 0 8px; color: var(--brand); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.columns { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px; margin-top: 12px; }
+@media (max-width: 900px) { .columns { grid-template-columns: minmax(0, 1fr); } }
+.facts { font-size: 13px; }
+.facts table { border-collapse: collapse; width: 100%; }
+.facts td { padding: 3px 0; vertical-align: top; }
+.facts td:first-child { color: var(--dim); padding-right: 12px; white-space: nowrap; width: 1%; }
+.facts .path, .scores .path { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
+.facts label { cursor: pointer; }
+.verdict { overflow-wrap: anywhere; border-left: 3px solid var(--brand); background: var(--raised); padding: 8px 12px; border-radius: 0 6px 6px 0; margin: 12px 0 0; }
+.sheet { display: block; max-width: 100%; border-radius: 6px; background: var(--raised); }
+.empty { color: var(--dim); padding: 26px 0; }
+.hint { color: var(--dim); font-size: 12px; margin-top: 6px; max-width: 720px; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 10px; user-select: none; }
+.tools label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.tools .what { color: var(--dim); font-size: 12px; margin-right: -8px; }
+.tabs { display: inline-flex; background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+.tabs button { background: none; border: 0; border-radius: 5px; padding: 4px 11px; cursor: pointer; color: var(--dim); }
+.tabs button.on { background: var(--brand); color: var(--on-brand); }
+.btn { background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 5px 12px; cursor: pointer; text-decoration: none; font-size: 14px; }
+.btn:hover { border-color: var(--brand); }
+.btn.main { background: var(--brand); border-color: var(--brand); color: var(--on-brand); font-weight: 600; }
+.btn.stop { border: 1.5px dashed var(--brand); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.small { padding: 1px 8px; font-size: 12px; margin-top: 3px; }
+.field { width: 100%; background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; }
+.field option { background: var(--panel); }
+.titlebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.titlebar h2 { margin-right: auto; }
+.runlog { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.runlog summary { cursor: pointer; font-weight: 600; }
+.runlog pre { margin: 8px 0 0; font: 11.5px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim); max-height: 260px; overflow: auto; }
+input[type=range], input[type=checkbox] { accent-color: var(--brand); }
+/* before / after */
+.cmp { position: relative; width: 100%; max-width: 720px; aspect-ratio: 1; background: var(--raised); border-radius: 8px; overflow: hidden; cursor: ew-resize; user-select: none; touch-action: pan-y; }
+.cmp:focus-visible, .hstage:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+.cmp img, .cmp canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.cmp .top { position: absolute; inset: 0; background: var(--raised); }
+.cmp canvas { display: none; } .cmp.masked canvas { display: block; }
+.cmp .bar { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px #0006; pointer-events: none; }
+.cmp .knob { position: absolute; top: 50%; left: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; background: #fff; box-shadow: 0 1px 5px #0008; display: grid; place-items: center; color: #222; font-size: 13px; letter-spacing: 2px; }
+.cmp .tag { position: absolute; top: 10px; background: #000a; color: #fff; font-size: 12px; padding: 2px 9px; border-radius: 20px; pointer-events: none; }
+.cmp .tag.l { left: 10px; } .cmp .tag.r { right: 10px; }
+/* the edit by hand: place the part, paint the 2D mask (red = this changes too, blue = this stays) */
+.hstage { position: relative; width: 100%; max-width: 720px; aspect-ratio: 1; background: var(--raised); border-radius: 8px; overflow: hidden; user-select: none; touch-action: none; }
+.hstage > img, .hstage > canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.hstage canvas.paint { opacity: .55; }
+.hstage.made canvas.paint { opacity: .16; }
+.hstage canvas.was { opacity: .22; }
+.hstage .part { position: absolute; cursor: move; outline: 1.5px dashed #fff; box-shadow: 0 0 0 1.5px #0007; }
+.hstage .part img { width: 100%; height: 100%; display: block; pointer-events: none; }
+.hstage .part .grip { position: absolute; right: -9px; bottom: -9px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px #0009; cursor: nwse-resize; }
+.hstage.painting { cursor: crosshair; }
+.hstage.painting .part { pointer-events: none; outline-color: #fff8; }
+.hstage .ring { position: absolute; border: 1.5px solid #fff; box-shadow: 0 0 0 1px #0008; border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%); display: none; }
+.hstage.painting:hover .ring { display: block; }
+.key { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin: 0 4px 0 10px; vertical-align: -1px; }
+.steps { margin: 0 0 12px; padding-left: 20px; max-width: 720px; } .steps li { margin: 2px 0; }
+textarea.hprompt, .detail input[type=number] { width: 100%; background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; resize: vertical; }
+.made { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin-top: 10px; }
+.pick { background: var(--raised); color: var(--text); border: 2px solid var(--line); border-radius: 8px; padding: 0; overflow: hidden; cursor: pointer; text-align: left; }
+.pick.on { border-color: var(--brand); }
+.pick img { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; }
+.pick span { display: block; font-size: 11px; padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* scores, galleries */
+.scores { width: 100%; border-collapse: collapse; font-size: 13px; }
+.scores th, .scores td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.scores th:first-child, .scores td:first-child { text-align: left; padding-left: 0; }
+.scores th { color: var(--dim); font-weight: 500; font-size: 12px; }
+.scores tr.shown td { font-weight: 700; }
+.low { font-weight: 700; text-decoration: underline wavy; }  /* below the limit: no third color, a wavy line */
+.badge { font-size: 11px; background: var(--brand); color: var(--on-brand); border-radius: 20px; padding: 1px 7px; margin-left: 6px; font-weight: 600; }
+.defects { margin: 6px 0 0; padding-left: 18px; } .defects li { margin: 2px 0; }
+.views { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.views figure { margin: 0; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.views a { display: block; aspect-ratio: 1; }
+.views img, .views video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.views figcaption { padding: 6px 8px; font-size: 12px; }
+.views figcaption .sub { color: var(--dim); display: block; }
+.tag2 { display: inline-block; font-size: 10.5px; border: 1px solid var(--line); border-radius: 20px; padding: 0 6px; margin: 3px 4px 0 0; color: var(--dim); }
+.tag2.used { border-color: var(--brand); color: var(--brand); }
+
+footer { margin-top: 20px; }
+footer p { text-align: center; color: var(--dim); font-size: 13px; margin: 14px 16px 22px; }
+footer .ar { font-family: "Reem Kufi", sans-serif; color: var(--brand); }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 30px); opacity: 0; background: var(--brand); color: var(--on-brand);
          padding: 10px 16px; border-radius: 10px; transition: .2s; pointer-events: none; max-width: calc(100vw - 32px); font-size: 14px; z-index: 20; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
@@ -123,17 +305,22 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
   .total { position: static; }
   .drop { padding: 18px; gap: 12px; }
   .drop strong { font-size: 21px; }
-  .brand span { display: none; }
+  .brand .names { display: none; }
 }
 </style>
 </head>
 <body>
 
-<!-- the logo: the S (black / white in the dark) with the red H over it, as in UI-skitch/logo.png -->
+<!-- the logo: the cartouche with SH, after UI-skitch/logo.png — the H's legs are the S's sides, its crossbar the S's spine -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="logo" viewBox="0 0 100 100">
-    <path d="M76 18C52 16 30 20 27 33c-2 10 14 14 25 14s25 4 23 17c-2 14-24 19-51 19" fill="none" stroke="var(--ink)" stroke-width="9" stroke-linecap="round"/>
-    <path d="M26 12v76M74 12v76M26 48c16 5 32-5 48 0" fill="none" stroke="var(--brand)" stroke-width="8" stroke-linecap="round"/>
+  <symbol id="logo" viewBox="0 0 200 200">
+    <rect x="48" y="6" width="104" height="176" rx="52" fill="none" stroke="var(--brand)" stroke-width="6"/>
+    <path d="M56 194 L144 194" stroke="var(--brand)" stroke-width="6" stroke-linecap="round"/>
+    <g transform="translate(100 94) scale(0.56) translate(-100 -100)">
+      <!-- one color, one line width: the S and the H are drawn with the same stroke and share the legs and the middle -->
+      <path d="M150 32 C104 32 56 44 52 86 Q52 100 66 100 L134 100 Q148 100 148 114 C144 156 96 168 50 168" fill="none" stroke="var(--brand)" stroke-width="15" stroke-linecap="round"/>
+      <path d="M50 30 L50 170 M150 30 L150 170 M50 100 L150 100" fill="none" stroke="var(--brand)" stroke-width="15" stroke-linecap="round"/>
+    </g>
   </symbol>
   <symbol id="cube" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7zM3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
   <symbol id="x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
@@ -141,30 +328,37 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
 
 <div class="scrim" id="scrim"></div>
 <nav class="drawer" id="drawer" aria-label="Menu">
-  <a class="brand" href="#" style="padding:4px 10px 10px"><svg><use href="#logo"/></svg><b>Inpainting <span>3D</span></b></a>
+  <a class="brand" href="#" style="padding:4px 10px 10px"><svg><use href="#logo"/></svg><span class="names"><b>INPAINTING <span>3D</span></b><span class="ar" lang="ar" dir="rtl">سامي هاشم</span></span></a>
   <h2>Pages</h2>
   <a class="on" href="/app">Workflow</a>
   <a href="/">Node flows</a>
   <h2>Look</h2>
-  <button class="link" id="theme">Switch light / dark</button>
+  <button class="link" id="theme">Light / dark mode</button>
+  <!-- the user, at the bottom left of the menu -->
+  <button class="user" aria-label="Account">
+    <span class="avatar"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+    <span class="who"><b>Samy Hashem</b><small id="modeName">Friendly user</small></span>
+  </button>
 </nav>
 
 <header>
   <button class="icon-btn" id="menuBtn" aria-label="Open the menu" aria-expanded="false" aria-controls="drawer">
     <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
   </button>
-  <a class="brand" href="#" aria-label="Inpainting 3D"><svg><use href="#logo"/></svg><b>Inpainting <span>3D</span></b></a>
-  <button class="icon-btn account" aria-label="Account" title="Account">
-    <svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  <a class="brand" href="#" aria-label="Inpainting 3D, Samy Hashem"><svg><use href="#logo"/></svg><span class="names"><b>INPAINTING <span>3D</span></b><span class="ar" lang="ar" dir="rtl">سامي هاشم</span></span></a>
+  <!-- the two looks of the site: friendly user (simple) and developer user (every setting) -->
+  <button class="mode" id="mode" role="switch" aria-checked="false" aria-label="Developer mode" title="Switch between the friendly and the developer view">
+    <span class="f">Friendly</span><span class="d">Developer</span>
   </button>
 </header>
+<div class="band" aria-hidden="true"></div>
 
 <main>
   <button class="drop" id="drop" type="button">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-5 5m5-5 5 5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <span><strong>Add data</strong><small>Pictures, a turntable video or a 3D model (.glb) — click, or drop the files here</small></span>
+    <span><strong>Add data</strong><small>Pictures or a turntable video, of the object and of the new part — click, or drop the files here</small></span>
   </button>
-  <input type="file" id="files" class="sr" multiple accept="image/*,video/*,.glb,.gltf,.obj,.ply">
+  <input type="file" id="files" class="sr" multiple accept="image/*,video/*">
 
   <section class="work" id="work">
     <svg class="wires" id="wires" aria-hidden="true"></svg>
@@ -176,9 +370,19 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
 
     <div class="total" id="total">
       <h2 class="col-title">Total workflow</h2>
+      <label class="pname">Project name<input id="projectName" maxlength="40" placeholder="my_project (letters, numbers, _ and -)" autocomplete="off"></label>
       <label class="sr" for="mainPrompt">Prompt for the whole result</label>
       <textarea class="big-prompt" id="mainPrompt" rows="2" placeholder="Prompt for the whole result, e.g. “the girl's head wearing a silver crown with a blue gem”"></textarea>
+      <!-- developer view only: the settings of the base model (the same as the "base" node of a flow) -->
+      <div class="settings dev-only">
+        <label>Seed<input id="setSeed" type="number" value="42" min="0"></label>
+        <label>Steps<input id="setSteps" type="number" value="25" min="1" max="100"></label>
+        <label>Resolution<select id="setResolution"><option>512</option><option selected>1024</option><option>1536</option></select></label>
+        <label>Runs on<select id="setWhere"><option value="server">uni server</option><option value="pc">this PC</option></select></label>
+        <label>Open a project<select id="openProject"><option value="">new project</option></select></label>
+      </div>
       <div class="stage" id="stage"></div>
+      <ol class="progress" id="progress" aria-label="The steps"></ol>
       <div class="actions">
         <button class="run" id="run" disabled>Run</button>
         <button class="ghost" id="clear">Clear all</button>
@@ -186,7 +390,15 @@ main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
       </div>
     </div>
   </section>
+
+  <!-- developer view: the project's nodes from top to bottom; a click opens a node's pictures, settings and the edit by hand -->
+  <section class="nodes dev-only" aria-label="The nodes"><div id="nodes"></div></section>
 </main>
+
+<footer>
+  <div class="band" aria-hidden="true"></div>
+  <p>Inpainting 3D · Samy Hashem · <span class="ar" lang="ar" dir="rtl">سامي هاشم</span> · University of Duisburg-Essen</p>
+</footer>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -203,8 +415,19 @@ $("menuBtn").onclick = () => menu(true);
 $("scrim").onclick = () => menu(false);
 addEventListener("keydown", e => { if (e.key === "Escape") menu(false); });
 try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+// the two views: friendly user (default) and developer user; the choice is kept in this browser
+const setMode = dev => {
+  document.body.dataset.mode = dev ? "dev" : "friendly";
+  $("mode").setAttribute("aria-checked", String(dev));
+  $("modeName").textContent = dev ? "Developer user" : "Friendly user";
+  try { localStorage.setItem("mode", dev ? "dev" : "friendly"); } catch {}
+  requestAnimationFrame(() => typeof wires === "function" && wires());
+};
+$("mode").onclick = () => setMode(document.body.dataset.mode !== "dev");
+let savedMode = null; try { savedMode = localStorage.getItem("mode"); } catch {}
+setMode(savedMode === "dev");
 $("theme").onclick = () => {
-  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
+  const dark = document.documentElement.dataset.theme !== "light";
   document.documentElement.dataset.theme = dark ? "light" : "dark";
   try { localStorage.setItem("theme", document.documentElement.dataset.theme); } catch {}
   wires();
@@ -221,12 +444,12 @@ document.addEventListener("drop", e => add(e.dataTransfer.files));
 function add(files) {
   let skipped = 0;
   for (const file of files) {
-    const kind = file.type.startsWith("image/") ? "picture" : file.type.startsWith("video/") ? "video" : MODEL.test(file.name) ? "model" : null;
+    const kind = file.type.startsWith("image/") ? "picture" : file.type.startsWith("video/") ? "video" : null;
     if (!kind) { skipped++; continue; }
-    items.push({ id: nextId++, file, name: file.name, kind, url: kind === "model" ? null : URL.createObjectURL(file), prompt: "",
+    items.push({ id: nextId++, file, name: file.name, kind, url: URL.createObjectURL(file), prompt: "",
                  role: items.length === 0 ? "object" : "part" });
   }
-  if (skipped) toast(`${skipped} file(s) skipped: only pictures, videos and 3D models`);
+  if (skipped) toast(`${skipped} file(s) skipped: the pipeline reads pictures and videos`);
   render();
 }
 
@@ -238,7 +461,22 @@ function preview(item, tag = "div") {
 }
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// an open project without data on the page: the rows show what it was made from (its input nodes' files)
+function drawInputs() {
+  const files = flow.nodes.filter(n => n.type === "input").flatMap(n => (n.files || []).map(f => ({ ...f, role: n.id === "part" ? "part" : "object",
+    said: (n.settings.prompts || []).find(p => p.startsWith(f.name + ": ")) })));
+  $("count").textContent = files.length;
+  $("rows").replaceChildren(...(files.length ? files.map(f => h("div", { class: "row" },
+    h("div", { class: "thumb" }, f.video ? h("video", { src: f.url, muted: true, preload: "metadata" }) : h("img", { src: f.url, alt: "" }), h("span", { class: "kind" }, f.role)),
+    h("div", { class: "row-main" }, h("div", { class: "row-head" }, h("span", { class: "name", title: f.name }, f.name)),
+      h("div", { class: "said" }, f.said ? f.said.slice(f.name.length + 2) : `the ${f.role} of this project`)),
+    h("span", {})))
+    : [h("div", { class: "empty-rows" }, "This project's input files are not on this computer.")]));
+  requestAnimationFrame(wires);
+}
+
 function render() {
+  if (!items.length && flow) { drawInputs(); return renderStage(); }
   $("count").textContent = items.length;
   const rows = $("rows");
   rows.innerHTML = items.length ? "" : `<div class="empty-rows">Your pictures, videos and models show up here.<br>Give each one its own prompt.</div>`;
@@ -250,7 +488,8 @@ function render() {
       <div class="row-main">
         <div class="row-head">
           <span class="name" title="${esc(item.name)}">${esc(item.name)}</span>
-          <select class="role" aria-label="Role of ${esc(item.name)}" title="object = what is built first, part = what is inpainted onto it">
+          <span class="meta dev-only">${item.file.type || "3D model"} · ${(item.file.size / 1048576).toFixed(1)} MB</span>
+          <select class="role dev-only" aria-label="Role of ${esc(item.name)}" title="object = what is built first, part = what is inpainted onto it">
             <option value="object"${item.role === "object" ? " selected" : ""}>object</option>
             <option value="part"${item.role === "part" ? " selected" : ""}>part</option>
           </select>
@@ -278,7 +517,10 @@ function render() {
 function grow(area) { area.style.height = "auto"; area.style.height = Math.min(area.scrollHeight + 2, 140) + "px"; }
 
 function renderStage() {
+  if (flow) { shown = ""; return drawProject(); }  // a project is open: its result and steps, not the pile of inputs
   const stage = $("stage");
+  $("progress").replaceChildren();
+  $("run").textContent = "Run";
   const objects = items.filter(i => i.role === "object").length, parts = items.length - objects;
   if (!items.length) {
     stage.innerHTML = `<div class="hint"><svg><use href="#cube"/></svg>Every piece of data flows in here. The result of the whole workflow is shown here.</div>`;
@@ -286,7 +528,7 @@ function renderStage() {
     stage.innerHTML = `<div class="stack">${items.slice(0, 6).map(i => `<div class="chip">${preview(i)}</div>`).join("")}</div>
       <div class="caption">${objects} object${objects === 1 ? "" : "s"} · ${parts} part${parts === 1 ? "" : "s"}${items.length > 6 ? ` · +${items.length - 6} more` : ""}</div>`;
   }
-  $("run").disabled = !items.length;
+  $("run").disabled = !items.length && !currentFile;
   $("status").textContent = items.length ? (objects ? "Ready to run" : "Mark one data as the object") : "Add data to start";
 }
 
@@ -299,7 +541,7 @@ function wires() {
   svg.innerHTML = rows.map((row, i) => {
     const r = row.getBoundingClientRect();
     const x0 = r.right - work.left + 6, y0 = r.top - work.top + r.height / 2;
-    const y1 = rows.length === 1 ? (ty0 + ty1) / 2 : ty0 + (ty1 - ty0) * i / (rows.length - 1);
+    const y1 = Math.max(ty0, Math.min(ty1, y0 + (i - (rows.length - 1) / 2) * 6));  // at the row's own height: the panel can be very tall
     const x1 = tx - 6, mid = (x0 + x1) / 2;
     return `<path d="M${x0},${y0} C${mid},${y0} ${mid},${y1} ${x1 - 8},${y1}"/>
             <path d="M${x1 - 14},${y1 - 6} L${x1 - 6},${y1} L${x1 - 14},${y1 + 6}" stroke-linecap="round" stroke-linejoin="round"/>
@@ -310,17 +552,787 @@ new ResizeObserver(wires).observe($("work"));
 addEventListener("scroll", wires, { passive: true });
 
 // ---------------------------------------------------------------- run
-$("clear").onclick = () => { if (!items.length || confirm("Remove all data?")) { items.forEach(i => i.url && URL.revokeObjectURL(i.url)); items.length = 0; render(); } };
-$("run").onclick = () => {
-  if (!items.some(i => i.role === "object")) return toast("Mark one of your data as the object first");
-  // not wired to the pipeline yet: this is where the page will send the data, the prompts and the main prompt to flow_page.py
-  toast("Run is not connected to the pipeline yet — the design comes first");
+//
+// The back end is scripts/pipeline/flow_page.py (http://127.0.0.1:8777). Run sends the data there (POST /api/upload),
+// has a flow file written from it (POST /api/app/create), starts flow.py for it (POST /api/run) and then follows the
+// flow (GET /api/flow) every few seconds: the steps, and the newest model in 3D.
+
+const online = /^https?:$/.test(location.protocol);
+const OFFLINE = "This page was opened as a file, so nothing can run. Start the back end (python scripts/pipeline/flow_page.py) and open http://127.0.0.1:8777/app";
+let currentFile = null, flow = null, selected = null, timer = null, lastText = "", shown = "";
+let draft = null;  // settings of a node that are changed but not saved: {node, values}
+let hand = null;   // the edit by hand that is open: {node, side, place, layers, tool, brush, ...}
+const view = { group: 0, side: 0, left: "before", position: 50, mask: false };  // what the before / after slider shows
+const detailBox = h("div", { id: "detail" }), serverBox = h("div", {});
+
+function h(tag, props = {}, ...kids) {
+  const element = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (value == null || value === false) continue;
+    if (key === "class") element.className = value;
+    else if (key === "style") element.style.cssText = value;
+    else if (key.startsWith("on")) element.addEventListener(key.slice(2), value);
+    else element.setAttribute(key, value === true ? "" : value);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    element.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return element;
+}
+const node = id => flow.nodes.find(n => n.id === id);
+const busy = () => !!flow && (flow.running || !!(flow.run && flow.run.active));
+async function answerOf(response) {
+  let data;
+  try { data = await response.json(); } catch { throw new Error(`the server answered ${response.status}`); }
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+const get = async address => answerOf(await fetch(address));
+const send = async (address, body) => answerOf(await fetch(address, { method: "POST", headers: { "Content-Type": "application/json", "X-Flow-Page": "1" }, body: JSON.stringify(body) }));
+const post = async (address, body) => { await send(address, body); lastText = ""; await load(); };
+const upload = async (file, role, name, blob) => (await answerOf(await fetch(
+  `/api/upload?flow=${encodeURIComponent(file)}&role=${role}&name=${encodeURIComponent(name)}`,
+  { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Flow-Page": "1" }, body: blob }))).path;
+const problem = text => { if (text) toast(text, 9000); };
+
+// ---------------------------------------------------------------- a project = a flow file of the back end
+
+function openProject(file) {
+  clearTimeout(timer);
+  Object.assign(view, { group: 0, side: 0, left: "before" });
+  currentFile = file; flow = null; selected = null; hand = null; draft = null; lastText = ""; shown = "";
+  try { localStorage.setItem("project", file); } catch {}
+  $("status").textContent = `Opening ${file}…`;
+  return load();
+}
+
+function closeProject() {
+  clearTimeout(timer);
+  currentFile = null; flow = null; selected = null; hand = null; draft = null; lastText = ""; shown = "";
+  try { localStorage.removeItem("project"); } catch {}
+  $("openProject").value = "";
+  render(); drawNodes();
+}
+
+async function fillProjects() {
+  try {
+    const list = await get("/api/flows");
+    $("openProject").replaceChildren(h("option", { value: "" }, "new project"), ...list.map(f => h("option", { value: f.file }, `${f.name} (${f.nodes} nodes)`)));
+    $("openProject").value = currentFile || "";
+  } catch (error) { problem(`The back end doesn't answer: ${error.message}`); }
+}
+$("openProject").onchange = event => event.target.value ? openProject(event.target.value) : closeProject();
+
+async function load() {
+  clearTimeout(timer);
+  if (!currentFile) return;
+  try {
+    const data = await get(`/api/flow?name=${encodeURIComponent(currentFile)}`);
+    const text = JSON.stringify({ ...data, time: 0 });
+    const same = text === lastText;
+    const first = !flow;
+    lastText = text; flow = data;
+    if (first) {  // a project was opened: its prompt and the base model's settings go into the fields
+      if (flow.prompt) $("mainPrompt").value = flow.prompt;
+      const base = flow.nodes.find(n => n.type === "base");
+      if (base) for (const [field, key] of [["setSeed", "seed"], ["setSteps", "steps"], ["setResolution", "resolution"], ["setWhere", "where"]])
+        $(field).value = String(key in base.settings ? base.settings[key] : base.defaults[key]);
+    }
+    if (!selected || !node(selected)) selected = pickFirst();
+    if ($("openProject").value !== currentFile) { await fillProjects(); }
+    if (flow.app && !$("projectName").value) $("projectName").value = flow.file;
+    if (!same) { drawProject(); if (hand) handLive(); else drawNodes(); }
+  } catch (error) {
+    if (/^no flow /.test(error.message)) return closeProject();
+    $("status").textContent = `The back end doesn't answer: ${error.message}`;
+  }
+  timer = setTimeout(load, flow && (busy() || flow.painting) ? 3000 : 20000);
+}
+
+// the node to open first: the last one that has something to compare, else the last one that is done
+function pickFirst() {
+  const done = flow.nodes.filter(n => n.status === "done");
+  return ([...done].reverse().find(n => n.compare) || done[done.length - 1] || flow.nodes[0]).id;
+}
+
+// ---------------------------------------------------------------- the friendly view of a project: result and steps
+
+const MARK = { done: "✓", running: "●", starting: "●", failed: "✕", waiting: "○" };
+
+function friendly(n) {
+  const step = n.settings.step || "shape";
+  return { input: n.id === "part" ? "Your part" : "Your object",
+           data_sheet: n.settings.role === "part" ? "Looking at the part" : "Looking at the object",
+           base: "Building the 3D model", pick_seed: "Choosing the best model", edit: "Placing the new part",
+           inpaint: `Inpainting the ${step}`, judge: `Checking the ${step}` }[n.type] || n.label;
+}
+
+function drawProject() {
+  const stage = $("stage"), back = [...flow.nodes].reverse();
+  const model = customElements.get("model-viewer") && back.find(n => n.status === "done" && n.model_url);
+  const picture = back.find(n => n.status === "done" && n.picture && n.type !== "input");
+  const key = model ? "m" + model.model_url : picture ? "p" + picture.picture : "none" + busy();
+  if (key !== shown) {  // only when it changed: the 3D view is not started again every few seconds
+    shown = key;
+    stage.replaceChildren(
+      model ? h("model-viewer", { src: model.model_url, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "0.5",
+                                  alt: `The 3D model after: ${friendly(model)}` })
+      : picture ? h("img", { class: "result", src: picture.picture, alt: `The result of: ${friendly(picture)}` })
+      : h("div", { class: "hint" }, busy() ? "Working on it. The result shows here as soon as the first step is done." : "Nothing is made yet. Press Run."),
+      h("div", { class: "caption" }, model ? `${friendly(model)} · drag to turn it` : picture ? friendly(picture) : ""));
+  }
+  $("progress").replaceChildren(...flow.nodes.map(n => h("li", { class: n.status },
+    h("span", { class: "mark", "aria-hidden": "true" }, MARK[n.status] || "○"),
+    h("span", {}, friendly(n), n.minutes ? ` · ${n.minutes} min` : "",
+      n.status === "failed" && h("small", { class: "friendly-only" }, " did not work. The developer view shows why."),
+      (n.status === "running" || n.status === "failed") && n.note ? h("small", { class: n.status === "failed" ? "dev-only" : "" }, ` ${n.note}`) : ""))));
+  const running = flow.nodes.find(n => n.status === "running" || n.status === "starting"), failed = flow.nodes.find(n => n.status === "failed");
+  const left = flow.nodes.filter(n => n.status !== "done").length;
+  $("status").textContent = busy() ? `Running: ${running ? friendly(running) : "starting"}` : failed ? `Stopped at: ${friendly(failed)}`
+    : left ? `${flow.nodes.length - left} of ${flow.nodes.length} steps done` : "Done";
+  $("run").textContent = busy() ? "Stop" : "Run";
+  $("run").disabled = false;
+  if (!items.length) drawInputs();
+}
+customElements.whenDefined("model-viewer").then(() => { if (flow) drawProject(); });
+
+// ---------------------------------------------------------------- run and stop
+
+// the node and everything it needs
+function needed(id, found = new Set()) {
+  if (!found.has(id)) { found.add(id); Object.values(node(id).inputs).flat().forEach(source => needed(source, found)); }
+  return found;
+}
+
+// Run. With data on the page: upload it, have the flow file written, run it. asIs / upto: the open project as it is.
+// Before anything is sent to the uni GPU server the user says yes to it, never the page by itself.
+async function start(upto = null, asIs = false) {
+  if (!online) return toast(OFFLINE, 12000);
+  try {
+    let file = currentFile;
+    if (items.length && !upto && !asIs) {
+      if (!items.some(i => i.role === "object")) return toast("One of your data must be the object: the model is built from it (developer view: object / part)");
+      const typed = $("projectName").value.trim();
+      if (typed && !/^[A-Za-z0-9_-]{1,40}$/.test(typed)) return toast("A project name has only letters, numbers, _ and -");
+      const now = new Date(), two = v => String(v).padStart(2, "0");
+      file = typed || (flow && flow.app ? currentFile : `project_${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}_${two(now.getHours())}${two(now.getMinutes())}`);
+      const settings = { seed: Number($("setSeed").value), steps: Number($("setSteps").value), resolution: $("setResolution").value, where: $("setWhere").value };
+      const parts = items.some(i => i.role === "part");
+      const onServer = [settings.where === "server" && "the base model", parts && "the inpainting steps"].filter(Boolean).join(" and ");
+      if (onServer && !confirm(`This uses the uni GPU server (TRELLIS.2) for ${onServer}.\n\nRun the project “${file}”?`)) return;
+      $("run").disabled = true;
+      const taken = { object: new Set(), part: new Set() }, sent = [];
+      for (const [k, item] of items.entries()) {
+        let name = item.name.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^\.+/, "");
+        if (taken[item.role].has(name)) name = `${k}_${name}`;
+        taken[item.role].add(name);
+        const key = [file, item.role, name, item.file.size, item.file.lastModified].join("/");
+        if (item.sent !== key) {
+          $("status").textContent = `Uploading ${k + 1} of ${items.length}: ${item.name}`;
+          item.path = await upload(file, item.role, name, item.file);
+          item.sent = key;
+        }
+        sent.push({ path: item.path, role: item.role, prompt: item.prompt });
+      }
+      $("status").textContent = "Writing the flow…";
+      await send("/api/app/create", { flow: file, prompt: $("mainPrompt").value, items: sent, settings });
+      if (file !== currentFile) { currentFile = file; flow = null; selected = null; hand = null; draft = null; shown = ""; }
+      try { localStorage.setItem("project", file); } catch {}
+      $("projectName").value = file;
+      lastText = "";
+      await load();  // the project is open from here on, also when the run can't be started
+    } else {
+      if (!flow) return toast("Add data first" + (document.body.dataset.mode === "dev" ? ", or open a project" : ""));
+      const ids = upto ? [...needed(upto)] : flow.nodes.map(n => n.id);
+      const todo = ids.map(node).filter(n => n.status !== "done");
+      if (!todo.length) return toast("Everything there is done already: a node with the same settings and inputs is never computed twice.");
+      const server = todo.filter(n => (n.type === "base" || n.type === "inpaint") && (n.settings.where || "server") === "server");
+      if (server.length && !confirm(`This uses the uni GPU server for ${server.length} node(s):\n${server.map(n => "  " + n.label + " (" + n.id + ")").join("\n")}\n\nRun it?`)) return;
+    }
+    await send("/api/run", { flow: file, upto });
+    lastText = "";
+    await load();
+  } catch (error) {
+    problem(`The run did not start: ${error.message}`);
+    renderStage();
+  }
+}
+
+async function stop() { try { await post("/api/stop", { flow: currentFile }); } catch (error) { problem(error.message); } }
+
+$("run").onclick = () => busy() ? stop() : start();
+$("clear").onclick = () => {
+  if ((items.length || currentFile) && !confirm(currentFile ? "Take the data off the page and close the project? Its results stay on disk." : "Remove all data?")) return;
+  items.forEach(i => i.url && URL.revokeObjectURL(i.url));
+  items.length = 0;
+  $("projectName").value = "";
+  closeProject();
 };
 
+// ---------------------------------------------------------------- developer view: the nodes, from top to bottom
+
+function card(n) {
+  return h("button", { class: `ncard ${n.status}${n.id === selected ? " selected" : ""}`, onclick: () => choose(n.id), title: n.id, "aria-pressed": String(n.id === selected) },
+    h("b", {}, n.label, n.type === "data_sheet" && n.settings.role ? `: ${n.settings.role}` : ""),
+    h("span", { class: "nstate" }, `${MARK[n.status] || "○"} ${n.status}`, n.minutes ? ` · ${n.minutes} min` : "", n.where ? ` · ${n.where}` : ""),
+    h("span", { class: "nnote" }, n.note || ""),
+    n.picture && h("img", { src: n.picture, alt: "", loading: "lazy" }));
+}
+
+function drawNodes() {
+  const place = $("nodes");
+  if (!flow) return place.replaceChildren(h("div", { class: "nodes-head" }, h("h2", {}, "The nodes")),
+    h("p", { class: "hint", style: "max-width:none" }, online ? "Run a project, or open one under “Open a project” above: its nodes show here, from top to bottom." : OFFLINE));
+  const levels = [];
+  for (const n of flow.nodes) (levels[n.column] = levels[n.column] || []).push(n);
+  const last = flow.run, active = last && last.active;
+  const parts = [h("div", { class: "nodes-head" }, h("h2", {}, `The nodes of ${flow.name}`),
+    active ? h("button", { class: "btn stop", onclick: stop }, "Stop the run")
+           : h("button", { class: "btn", disabled: flow.running, onclick: () => start(null, true), title: "Every node that is not done yet, in order" }, "Run the whole flow"),
+    h("button", { class: "btn", onclick: () => showServer(false), title: "The jobs on the uni GPU server and how far they are" }, "Uni server"))];
+  levels.forEach((level, index) => {
+    if (index) parts.push(h("div", { class: "down", "aria-hidden": "true" }));
+    parts.push(h("div", { class: "level" }, level.map(card)));
+    if (level.some(n => n.id === selected)) parts.push(detailBox);
+  });
+  if (last) parts.push(h("details", { class: "runlog", open: last.active || last.code !== 0 },
+    h("summary", {}, last.active ? `Running since ${last.started}` + (last.upto ? `, up to ${node(last.upto) ? node(last.upto).label : last.upto}` : "")
+                     : last.code === 0 ? `The last run (${last.started}) is done` : `The last run (${last.started}) stopped or failed`),
+    h("pre", {}, last.log.join("\n"))));
+  parts.push(serverBox);
+  place.replaceChildren(...parts);
+  if (!hand && !draft) drawDetail();
+}
+
+function choose(id) {
+  if (hand && hand.changed && !confirm("Leave the edit by hand? What you changed there is not applied yet.")) return;
+  if (draft && !confirm("Leave this node? Its changed settings are not saved yet.")) return;
+  hand = null; draft = null;
+  selected = id;
+  Object.assign(view, { group: 0, side: 0, left: "before" });
+  drawNodes();
+  detailBox.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+// the jobs on the uni server: only read when asked for (it goes through the cloud)
+let serverShown = false;
+async function showServer(again, all) {
+  if (!again && serverShown) { serverShown = false; return serverBox.replaceChildren(); }
+  serverShown = true;
+  serverBox.replaceChildren(h("div", { class: "runlog" }, all ? "Reading every job on the uni server through the cloud, this takes over a minute…"
+                                                                : "Reading this flow's jobs on the uni server through the cloud…"));
+  let content;
+  try {
+    const data = await get(all ? "/api/server?all" : `/api/server?flow=${encodeURIComponent(flow.file)}`);
+    const mine = new Map(flow.nodes.filter(n => n.server_job).map(n => [n.server_job, n]));
+    const left = { style: "text-align:left" };
+    content = [h("div", { class: "titlebar" }, h("b", { style: "margin-right:auto" }, `Uni server: ${data.jobs.length} job(s) ${all ? "in all" : "of this flow"}, read ${data.read}`),
+                 h("button", { class: "btn small", onclick: () => showServer(true, all) }, "Read again"),
+                 !all && h("button", { class: "btn small", title: "Every job in the cloud, also of other flows; takes over a minute", onclick: () => showServer(true, true) }, "All jobs"),
+                 h("button", { class: "btn small", onclick: () => showServer(false) }, "Close")),
+      data.jobs.length ? h("table", { class: "scores", style: "margin-top:8px" },
+        h("tr", {}, h("th", {}, "Job"), h("th", left, "State"), h("th", left, "Since"), h("th", left, "Message"), h("th", left, "Node here")),
+        [...data.jobs].reverse().map(job => h("tr", { class: mine.has(job.job) ? "shown" : "" },
+          h("td", { class: "path" }, job.job), h("td", left, job.state), h("td", left, job.time), h("td", left, job.message),
+          h("td", left, mine.has(job.job) ? h("button", { class: "btn small", onclick: () => choose(mine.get(job.job).id) }, mine.get(job.job).label) : ""))))
+      : h("pre", {}, data.text || "No jobs in the cloud.")];
+  } catch (error) { content = [h("span", { class: "low" }, error.message), " ", h("button", { class: "btn small", onclick: () => showServer(false) }, "Close")]; }
+  if (serverShown) serverBox.replaceChildren(h("div", { class: "runlog" }, content));
+}
+
+// ---------------------------------------------------------------- the selected node
+
+function drawDetail() {
+  const n = node(selected);
+  const left = h("div", {});
+  if (n.compare && n.compare.groups.some(g => g.sides.length)) left.append(compare(n));
+  if (n.sheet) left.append(sheetViews(n.sheet));
+  if (n.files) left.append(h("h3", {}, "The files"), gallery(n.files.map(f => ({ ...f, caption: f.name }))));
+  if (n.picture && !n.files) left.append(h("h3", {}, n.compare ? "All sides at a glance" : "Result"),
+    h("a", { href: n.picture, target: "_blank" }, h("img", { class: "sheet", src: n.picture, alt: `Result picture of ${n.label}` })));
+  if (n.area_map) left.append(h("h3", {}, "The 3D area"),
+    h("a", { href: n.area_map, target: "_blank" }, h("img", { class: "sheet", src: n.area_map, alt: "The area's small cubes: keep, delete, edit" })));
+  if (!left.children.length) left.append(h("div", { class: "empty" }, emptyText(n)));
+
+  const buttons = [];
+  if (n.hand) buttons.push(h("button", { class: "btn main", disabled: busy(), onclick: () => openHand(n), title: "Place the part, paint the 2D mask, or describe the part with a prompt" }, "Edit by hand (mask)"));
+  if (n.status !== "done") buttons.push(h("button", { class: "btn main", disabled: busy(), onclick: () => start(n.id) }, "Run up to here"));
+  detailBox.replaceChildren(h("section", { class: "detail" },
+    h("div", { class: "titlebar" }, h("h2", {}, n.label, h("small", {}, n.id)), buttons),
+    h("div", { class: "columns" }, left, facts(n))));
+}
+
+function emptyText(n) {
+  if (n.status === "running" || n.status === "starting") return "This node is running. Its result shows here when it is done.";
+  if (n.status === "failed") return "This node failed in the last run, see the note on the right.";
+  const missing = Object.values(n.inputs).flat().filter(id => node(id).status !== "done").map(id => node(id).label);
+  return missing.length ? `No result yet. It waits for: ${missing.join(", ")}.` : "No result yet. Its inputs are ready, so it runs with the next flow run.";
+}
+
+function facts(n) {
+  const rows = [["State", `${MARK[n.status] || "○"} ${n.status}`, n.minutes ? ` · ${n.minutes} min` : ""],
+                ["Runs on", n.where || "nothing to run"]];
+  for (const [socket, sources] of Object.entries(n.inputs)) rows.push([`In: ${socket}`, sources.map(id => node(id).label).join(", ")]);
+  const byHand = ["place", "side", "hand", "after"];  // set in "Edit by hand", shown there
+  for (const [key, value] of Object.entries(n.settings))
+    if (!(key in n.defaults) && !byHand.includes(key)) rows.push([key, Array.isArray(value) ? value.join("; ") : String(value)]);
+  for (const key of Object.keys(n.defaults)) rows.push([h("label", { for: "set_" + key, title: (NAMES[key] || [])[1] || "" }, (NAMES[key] || [key])[0]), setting(n, key)]);
+  if (n.hand) rows.push(["Placed", n.hand.by_hand ? "by hand" : "measured"],
+    ["Part", `left ${n.hand.part[0]}, top ${n.hand.part[1]}, ${n.hand.part[2]} × ${n.hand.part[3]} px`],
+    ["3D area", `${n.hand.cubes.edit} cubes empty room, ${n.hand.cubes.delete} old surface, ${n.hand.cubes.keep} kept`]);
+  // Blender: a model opens in a new Blender window; there the Inpaint add-on (blender/inpaint_addon.py) goes on with it
+  const blender = path => h("button", { class: "btn small", title: "A new Blender window with only this model; the Inpaint add-on works on it there",
+    onclick: async event => { event.target.disabled = true; try { await send("/api/blender", { model: path }); } catch (error) { problem(error.message); } setTimeout(() => { event.target.disabled = false; }, 4000); } }, "Open in Blender");
+  if (n.model) rows.push(["Model", h("span", { class: "path" }, n.model), " ", blender(n.model)]);
+  if (n.models) rows.push(["Candidates", n.models.map(m => h("div", {}, m.label, " ", blender(m.path)))]);
+  if (n.folder) rows.push(["Folder", h("span", { class: "path" }, n.folder)]);
+  const box = h("div", { class: "facts" }, h("table", {}, rows.map(([name, ...value]) => h("tr", {}, h("td", {}, name), h("td", {}, value)))));
+  if (draft && draft.node === n.id) box.append(h("div", { class: "tools", style: "margin-top:10px" },
+    h("button", { class: "btn main", disabled: busy(), onclick: async () => {
+      try { const values = draft.values; await send("/api/settings", { flow: flow.file, node: n.id, settings: values }); draft = null; lastText = ""; await load(); }
+      catch (error) { problem(error.message); } } }, "Save settings"),
+    h("button", { class: "btn", onclick: () => { draft = null; drawDetail(); } }, "Undo"),
+    h("span", { class: "hint", style: "margin:0" }, "New settings give this node and the ones after it a new result; the old results stay on disk.")));
+  if (n.note && n.note !== n.verdict) box.append(h("p", { class: "verdict" }, n.note));
+  if (n.verdict) box.append(h("p", { class: "verdict" }, h("b", {}, "Judge: "), n.verdict));
+  if (n.sheet) box.append(h("h3", {}, "What the local AI saw"), h("p", {}, n.sheet.what || "nothing said"),
+    h("ul", { class: "defects" }, n.sheet.why.map(line => h("li", {}, line))));
+  return box;
+}
+
+// the settings in words: [name, what it does]
+const NAMES = {
+  files: ["Files", "Pictures, videos or folders, one per line, from the project folder"],
+  role: ["Role", "object = what is built first, part = what is inpainted onto it"],
+  frames: ["Frames per video", "How many frames of a video are looked at"],
+  ai: ["Local AI looks too", "Off: only what is measured"],
+  seed: ["Seed", "Another seed gives another model from the same pictures"],
+  seeds: ["Seeds", "One candidate per seed, e.g. 1, 2, 3"],
+  where: ["Runs on", "server = the uni GPU server, pc = this PC"],
+  mode: ["Mode", "How several pictures are used together"],
+  resolution: ["Resolution", "512, 1024 or 1536"],
+  steps: ["Steps", "More steps take longer"],
+  replace: ["Replace the surface", "The model's surface under the 2D mask is deleted and made new"],
+  width: ["Part's width", "Share of the top of the object (measured place)"],
+  sink: ["Sunk in", "Share of the part's height pushed down into the object (measured place)"],
+  head: ["Top of the object", "What counts as the top: share of the object's height"],
+  fit: ["Fit", "between = into the free gap between things standing up, over = over them"],
+  keep_min: ["Kept at least", "Below this the judge says redo (0 to 100)"],
+  part_min: ["Part at least", "Below this the judge says redo (0 to 100)"],
+};
+
+// one setting of a node as something to change: a tick, a choice, a number or text (lists: numbers with commas)
+function setting(n, key) {
+  const standard = n.defaults[key];
+  const saved = key in n.settings ? n.settings[key] : standard;
+  const value = draft && draft.node === n.id && key in draft.values ? draft.values[key] : saved;
+  const change = (now, redraw) => {
+    if (!draft || draft.node !== n.id) draft = { node: n.id, values: {} };
+    draft.values[key] = now;
+    if (JSON.stringify(now) === JSON.stringify(saved)) delete draft.values[key];
+    const before = !!detailBox.querySelector(".facts .btn.main");
+    if (!Object.keys(draft.values).length) draft = null;
+    if (redraw || before !== !!draft) {
+      const at = document.activeElement && document.activeElement.id;
+      drawDetail();
+      const again = at && document.getElementById(at);
+      if (again) { again.focus(); if (again.setSelectionRange && again.type === "text") again.setSelectionRange(again.value.length, again.value.length); }
+    }
+  };
+  const id = "set_" + key;
+  if (typeof standard === "boolean") return h("input", { id, type: "checkbox", checked: value, onchange: event => change(event.target.checked, true) });
+  if (flow.choices[key]) return h("select", { id, class: "field", onchange: event => change(event.target.value, true) },
+    flow.choices[key].map(choice => h("option", { value: choice, selected: choice === value }, choice)));
+  if (Array.isArray(standard)) return h(key === "files" ? "textarea" : "input", { id, class: "field", type: "text", rows: "2", value: key === "files" ? null : value.join(", "),
+    title: key === "files" ? "One file or folder per line, from the project folder" : "Numbers with commas, e.g. 1, 2, 3",
+    oninput: event => change(key === "files" ? event.target.value.split(/\n/).map(v => v.trim()).filter(Boolean) : event.target.value.split(/[,;\s]+/).filter(Boolean).map(Number)) },
+    key === "files" ? value.join("\n") : null);
+  if (typeof standard === "number") return h("input", { id, class: "field", type: "text", inputmode: "decimal", value: String(value),
+    oninput: event => change(event.target.value === "" || isNaN(Number(event.target.value)) ? event.target.value : Number(event.target.value)) });
+  return h("input", { id, class: "field", type: "text", value: String(value), oninput: event => change(event.target.value) });
+}
+
+// ---------------------------------------------------------------- before / after
+
+function compare(n) {
+  const groups = n.compare.groups.filter(g => g.sides.length);
+  view.group = Math.min(view.group, groups.length - 1);
+  const group = groups[view.group];
+  view.side = Math.min(view.side, group.sides.length - 1);
+  const side = group.sides[view.side];
+  if (!side.plan) view.left = "before";
+  if (!side.mask) view.mask = false;
+  const again = change => () => { Object.assign(view, change); drawDetail(); };
+  const tabs = (list, current, key, label) => h("div", { class: "tabs", role: "group", "aria-label": label },
+    list.map((text, index) => h("button", { class: index === current ? "on" : "", onclick: again({ [key]: index }) }, text)));
+
+  const tools = h("div", { class: "tools" });
+  if (groups.length > 1) tools.append(h("span", { class: "what" }, "Candidate"),
+    tabs(groups.map(g => g.name + (g.best ? " ★" : "")), view.group, "group", "Candidate"));
+  tools.append(h("span", { class: "what" }, "Side"), tabs(group.sides.map(s => s.name.replace("Side ", "")), view.side, "side", "Side"));
+  if (side.plan) tools.append(h("span", { class: "what" }, "Left"), h("div", { class: "tabs", role: "group", "aria-label": "Left picture" },
+    h("button", { class: view.left === "before" ? "on" : "", onclick: again({ left: "before" }) }, n.compare.left),
+    h("button", { class: view.left === "plan" ? "on" : "", onclick: again({ left: "plan" }) }, "Plan")));
+
+  const leftName = view.left === "plan" ? "Plan" : n.compare.left;
+  const box = slider(view.left === "plan" ? side.plan : side.before, side.after, leftName, n.compare.right, side.mask);
+  if (side.mask) tools.append(h("label", {},
+    h("input", { type: "checkbox", checked: view.mask, onchange: event => { view.mask = event.target.checked; box.classList.toggle("masked", view.mask); } }),
+    "Show the edit's area in red"));
+
+  const out = h("div", {}, tools, box,
+    h("div", { class: "hint" }, `Drag the line, or use the arrow keys: ${leftName.toLowerCase()} on the left, ${n.compare.right.toLowerCase()} on the right.`));
+  if (groups.some(g => g.scores)) out.append(h("h3", {}, "What the judge measured"), scores(n.compare, groups, side.name));
+  return out;
+}
+
+function slider(leftPicture, rightPicture, leftName, rightName, mask) {
+  const top = h("div", { class: "top" }, h("img", { src: leftPicture, alt: leftName, draggable: "false" }));
+  const right = h("img", { src: rightPicture, alt: rightName, draggable: "false" });
+  const canvas = h("canvas", {});
+  const bar = h("div", { class: "bar" }, h("div", { class: "knob" }, "‹›"));
+  const box = h("div", { class: "cmp" + (view.mask && mask ? " masked" : ""), tabindex: "0", role: "slider", "aria-valuemin": "0", "aria-valuemax": "100",
+                         "aria-label": `${leftName} and ${rightName}: how much of ${leftName} shows` },
+    right, top, canvas, bar, h("span", { class: "tag l" }, leftName), h("span", { class: "tag r" }, rightName));
+  const set = position => {
+    view.position = Math.max(0, Math.min(100, position));
+    top.style.clipPath = `inset(0 ${100 - view.position}% 0 0)`;
+    bar.style.left = view.position + "%";
+    box.setAttribute("aria-valuenow", String(Math.round(view.position)));
+  };
+  const under = event => { const frame = box.getBoundingClientRect(); set((event.clientX - frame.left) / frame.width * 100); };
+  box.addEventListener("pointerdown", event => { box.setPointerCapture(event.pointerId); under(event); box.onpointermove = under; });
+  for (const end of ["pointerup", "pointercancel"]) box.addEventListener(end, () => { box.onpointermove = null; });
+  box.addEventListener("keydown", event => {
+    const step = { ArrowLeft: -2, ArrowRight: 2, Home: -100, End: 100 }[event.key];
+    if (step) { set(view.position + step); event.preventDefault(); }
+  });
+  right.addEventListener("load", () => { box.style.aspectRatio = `${right.naturalWidth} / ${right.naturalHeight}`; });
+  if (mask) paintMask(canvas, mask);
+  set(view.position);
+  return box;
+}
+
+// the 2D mask (white = changed) as see-through red
+function paintMask(canvas, address) {
+  const picture = new Image();
+  picture.onload = () => {
+    canvas.width = picture.naturalWidth;
+    canvas.height = picture.naturalHeight;
+    const context = canvas.getContext("2d");
+    context.drawImage(picture, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    const [red, green, blue] = getComputedStyle(document.documentElement).getPropertyValue("--mask").split(",").map(Number);
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      pixels.data[i + 3] = pixels.data[i] * 0.5;
+      pixels.data[i] = red; pixels.data[i + 1] = green; pixels.data[i + 2] = blue;
+    }
+    context.putImageData(pixels, 0, 0);
+  };
+  picture.src = address;
+}
+
+function scores(compared, groups, sideName) {
+  const limits = compared.limits || {};
+  const low = (value, limit) => (limit != null && value != null && value < limit) ? "low" : "";
+  const cell = (value, limit) => h("td", { class: low(value, limit) }, value == null ? "–" : value);
+  const table = h("table", { class: "scores" },
+    h("tr", {}, h("th", {}, "Candidate"), h("th", { title: "Outside the area the model must stay the original" }, "Kept"),
+      h("th", { title: "Inside the mask the new part must be there" }, "Part"), h("th", { title: "Colours inside the mask against the plan" }, "Colour"),
+      h("th", { title: "The lower of kept and part" }, "Measured"), h("th", { title: "The local vision AI, 1 to 10" }, "AI")),
+    groups.map((g, index) => h("tr", { class: index === view.group ? "shown" : "" },
+      h("td", {}, g.name, g.best && h("span", { class: "badge" }, "best")),
+      cell(g.scores.kept, limits.keep_min ?? limits.kept), cell(g.scores.part, limits.part_min ?? limits.part), cell(g.scores.colour),
+      cell(g.scores.measured), h("td", {}, g.ai && g.ai.score != null ? `${g.ai.score}/10` : "–"))));
+  const group = groups[view.group];
+  const side = group.sides[view.side];
+  const out = h("div", {}, table);
+  if (side.scores && Object.keys(side.scores).length) out.append(h("p", { class: "hint" },
+    `${sideName} of ${group.name}: ` + Object.entries(side.scores).map(([name, value]) => `${name} ${value}`).join(", ") + ". All out of 100; the table is the mean of the four sides. A wavy line: below the limit."));
+  if (group.ai && (group.ai.why || (group.ai.defects || []).length)) out.append(
+    h("p", {}, h("b", {}, `The local AI on ${group.name}: `), group.ai.why || ""),
+    h("ul", { class: "defects" }, (group.ai.defects || []).map(defect => h("li", {}, defect))));
+  return out;
+}
+
+// ---------------------------------------------------------------- the edit by hand (the user's mask)
+//
+// The part is placed on the edit's main side (drag it, pull the corner); the other sides follow from its place in 3D.
+// The 2D mask of every side can be corrected with a brush or the tablet's pen: red = this changes too, blue = this stays.
+// Everything is in the pixels of the side's picture (as make_edit.py --place and --hand want it).
+// Red and blue are the only colors beside sand and black: they lie on a picture and must not be mistaken for it.
+
+const RED = "rgb(235,45,45)", BLUE = "rgb(40,120,255)";
+
+function loadPicture(address) {
+  return new Promise((resolve, reject) => { const picture = new Image(); picture.onload = () => resolve(picture); picture.onerror = reject; picture.src = address; });
+}
+
+function sheetOf(size) { const canvas = document.createElement("canvas"); canvas.width = canvas.height = size; return canvas; }
+
+// the part cut out of the plan, when the edit was made before the cut-outs were saved: what differs between before and after
+async function cutFromPlan(side, [x, y, width, height]) {
+  const [before, after] = await Promise.all([loadPicture(side.before), loadPicture(side.after)]);
+  const canvas = document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(before, -x, -y);
+  const old = context.getImageData(0, 0, width, height).data;
+  context.drawImage(after, -x, -y);
+  const now = context.getImageData(0, 0, width, height);
+  for (let i = 0; i < old.length; i += 4)
+    if (Math.abs(old[i] - now.data[i]) + Math.abs(old[i + 1] - now.data[i + 1]) + Math.abs(old[i + 2] - now.data[i + 2]) < 12) now.data[i + 3] = 0;
+  context.putImageData(now, 0, 0);
+  return canvas.toDataURL();
+}
+
+async function openHand(n) {
+  const size = n.hand.size, main = n.hand.sides[0];
+  hand = { node: n.id, size, side: 0, tool: "move", brush: 36, changed: false, replace: n.hand.replace, by_hand: n.hand.by_hand,
+           place: { x: n.hand.part[0], y: n.hand.part[1], width: n.hand.part[2] }, ratio: n.hand.part[3] / n.hand.part[2],
+           measured: n.hand.part.slice(), layers: [], cut: null,
+           after: n.hand.after, prompts: n.hand.prompts, job: n.hand.prompt_job, seed: 1, reference: true,
+           prompt: (n.hand.prompts.find(one => one.number === n.hand.after) || n.hand.prompts[n.hand.prompts.length - 1] || {}).prompt || "" };
+  for (const side of n.hand.sides) {  // what was painted before, to go on with it
+    const layer = { add: sheetOf(size), erase: sheetOf(size), used: { add: false, erase: false }, touched: false };
+    for (const [name, colour] of [["add", RED], ["erase", BLUE]]) if (side[name]) {
+      const context = layer[name].getContext("2d");
+      context.drawImage(await loadPicture(side[name]), 0, 0, size, size);
+      context.globalCompositeOperation = "source-in";
+      context.fillStyle = colour; context.fillRect(0, 0, size, size);
+      context.globalCompositeOperation = "source-over";
+      layer.used[name] = true;
+    }
+    hand.layers.push(layer);
+  }
+  hand.cut = main.cut || await cutFromPlan(main, n.hand.part);
+  drawHand();
+}
+
+// while the edit by hand is open the page leaves it alone, only the prompt's state is followed
+function handLive() {
+  const n = node(hand.node);
+  if (!n || !n.hand) return;
+  const before = JSON.stringify([hand.prompts, hand.job]);
+  const finished = hand.job && hand.job.active && n.hand.prompt_job && !n.hand.prompt_job.active && !n.hand.prompt_job.failed;
+  hand.prompts = n.hand.prompts; hand.job = n.hand.prompt_job;
+  if (finished && hand.prompts.length) { hand.after = hand.prompts[hand.prompts.length - 1].number; hand.changed = true; }  // the new picture is shown at once
+  if (JSON.stringify([hand.prompts, hand.job]) !== before) drawHand();
+}
+
+function drawHand() {
+  const n = node(hand.node), size = hand.size, side = n.hand.sides[hand.side], layer = hand.layers[hand.side], isMain = hand.side === 0;
+  const moved = () => hand.place.x !== hand.measured[0] || hand.place.y !== hand.measured[1] || hand.place.width !== hand.measured[2];
+  const again = change => () => { Object.assign(hand, change); drawHand(); };
+  const share = value => (100 * value / size) + "%";
+
+  // the stage: the model's picture, the mask so far (faint), what is painted now, and the part (main side)
+  const paint = h("canvas", { class: "paint", width: size, height: size });
+  const was = h("canvas", { class: "was" });
+  const ring = h("div", { class: "ring" });
+  const part = h("div", { class: "part" }, h("img", { src: hand.cut, alt: "The new part", draggable: "false" }), h("div", { class: "grip" }));
+  const fromPrompt = hand.prompts.find(one => one.number === hand.after);  // a picture made from a prompt takes the part's place
+  if (fromPrompt && hand.tool === "move") hand.tool = "add";
+  const stage = h("div", { class: "hstage" + (hand.tool === "move" ? "" : " painting") + (fromPrompt && isMain ? " made" : ""), tabindex: "0", "aria-label": "The picture of this side" },
+    h("img", { src: isMain ? (fromPrompt ? fromPrompt.url : side.before) : side.after, draggable: "false",
+               alt: isMain ? (fromPrompt ? "The picture made from the prompt" : "The model before the edit") : "The plan of this side so far" }),
+    was, paint, isMain && !fromPrompt && part, ring);
+  if (side.mask && hand.tool !== "move") paintMask(was, side.mask);
+  const info = h("span", { class: "hint" });
+  const showPaint = () => {
+    const context = paint.getContext("2d");
+    context.clearRect(0, 0, size, size);
+    context.drawImage(layer.add, 0, 0);
+    context.drawImage(layer.erase, 0, 0);
+  };
+  const showPart = () => {
+    const height = Math.round(hand.place.width * hand.ratio);
+    Object.assign(part.style, { left: share(hand.place.x), top: share(hand.place.y), width: share(hand.place.width), height: share(height) });
+    info.textContent = `Part: left ${hand.place.x}, top ${hand.place.y}, ${hand.place.width} × ${height} px` + (moved() ? " (moved)" : "");
+  };
+  const put = (x, y, width) => {  // inside the picture, as make_edit.py asks
+    width = Math.round(Math.max(16, Math.min(width, size - 2, (size - 2) / hand.ratio)));
+    const height = Math.round(width * hand.ratio);
+    hand.place = { x: Math.round(Math.max(0, Math.min(x, size - width))), y: Math.round(Math.max(1, Math.min(y, size - height - 1))), width };
+    hand.changed = true;
+    showPart();
+  };
+  const spot = event => { const frame = stage.getBoundingClientRect(); return [(event.clientX - frame.left) / frame.width * size, (event.clientY - frame.top) / frame.height * size]; };
+
+  // moving and sizing the part
+  part.addEventListener("pointerdown", event => {
+    if (hand.tool !== "move") return;
+    const [x0, y0] = spot(event), from = { ...hand.place }, sizing = event.target.classList.contains("grip");
+    part.setPointerCapture(event.pointerId);
+    stage.focus({ preventScroll: true });
+    part.onpointermove = move => {
+      const [x, y] = spot(move);
+      if (sizing) put(from.x, from.y, from.width + (x - x0)); else put(from.x + x - x0, from.y + y - y0, from.width);
+    };
+    event.preventDefault();
+  });
+  for (const end of ["pointerup", "pointercancel"]) part.addEventListener(end, () => { part.onpointermove = null; });
+  stage.addEventListener("keydown", event => {
+    if (hand.tool !== "move" || !isMain) return;
+    const step = event.shiftKey ? 10 : 1, { x, y, width } = hand.place;
+    const to = { ArrowLeft: [x - step, y, width], ArrowRight: [x + step, y, width], ArrowUp: [x, y - step, width], ArrowDown: [x, y + step, width],
+                 "+": [x - step, y, width + 2 * step], "-": [x + step, y, width - 2 * step] }[event.key];
+    if (to) { put(...to); event.preventDefault(); }
+  });
+
+  // painting the mask: a stroke on one layer takes the same stroke off the other; a pen's pressure makes the stroke wider
+  let lastSpot = null;
+  const stroke = event => {
+    const [x, y] = spot(event), [fromX, fromY] = lastSpot || [x, y];
+    const [on, off, colour] = hand.tool === "add" ? [layer.add, layer.erase, RED] : [layer.erase, layer.add, BLUE];
+    const wide = event.pointerType === "pen" && event.pressure > 0 ? hand.brush * (0.35 + 1.3 * event.pressure) : hand.brush;
+    for (const [sheet, mode] of [[on, "source-over"], [off, "destination-out"]]) {
+      const context = sheet.getContext("2d");
+      context.globalCompositeOperation = mode;
+      context.strokeStyle = colour; context.lineWidth = wide; context.lineCap = context.lineJoin = "round";
+      context.beginPath(); context.moveTo(fromX, fromY); context.lineTo(x + 0.01, y + 0.01); context.stroke();
+    }
+    layer.used[hand.tool] = layer.touched = hand.changed = true;
+    lastSpot = [x, y];
+    showPaint();
+  };
+  stage.addEventListener("pointerdown", event => {
+    if (hand.tool === "move") return;
+    stage.setPointerCapture(event.pointerId);
+    lastSpot = null; stroke(event);
+    stage.onpointermove = stroke;
+  });
+  for (const end of ["pointerup", "pointercancel"]) stage.addEventListener(end, () => { stage.onpointermove = null; lastSpot = null; });
+  stage.addEventListener("pointermove", event => {
+    const frame = stage.getBoundingClientRect(), wide = hand.brush / size * frame.width;
+    Object.assign(ring.style, { left: (event.clientX - frame.left) + "px", top: (event.clientY - frame.top) + "px", width: wide + "px", height: wide + "px" });
+  });
+
+  // the tools
+  const tool = (name, text, title) => h("button", { class: hand.tool === name ? "on" : "", title, onclick: again({ tool: name }) }, text);
+  const tools = h("div", { class: "tools" },
+    h("span", { class: "what" }, "Side"), h("div", { class: "tabs", role: "group", "aria-label": "Side" },
+      n.hand.sides.map((one, index) => h("button", { class: index === hand.side ? "on" : "", onclick: again({ side: index, tool: index === 0 ? hand.tool : (hand.tool === "move" ? "add" : hand.tool) }) },
+        `${one.view + 1}` + (index === 0 ? " (main)" : "")))),
+    h("span", { class: "what" }, "Tool"), h("div", { class: "tabs", role: "group", "aria-label": "Tool" },
+      isMain && !fromPrompt && tool("move", "Move the part", "Drag the part, pull the white dot to size it; arrow keys move it by one pixel"),
+      tool("add", "Paint the area", "Red: this changes too"), tool("erase", "Protect", "Blue: this stays as it is")),
+    hand.tool !== "move" && h("label", {}, "Brush", h("input", { type: "range", min: "6", max: "140", value: hand.brush,
+      oninput: event => { hand.brush = Number(event.target.value); } })),
+    hand.tool !== "move" && h("button", { class: "btn", onclick: () => {
+      for (const sheet of [layer.add, layer.erase]) sheet.getContext("2d").clearRect(0, 0, size, size);
+      layer.used = { add: false, erase: false }; layer.touched = hand.changed = true; showPaint();
+    } }, "Clear this side's painting"));
+
+  const apply = async (place, run) => {
+    const layers = {};
+    hand.layers.forEach((one, index) => { if (one.touched) for (const name of ["add", "erase"]) layers[`${name}_${n.hand.sides[index].view}`] = one.used[name] ? white(one[name]) : null; });
+    try {
+      await send("/api/edit", { flow: flow.file, node: n.id, side: n.hand.side, replace: hand.replace, layers, run,
+                                after: place && fromPrompt ? fromPrompt.number : null,
+                                place: place && !fromPrompt && (moved() || n.settings.place) ? [hand.place.x, hand.place.y, hand.place.width] : null });
+      hand = null;
+      Object.assign(view, { group: 0, side: 0, left: "before" });
+      lastText = "";
+      await load();
+    } catch (error) { problem(error.message); }
+  };
+  const buttons = [
+    h("button", { class: "btn main", onclick: () => apply(true, true), title: "Writes it into the flow and makes the edit's pictures and 3D area again, about a minute on this PC" }, "Apply"),
+    h("button", { class: "btn", onclick: () => { hand = null; drawDetail(); } }, "Cancel"),
+    hand.by_hand && h("button", { class: "btn", title: "Takes the hand-made place out of the flow again; the painting stays",
+      onclick: () => { if (confirm("Back to the measured place of the part?")) apply(false, true); } }, "Back to the measured place")];
+
+  // the prompt: the local picture AI paints it into the painted area of the main side
+  const working = hand.job && hand.job.active;
+  const makePicture = async () => {
+    if (!hand.layers[0].used.add) return problem("Paint the area on the main side first (Paint the area, red): the prompt is painted into it.");
+    try {
+      await post("/api/prompt", { flow: flow.file, node: n.id, folder: n.hand.folder, prompt: hand.prompt, seed: hand.seed, reference: hand.reference,
+                                  area: white(hand.layers[0].add) });
+    } catch (error) { problem(error.message); }
+  };
+  const promptBox = h("div", {},
+    h("h3", {}, "Or describe the new part"),
+    h("textarea", { class: "hprompt", rows: "3", placeholder: "e.g. a small silver tiara with a blue gem", "aria-label": "What should be there",
+                    oninput: event => { hand.prompt = event.target.value; } }, hand.prompt),
+    h("div", { class: "tools", style: "margin-top:8px" },
+      h("label", { title: "The picture AI also gets the part's own picture and makes it look like that" },
+        h("input", { type: "checkbox", checked: hand.reference, onchange: event => { hand.reference = event.target.checked; } }), "like the part's picture"),
+      h("label", { title: "Another seed gives another picture for the same words" }, "Seed",
+        h("input", { type: "number", min: "1", value: hand.seed, style: "width:64px", oninput: event => { hand.seed = Number(event.target.value) || 1; } })),
+      h("button", { class: "btn", disabled: working, onclick: makePicture }, working ? "Painting…" : "Paint it")),
+    h("p", { class: "hint" }, working ? `The local picture AI is painting “${hand.job.prompt}” (since ${hand.job.started}, about half a minute). ${hand.job.log.slice(-1)[0] || ""}`
+      : hand.job && hand.job.failed ? h("span", { class: "low" }, `The last picture failed: ${hand.job.log.slice(-2).join(" ")}`)
+      : "The local picture AI paints it into the red area of the main side, about half a minute. Only what differs inside the area becomes the new part."),
+    hand.prompts.length > 0 && h("div", { class: "made" },
+      h("button", { class: "pick" + (fromPrompt ? "" : " on"), onclick: again({ after: null, changed: true }), title: "The part's own picture, pasted where you put it" },
+        h("img", { src: hand.cut, alt: "" }), h("span", {}, "the part's picture")),
+      hand.prompts.map(one => h("button", { class: "pick" + (one.number === hand.after ? " on" : ""), title: `${one.prompt} (seed ${one.seed}, ${one.time})`,
+                                            onclick: again({ after: one.number, changed: true, side: 0, prompt: one.prompt }) },
+        h("img", { src: one.url, alt: "" }), h("span", {}, one.prompt)))));
+
+  showPaint(); showPart();
+  if (fromPrompt) info.textContent = `The new part is what the prompt made inside the red area: “${fromPrompt.prompt}”.`;
+  detailBox.replaceChildren(h("section", { class: "detail" },
+    h("div", { class: "titlebar" }, h("h2", {}, "Edit by hand", h("small", {}, `${n.label} · ${n.id}`)), buttons),
+    h("div", { class: "columns" },
+      h("div", {}, tools, stage, h("div", {}, isMain ? info : h("span", { class: "hint" },
+        "This side shows the plan as it is now. It follows the main side when you apply; here you correct its area."))),
+      h("div", { class: "facts" },
+        h("ol", { class: "steps" },
+          h("li", {}, h("b", {}, "Move the part"), " on the main side to where it belongs. Pull the white dot to size it. The other three sides follow from its place in 3D."),
+          h("li", {}, h("b", {}, "Paint the area"), " where more of the model should change", h("span", { class: "key", style: `background:${RED}` }), "red",
+            ", or ", h("b", {}, "protect"), " what must stay", h("span", { class: "key", style: `background:${BLUE}` }), "blue. The faint red is the area so far. With a tablet pen, pressing harder paints wider."),
+          h("li", {}, h("b", {}, "Apply"), " makes the before / after pictures and the 3D area again (about a minute). The inpainting steps after it then wait for a new run.")),
+        h("label", { style: "display:flex;gap:8px;align-items:flex-start;cursor:pointer" },
+          h("input", { type: "checkbox", checked: hand.replace, onchange: event => { hand.replace = event.target.checked; hand.changed = true; } }),
+          h("span", {}, "Replace the model's surface under the area", h("span", { class: "hint", style: "display:block" },
+            "On: the old surface there is deleted and made new (the part may sink into the model). Off: the whole surface stays and the part only grows into the empty room."))),
+        h("p", { class: "hint" }, "Keys on the picture: arrows move the part by 1 pixel (Shift: 10), + and − size it."),
+        promptBox))));
+}
+
+// a painted layer as the white-on-nothing PNG make_edit.py reads
+function white(sheet) {
+  const copy = sheetOf(sheet.width), context = copy.getContext("2d");
+  context.drawImage(sheet, 0, 0);
+  context.globalCompositeOperation = "source-in";
+  context.fillStyle = "#fff"; context.fillRect(0, 0, copy.width, copy.height);
+  return copy.toDataURL("image/png");
+}
+
+// ---------------------------------------------------------------- galleries
+
+function gallery(list) {
+  return h("div", { class: "views" }, list.filter(item => item.url).map(item => h("figure", {},
+    item.video ? h("a", {}, h("video", { src: item.url, controls: true, muted: true, loop: true, preload: "metadata" }))
+               : h("a", { href: item.url, target: "_blank" }, h("img", { src: item.url, alt: item.caption, loading: "lazy" })),
+    h("figcaption", {}, item.caption, item.sub && h("span", { class: "sub" }, item.sub), (item.chips || []).map(([text, used]) => h("span", { class: "tag2" + (used ? " used" : "") }, text))))));
+}
+
+function sheetViews(sheet) {
+  const list = sheet.views.map(v => ({ url: v.url, caption: v.side || v.name, sub: v.top ? `top: ${v.top}` : v.name,
+    chips: [v.base && ["base", true], v.sides && ["part side", true], v.colour && [v.colour, false],
+            ...v.cut_off.map(border => [`cut off: ${border}`, false])].filter(Boolean) }));
+  return h("div", {}, h("h3", {}, `The ${sheet.views.length} views`), gallery(list));
+}
+
 let toastTimer;
-function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 3200); }
+function toast(text, time = 3200) { const t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), time); }
+
+// ---------------------------------------------------------------- start
 
 render();
+drawNodes();
+if (new URLSearchParams(location.search).get("mode")) setMode(new URLSearchParams(location.search).get("mode") === "dev");  // /app?mode=dev
+if (online) {
+  fillProjects();
+  let last = decodeURIComponent(location.hash.slice(1));  // /app#girl_crown opens that project
+  if (!last) try { last = localStorage.getItem("project"); } catch {}
+  if (last) openProject(last);
+}
 </script>
 </body>
 </html>
