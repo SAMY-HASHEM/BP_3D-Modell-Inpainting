@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inpainting 3D</title>
+<!-- The main page of the project, after the sketch UI-skitch/main- panal.png:
+     menu · logo · account on top, "Add data", the data rows (each with its own prompt) wired into the total workflow. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23111'/%3E%3Cpath d='M76 18C52 16 30 20 27 33c-2 10 14 14 25 14s25 4 23 17c-2 14-24 19-51 19' fill='none' stroke='%23fff' stroke-width='9' stroke-linecap='round'/%3E%3Cpath d='M26 12v76M74 12v76M26 48c16 5 32-5 48 0' fill='none' stroke='%23e3262d' stroke-width='8' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #121316; --panel: #1b1d21; --raised: #24272c; --line: #33373e; --text: #eceef1; --dim: #9aa0aa;
+  --ink: #f4f4f4; --brand: #e3262d; --brand-soft: color-mix(in srgb, var(--brand) 16%, transparent);
+  --wire: #565b64; --radius: 14px;
+}
+:root[data-theme="light"] {
+  --bg: #f4f4f1; --panel: #ffffff; --raised: #f3f3f0; --line: #deded8; --text: #17181b; --dim: #686c74;
+  --ink: #111; --brand: #d81f26; --wire: #b5b8be;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f4f1; --panel: #ffffff; --raised: #f3f3f0; --line: #deded8; --text: #17181b; --dim: #686c74;
+    --ink: #111; --brand: #d81f26; --wire: #b5b8be;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh; }
+button, input, textarea, select { font: inherit; color: inherit; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* 1-3: the top bar — menu, logo, account */
+header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 14px 24px; border-bottom: 1px solid var(--line); }
+.icon-btn { width: 44px; height: 44px; display: grid; place-items: center; background: none; border: 1px solid transparent; border-radius: 10px; cursor: pointer; }
+.icon-btn:hover { background: var(--raised); border-color: var(--line); }
+.icon-btn svg { width: 24px; height: 24px; }
+.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
+.brand svg { width: 40px; height: 40px; }
+.brand b { font-size: 18px; letter-spacing: .01em; }
+.brand span { color: var(--dim); font-weight: 400; }
+.account { justify-self: end; border: 1.5px solid var(--line); }
+
+/* the menu */
+.scrim { position: fixed; inset: 0; background: #0007; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
+.drawer { position: fixed; top: 0; left: 0; bottom: 0; width: min(300px, 85vw); background: var(--panel); border-right: 1px solid var(--line);
+          transform: translateX(-100%); transition: transform .22s ease; z-index: 11; padding: 18px 14px; display: flex; flex-direction: column; gap: 4px; }
+body.menu-open .scrim { opacity: 1; pointer-events: auto; }
+body.menu-open .drawer { transform: none; }
+.drawer h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 14px 10px 6px; }
+.drawer a, .drawer button.link { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; color: var(--text);
+          text-decoration: none; background: none; border: 0; text-align: left; cursor: pointer; width: 100%; }
+.drawer a:hover, .drawer button.link:hover { background: var(--raised); }
+.drawer a.on { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+
+main { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
+
+/* 4: add data */
+.drop { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 4px auto 30px; max-width: 640px; padding: 26px;
+        border: 2px dashed var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color .15s, background .15s; text-align: left; width: 100%; background: none; }
+.drop:hover, .drop:focus-visible, .drop.over { border-color: var(--brand); background: var(--brand-soft); outline: none; }
+.drop svg { width: 54px; height: 54px; flex: none; color: var(--brand); }
+.drop strong { display: block; font-size: 26px; font-weight: 700; line-height: 1.15; }
+.drop small { color: var(--dim); font-size: 13px; }
+
+/* 5 + 6: the rows wired into the total workflow */
+.work { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 0 90px; align-items: start; }
+.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.wires path { fill: none; stroke: var(--wire); stroke-width: 2; }
+.wires circle { fill: var(--brand); }
+.col-title { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); font-weight: 600; }
+.col-title .count { background: var(--raised); border: 1px solid var(--line); border-radius: 20px; padding: 0 8px; font-size: 12px; letter-spacing: 0; }
+
+.rows { display: flex; flex-direction: column; gap: 14px; }
+.row { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 12px; align-items: center; background: var(--panel);
+       border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
+.thumb { width: 76px; height: 76px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line); overflow: hidden; display: grid; place-items: center; position: relative; }
+.thumb img, .thumb video { width: 100%; height: 100%; object-fit: cover; }
+.thumb .kind { position: absolute; left: 4px; bottom: 4px; background: #000b; color: #fff; font-size: 10px; padding: 0 5px; border-radius: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.thumb svg { width: 34px; height: 34px; color: var(--dim); }
+.row-main { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.row-head .name { font-size: 13px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.role { background: var(--raised); border: 1px solid var(--line); border-radius: 7px; font-size: 12px; padding: 2px 6px; }
+.prompt { width: 100%; background: var(--raised); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; resize: none; }
+.prompt:focus, .role:focus, .big-prompt:focus { outline: 2px solid var(--brand); outline-offset: 1px; border-color: transparent; }
+.remove { width: 32px; height: 32px; border-radius: 8px; border: 0; background: none; color: var(--dim); cursor: pointer; display: grid; place-items: center; }
+.remove:hover { background: var(--raised); color: var(--brand); }
+.remove svg { width: 18px; height: 18px; }
+.empty-rows { border: 1px dashed var(--line); border-radius: var(--radius); padding: 26px; color: var(--dim); text-align: center; }
+.more { margin-top: 12px; background: none; border: 1px dashed var(--line); border-radius: 10px; color: var(--dim); padding: 8px; cursor: pointer; width: 100%; }
+.more:hover { border-color: var(--brand); color: var(--brand); }
+
+.total { background: var(--panel); border: 1px solid var(--line); border-radius: calc(var(--radius) + 4px); padding: 16px; position: sticky; top: 16px; }
+.big-prompt { width: 100%; background: var(--raised); border: 1px solid var(--line); border-radius: 11px; padding: 10px 13px; resize: vertical; min-height: 64px; }
+.stage { margin-top: 14px; aspect-ratio: 4 / 3; border-radius: 12px; background:
+         radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--brand) 9%, var(--raised)), var(--raised) 70%);
+         border: 1px solid var(--line); display: grid; place-items: center; overflow: hidden; position: relative; }
+.stage .hint { color: var(--dim); text-align: center; padding: 20px; max-width: 340px; }
+.stage .hint svg { width: 46px; height: 46px; display: block; margin: 0 auto 10px; color: var(--wire); }
+.stack { display: flex; align-items: center; justify-content: center; gap: 0; padding: 20px; flex-wrap: wrap; }
+.stack .chip { width: 88px; height: 88px; border-radius: 12px; overflow: hidden; border: 3px solid var(--panel); background: var(--panel);
+               margin-left: -18px; box-shadow: 0 6px 18px #0005; display: grid; place-items: center; }
+.stack .chip:first-child { margin-left: 0; }
+.stack .chip img, .stack .chip video { width: 100%; height: 100%; object-fit: cover; }
+.stack .chip svg { width: 34px; height: 34px; color: var(--dim); }
+.stage .caption { position: absolute; left: 12px; bottom: 10px; right: 12px; color: var(--dim); font-size: 13px; text-align: center; }
+.actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.run { background: var(--brand); color: #fff; border: 0; border-radius: 10px; padding: 10px 22px; font-weight: 650; cursor: pointer; }
+.run:disabled { opacity: .45; cursor: default; }
+.ghost { background: none; border: 1px solid var(--line); border-radius: 10px; padding: 9px 16px; cursor: pointer; }
+.ghost:hover { border-color: var(--dim); }
+.status { color: var(--dim); font-size: 13px; margin-left: auto; }
+
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 30px); opacity: 0; background: var(--ink); color: var(--bg);
+         padding: 10px 16px; border-radius: 10px; transition: .2s; pointer-events: none; max-width: calc(100vw - 32px); font-size: 14px; z-index: 20; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-width: 900px) {
+  header { padding: 10px 16px; }
+  main { padding: 20px 16px 50px; }
+  .work { grid-template-columns: minmax(0, 1fr); gap: 26px; }
+  .wires { display: none; }
+  .total { position: static; }
+  .drop { padding: 18px; gap: 12px; }
+  .drop strong { font-size: 21px; }
+  .brand span { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- the logo: the S (black / white in the dark) with the red H over it, as in UI-skitch/logo.png -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="logo" viewBox="0 0 100 100">
+    <path d="M76 18C52 16 30 20 27 33c-2 10 14 14 25 14s25 4 23 17c-2 14-24 19-51 19" fill="none" stroke="var(--ink)" stroke-width="9" stroke-linecap="round"/>
+    <path d="M26 12v76M74 12v76M26 48c16 5 32-5 48 0" fill="none" stroke="var(--brand)" stroke-width="8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="cube" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7zM3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+</svg>
+
+<div class="scrim" id="scrim"></div>
+<nav class="drawer" id="drawer" aria-label="Menu">
+  <a class="brand" href="#" style="padding:4px 10px 10px"><svg><use href="#logo"/></svg><b>Inpainting <span>3D</span></b></a>
+  <h2>Pages</h2>
+  <a class="on" href="/app">Workflow</a>
+  <a href="/">Node flows</a>
+  <h2>Look</h2>
+  <button class="link" id="theme">Switch light / dark</button>
+</nav>
+
+<header>
+  <button class="icon-btn" id="menuBtn" aria-label="Open the menu" aria-expanded="false" aria-controls="drawer">
+    <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+  <a class="brand" href="#" aria-label="Inpainting 3D"><svg><use href="#logo"/></svg><b>Inpainting <span>3D</span></b></a>
+  <button class="icon-btn account" aria-label="Account" title="Account">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+</header>
+
+<main>
+  <button class="drop" id="drop" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-5 5m5-5 5 5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span><strong>Add data</strong><small>Pictures, a turntable video or a 3D model (.glb) — click, or drop the files here</small></span>
+  </button>
+  <input type="file" id="files" class="sr" multiple accept="image/*,video/*,.glb,.gltf,.obj,.ply">
+
+  <section class="work" id="work">
+    <svg class="wires" id="wires" aria-hidden="true"></svg>
+
+    <div>
+      <h2 class="col-title">Your data <span class="count" id="count">0</span></h2>
+      <div class="rows" id="rows"></div>
+    </div>
+
+    <div class="total" id="total">
+      <h2 class="col-title">Total workflow</h2>
+      <label class="sr" for="mainPrompt">Prompt for the whole result</label>
+      <textarea class="big-prompt" id="mainPrompt" rows="2" placeholder="Prompt for the whole result, e.g. “the girl's head wearing a silver crown with a blue gem”"></textarea>
+      <div class="stage" id="stage"></div>
+      <div class="actions">
+        <button class="run" id="run" disabled>Run</button>
+        <button class="ghost" id="clear">Clear all</button>
+        <span class="status" id="status">Add data to start</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+const MODEL = /\.(glb|gltf|obj|ply)$/i;
+const items = [];  // {id, file, name, kind: picture|video|model, url, prompt, role: object|part}
+let nextId = 1;
+const $ = id => document.getElementById(id);
+
+// ---------------------------------------------------------------- the menu and the theme
+const menu = open => { document.body.classList.toggle("menu-open", open); $("menuBtn").setAttribute("aria-expanded", String(open)); };
+$("menuBtn").onclick = () => menu(true);
+$("scrim").onclick = () => menu(false);
+addEventListener("keydown", e => { if (e.key === "Escape") menu(false); });
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+$("theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("theme", document.documentElement.dataset.theme); } catch {}
+  wires();
+};
+
+// ---------------------------------------------------------------- adding data
+const picker = $("files"), drop = $("drop");
+drop.onclick = () => picker.click();
+picker.onchange = () => { add(picker.files); picker.value = ""; };
+for (const name of ["dragenter", "dragover"]) document.addEventListener(name, e => { e.preventDefault(); drop.classList.add("over"); });
+for (const name of ["dragleave", "drop"]) document.addEventListener(name, e => { e.preventDefault(); if (name === "drop" || !e.relatedTarget) drop.classList.remove("over"); });
+document.addEventListener("drop", e => add(e.dataTransfer.files));
+
+function add(files) {
+  let skipped = 0;
+  for (const file of files) {
+    const kind = file.type.startsWith("image/") ? "picture" : file.type.startsWith("video/") ? "video" : MODEL.test(file.name) ? "model" : null;
+    if (!kind) { skipped++; continue; }
+    items.push({ id: nextId++, file, name: file.name, kind, url: kind === "model" ? null : URL.createObjectURL(file), prompt: "",
+                 role: items.length === 0 ? "object" : "part" });
+  }
+  if (skipped) toast(`${skipped} file(s) skipped: only pictures, videos and 3D models`);
+  render();
+}
+
+// ---------------------------------------------------------------- drawing
+function preview(item, tag = "div") {
+  if (item.kind === "picture") return `<img src="${item.url}" alt="">`;
+  if (item.kind === "video") return `<video src="${item.url}" muted loop playsinline preload="metadata"></video>`;
+  return `<svg><use href="#cube"/></svg>`;
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function render() {
+  $("count").textContent = items.length;
+  const rows = $("rows");
+  rows.innerHTML = items.length ? "" : `<div class="empty-rows">Your pictures, videos and models show up here.<br>Give each one its own prompt.</div>`;
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "row"; row.dataset.id = item.id;
+    row.innerHTML = `
+      <div class="thumb">${preview(item)}<span class="kind">${item.kind}</span></div>
+      <div class="row-main">
+        <div class="row-head">
+          <span class="name" title="${esc(item.name)}">${esc(item.name)}</span>
+          <select class="role" aria-label="Role of ${esc(item.name)}" title="object = what is built first, part = what is inpainted onto it">
+            <option value="object"${item.role === "object" ? " selected" : ""}>object</option>
+            <option value="part"${item.role === "part" ? " selected" : ""}>part</option>
+          </select>
+        </div>
+        <textarea class="prompt" rows="1" placeholder="Prompt for this data…" aria-label="Prompt for ${esc(item.name)}">${esc(item.prompt)}</textarea>
+      </div>
+      <button class="remove" aria-label="Remove ${esc(item.name)}" title="Remove"><svg><use href="#x"/></svg></button>`;
+    row.querySelector(".prompt").oninput = e => { item.prompt = e.target.value; grow(e.target); };
+    row.querySelector(".role").onchange = e => { item.role = e.target.value; renderStage(); };
+    row.querySelector(".remove").onclick = () => { if (item.url) URL.revokeObjectURL(item.url); items.splice(items.indexOf(item), 1); render(); };
+    const video = row.querySelector("video");
+    if (video) { row.onmouseenter = () => video.play(); row.onmouseleave = () => video.pause(); }
+    rows.append(row);
+    grow(row.querySelector(".prompt"));
+  }
+  if (items.length) {
+    const more = document.createElement("button");
+    more.className = "more"; more.textContent = "+ Add more data"; more.onclick = () => picker.click();
+    rows.append(more);
+  }
+  renderStage();
+  requestAnimationFrame(wires);
+}
+
+function grow(area) { area.style.height = "auto"; area.style.height = Math.min(area.scrollHeight + 2, 140) + "px"; }
+
+function renderStage() {
+  const stage = $("stage");
+  const objects = items.filter(i => i.role === "object").length, parts = items.length - objects;
+  if (!items.length) {
+    stage.innerHTML = `<div class="hint"><svg><use href="#cube"/></svg>Every piece of data flows in here. The result of the whole workflow is shown here.</div>`;
+  } else {
+    stage.innerHTML = `<div class="stack">${items.slice(0, 6).map(i => `<div class="chip">${preview(i)}</div>`).join("")}</div>
+      <div class="caption">${objects} object${objects === 1 ? "" : "s"} · ${parts} part${parts === 1 ? "" : "s"}${items.length > 6 ? ` · +${items.length - 6} more` : ""}</div>`;
+  }
+  $("run").disabled = !items.length;
+  $("status").textContent = items.length ? (objects ? "Ready to run" : "Mark one data as the object") : "Add data to start";
+}
+
+// the arrows from every row into the total workflow (as in the sketch)
+function wires() {
+  const svg = $("wires"), work = $("work").getBoundingClientRect(), total = $("total").getBoundingClientRect();
+  if (getComputedStyle(svg).display === "none") return;
+  const tx = total.left - work.left, ty0 = total.top - work.top + 70, ty1 = total.bottom - work.top - 70;
+  const rows = [...document.querySelectorAll(".row")];
+  svg.innerHTML = rows.map((row, i) => {
+    const r = row.getBoundingClientRect();
+    const x0 = r.right - work.left + 6, y0 = r.top - work.top + r.height / 2;
+    const y1 = rows.length === 1 ? (ty0 + ty1) / 2 : ty0 + (ty1 - ty0) * i / (rows.length - 1);
+    const x1 = tx - 6, mid = (x0 + x1) / 2;
+    return `<path d="M${x0},${y0} C${mid},${y0} ${mid},${y1} ${x1 - 8},${y1}"/>
+            <path d="M${x1 - 14},${y1 - 6} L${x1 - 6},${y1} L${x1 - 14},${y1 + 6}" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="${x0}" cy="${y0}" r="3.5"/>`;
+  }).join("");
+}
+new ResizeObserver(wires).observe($("work"));
+addEventListener("scroll", wires, { passive: true });
+
+// ---------------------------------------------------------------- run
+$("clear").onclick = () => { if (!items.length || confirm("Remove all data?")) { items.forEach(i => i.url && URL.revokeObjectURL(i.url)); items.length = 0; render(); } };
+$("run").onclick = () => {
+  if (!items.some(i => i.role === "object")) return toast("Mark one of your data as the object first");
+  // not wired to the pipeline yet: this is where the page will send the data, the prompts and the main prompt to flow_page.py
+  toast("Run is not connected to the pipeline yet — the design comes first");
+};
+
+let toastTimer;
+function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 3200); }
+
+render();
+</script>
+</body>
+</html>
