@@ -1,5 +1,7 @@
 # Node pipeline: many pictures → one detailed model
 
+(The second node pipeline, a new part inpainted onto a model with a local judge: [inpaint-flow.md](inpaint-flow.md).)
+
 **Built like Geometry Nodes, not inside Blender:** every step is a **node** with its own folder, inputs,
 settings and outputs; the nodes are chained and each can be re-run on its own. It is a Python program
 (`scripts/pipeline/run_pipeline.py`) that runs outside Blender; only node **06_hair** uses real Blender

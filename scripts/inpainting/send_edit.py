@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--details", action="store_true", help="model is the shape step's result: only its fine shape")
     parser.add_argument("--colours", action="store_true", help="the last step: only the colours of the model")
     parser.add_argument("--code", help="run it with the newest code of this branch")
+    parser.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")
     args = parser.parse_args()
     edit = json.load(open(os.path.join(args.edit, "edit.json")))
     afters = [os.path.join(args.edit, "after.png")] + edit["more_edit"][1::4]
@@ -60,6 +61,8 @@ def main():
         command += ["--more-edit", *side]
     if args.code:
         command += ["--code", args.code]
+    if args.wait:
+        command += ["--wait", args.wait]
     subprocess.run(command, check=True)
 
 

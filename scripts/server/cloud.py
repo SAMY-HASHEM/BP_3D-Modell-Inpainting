@@ -168,6 +168,56 @@ def send_zip(cloud, path):
     return job
 
 
+def wait_for(cloud, job, folder, every=20, limit=6 * 3600):
+    """Waits until the server finished a job and downloads its results into `folder` (for the pipeline nodes: a
+    server job is then one step like any other). Prints a 'Result:' line per file; a failed job ends with its message."""
+    os.makedirs(folder, exist_ok=True)
+    start, last = time.time(), None
+    while time.time() - start < limit:
+        try:
+            status = cloud.read_status(job) or {"state": "?", "message": ""}
+        except Exception as e:  # noqa: BLE001 (the network comes and goes: look again)
+            status = {"state": "?", "message": f"cloud not reachable: {type(e).__name__}"}
+        line = f"{status['state']}: {status.get('message', '')[:150]}"
+        if line != last:
+            print(f"{time.strftime('%H:%M:%S')} {line}", flush=True)
+            last = line
+        if status["state"] == "failed":
+            if os.path.exists(os.path.join(folder, "sent_job.txt")):
+                os.remove(os.path.join(folder, "sent_job.txt"))  # the next run sends it anew
+            raise SystemExit(f"the server job {job} failed: {status.get('message', '')}")
+        if status["state"] == "done":
+            paths = []
+            for name in status.get("results") or []:
+                paths.append(os.path.join(folder, name.split("__", 1)[1]))
+                if not os.path.exists(paths[-1]):
+                    cloud.download(name, paths[-1] + ".part")
+                    os.replace(paths[-1] + ".part", paths[-1])
+                print(f"Result: {paths[-1]}", flush=True)
+            json.dump({"job": job, "results": paths, "minutes": round((time.time() - start) / 60, 1)},
+                      open(os.path.join(folder, "server_job.json"), "w"), indent=1)
+            return paths
+        time.sleep(every)
+    raise SystemExit(f"the server job {job} did not finish in {limit / 3600:.0f} hours")
+
+
+def sent_before(folder):
+    """A node that was stopped while its server job ran: the job goes on there, so it is waited for, not sent again."""
+    note = os.path.join(folder or "", "sent_job.txt")
+    if not folder or not os.path.isfile(note):
+        return False
+    job = open(note).read().strip()
+    print(f"Sent before as {job}: waiting for it", flush=True)
+    wait_for(Cloud(), job, folder)
+    return True
+
+
+def note_sent(folder, job):
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "sent_job.txt"), "w") as f:
+        f.write(job)
+
+
 def send(args):
     cloud = Cloud()
     job = send_zip(cloud, args.job)
@@ -176,6 +226,8 @@ def send(args):
 
 def generate(args):
     """Packs the picture(s) and the settings into a job and sends it."""
+    if sent_before(args.wait):
+        return
     options = {k: getattr(args, k) for k in GENERATE_OPTIONS if getattr(args, k) not in (None, False)}
     name = os.path.splitext(os.path.basename(args.pictures[0]))[0]
     os.makedirs(os.path.join(PROJECT_DIR, "outputs", "cloud"), exist_ok=True)
@@ -191,6 +243,9 @@ def generate(args):
     cloud = Cloud()
     job = send_zip(cloud, path)
     print(f"Sent as {job} ({len(pictures)} picture(s), {options}). Follow it with:  python3 scripts/server/cloud.py status")
+    if args.wait:
+        note_sent(args.wait, job)
+        wait_for(cloud, job, args.wait)
 
 
 def pipeline(args):
@@ -234,6 +289,8 @@ def live(args):
 def inpaint(args):
     """Packs a model, an area (a box in the model's coordinates, or a Blender area .npy) and a picture into
     the same job .zip that Blender's add-on makes, and sends it."""
+    if sent_before(args.wait):
+        return
     import numpy as np  # only this command needs them (TRELLIS.2 environment)
     import trimesh
     if args.area:
@@ -288,6 +345,9 @@ def inpaint(args):
     sent = send_zip(cloud, path)
     print(f"Sent as {sent} ({job.get('variants', 'repaint')}, seeds {job.get('seeds', [args.seed])}, grow {args.grow}, "
           f"{args.steps} steps). Follow it with:  python3 scripts/server/cloud.py status")
+    if args.wait:
+        note_sent(args.wait, sent)
+        wait_for(cloud, sent, args.wait)
 
 
 def status(args):
@@ -436,6 +496,7 @@ def main():
     p.add_argument("--shape-only", dest="shape_only", nargs="+", metavar="PICTURE",
                    help="pictures used only for the shape, not for the colours (multi_image.py --shape-only)")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
+    p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")
     p.set_defaults(run=generate)
     p = sub.add_parser("pipeline", help="send a character's pictures/videos: the whole grid loop on the server")
     p.add_argument("folder")
@@ -473,7 +534,12 @@ def main():
     p.add_argument("--picture-mask", dest="picture_mask",
                    help="the 2D mask of the edit (white = changed); --source is then the original's render of that view")
     p.set_defaults(run=inpaint)
+    p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
+    p = sub.add_parser("wait", help="wait for a job that was sent before and download its results")
+    p.add_argument("job")
+    p.add_argument("folder")
+    p.set_defaults(run=lambda a: wait_for(Cloud(), a.job, a.folder))
     sub.add_parser("status", help="list the jobs and how far they are").set_defaults(run=status)
     p = sub.add_parser("fetch", help="download finished results to outputs/cloud/")
     p.add_argument("job", nargs="?", help="only this job (default: all)")

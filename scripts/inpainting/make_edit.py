@@ -136,6 +136,9 @@ def main():
     parser.add_argument("--width", type=float, default=0.75, help="the part's width, share of the top of the object")
     parser.add_argument("--sink", type=float, default=0.15, help="share of the part's height pushed down into the object")
     parser.add_argument("--head", type=float, default=0.12, help="what counts as the top: share of the object's height")
+    parser.add_argument("--fit", choices=["between", "over"], default="between",
+                        help="when things stand up beside the middle (hair buns, horns): between = as wide as the free gap; "
+                        "over = the full width, over them (use it with --replace: what the part covers is regenerated)")
     parser.add_argument("--replace", action="store_true", help="the model's surface under the 2D mask goes too (DELETE); "
                         "without it the whole surface stays and the part grows only into the empty room")
     args = parser.parse_args()
@@ -173,6 +176,25 @@ def main():
     part = parts[0]
     width = int(args.width * (right - left))
     part_height = int(part.height * width / part.width)
+    # things standing up beside the middle (hair buns, horns, ears): the part sits on the object's middle line, between
+    # them, as wide as the free gap there (a crown as wide as both buns did not fit into the picture, girl, Nov 10)
+    centre = (left + right) // 2
+    profile = np.where(alpha.any(0), alpha.argmax(0), alpha.shape[0])  # the object's top row in every column
+    near = slice(centre - max(4, (right - left) // 20), centre + max(4, (right - left) // 20) + 1)
+    middle_top = int(profile[near].max())  # the floor of the valley in the middle (a parting counts as its floor)
+    fitted = middle_top - top > 0.1 * part_height
+    if fitted:
+        level = (middle_top + top) / 2  # the gap is measured halfway up the things beside it
+        free = profile > level
+        to_left = centre - int(np.argmax(~free[centre::-1])) if not free[:centre + 1].all() else 0
+        to_right = centre + int(np.argmax(~free[centre:])) if not free[centre:].all() else alpha.shape[1]
+        gap = 2 * min(centre - to_left, to_right - centre)
+        if args.fit == "between":
+            width = max(8, min(width, gap))
+        part_height = int(part.height * width / part.width)
+        print(f"    the top stands {middle_top - top} px above the middle: the part sits on the middle, {width} px wide "
+              f"(the free gap is {gap} px, fit: {args.fit})", flush=True)
+        top = middle_top
     part = part.resize((width, part_height), Image.LANCZOS)
     x = (left + right - width) // 2
     y = top - part_height + int(args.sink * part_height)
@@ -248,7 +270,8 @@ def main():
     above = max(0.0, up[1] + 2 * voxel - vertices[:, 1].max())
     room = round(float(min(0.5, 1.05 * above / (above + model_size))), 3)
     report = {"side": side, "room": room, "keep": int(keep.sum()), "delete": int(delete.sum()), "edit": int(edit.sum()),
-              "box_y": [float(up[0]), float(up[1])], "part_pixels": [x, y, width, part_height]}
+              "box_y": [float(up[0]), float(up[1])], "part_pixels": [x, y, width, part_height],
+              "fitted_between": bool(fitted)}
     report["more_edit"] = sides
     json.dump(report, open(os.path.join(args.out, "edit.json"), "w"), indent=1)
     sheet = Image.new("RGB", (1500, 500), "white")

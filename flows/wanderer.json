@@ -1,0 +1,11 @@
+{
+ "name": "wanderer",
+ "about": "Base model of the wanderer with the lanterns (a sculpt sheet with three views). The wireframe sheet is left out: its grid lines would be read as surface. Seed 42 on this PC, seed 1 on the uni server.",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the wanderer", "files": ["pictures/wanderer/sculpt.jpg"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "in": {"pictures": "object"}},
+  {"id": "base_42", "type": "base", "seed": 42, "where": "pc", "in": {"data": "object_sheet"}},
+  {"id": "base_1", "type": "base", "seed": 1, "where": "server", "in": {"data": "object_sheet"}},
+  {"id": "best_base", "type": "pick_seed", "in": {"data": "object_sheet", "candidates": ["base_42", "base_1"]}}
+ ]
+}

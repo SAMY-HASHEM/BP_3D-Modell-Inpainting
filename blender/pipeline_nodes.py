@@ -105,6 +105,7 @@ def socket(name, idname, colour):
 PicturesSocket = socket("Pictures", "BPPicturesSocket", (0.25, 0.47, 0.62, 1))
 SortedSocket = socket("Data sheet", "BPSortedSocket", (0.53, 0.53, 0.67, 1))
 ModelSocket = socket("Model", "BPModelSocket", (0.71, 0.55, 0.16, 1))
+EditSocket = socket("Edit", "BPEditSocket", (0.66, 0.38, 0.24, 1))
 
 
 class BPNode:
@@ -289,7 +290,153 @@ class CompareNode(BPNode, bpy.types.Node):
         return core.compare([n.value("model") for n in (self.upstream("models") or []) if n.value("model")], self.clay), None
 
 
-NODES = (PicturesNode, SortNode, BaseNode, RefineNode, PickBestNode, CombineNode, HairNode, CompareNode)
+# ------------------------------------------------------------------ the inpainting flow: a new part onto a model
+#
+#   Input (object) -> Data sheet -> Base model (x seeds) -> Pick seed --+
+#                                                                       +-> Edit -> Inpaint shape -> Judge -> details -> ...
+#   Input (part)   -> Data sheet --------------------------------------+
+
+def candidates_of(nodes):
+    """The models of the connected nodes: all of a node that made several (seeds), else its one model."""
+    found = []
+    for node in nodes or []:
+        found += node.value("models") or [node.value("model")]
+    return [m for m in found if m]
+
+
+class InputNode(BPNode, bpy.types.Node):
+    """00: pictures (1..n), videos, or both, of one thing: the object, or the part that is put onto it"""
+    bl_idname, bl_label, bl_width_default = "BPInput", "00 Input (pictures / videos)", 280
+    settings = ("flow", "path", "more")
+    flow: StringProperty(name="Name", default="girl_crown", description="the flow's name: its results are in outputs/pipeline/<name>")
+    path: StringProperty(name="File or folder", default="", subtype="FILE_PATH")
+    more: StringProperty(name="More", default="", description="more files or folders, separated by ;")
+
+    def init(self, context):
+        self.outputs.new("BPPicturesSocket", "pictures")
+
+    def job(self):
+        files = [bpy.path.abspath(self.path)] if self.path.startswith("//") else [self.path]
+        return None, {"pictures": core.inputs(self.flow, [f for f in files + self.more.split(";") if f.strip()])}
+
+
+class DataSheetNode(BPNode, bpy.types.Node):
+    """01: the local AI's data sheet of an input: its single views, what each shows, the lists for TRELLIS.2"""
+    bl_idname, bl_label, bl_width_default = "BPDataSheet", "01 Data sheet (local AI)", 300
+    settings = ("role", "frames", "ai")
+    role: EnumProperty(name="Role", items=[("object", "object (the model)", ""), ("part", "part (inpainted onto it)", "")])
+    frames: IntProperty(name="Video frames", default=8, min=4, max=24, step=4)
+    ai: BoolProperty(name="Local vision AI", default=True, description="off: only what can be measured")
+
+    def init(self, context):
+        self.inputs.new("BPPicturesSocket", "pictures")
+        self.outputs.new("BPSortedSocket", "data")
+
+    def job(self):
+        return core.data_sheet(self.upstream("pictures").value("pictures"), self.role, self.frames, self.ai), None
+
+
+class BaseModelNode(BPNode, bpy.types.Node):
+    """02: the object's model from the views its data sheet chose (TRELLIS.2, on the uni server or this PC)"""
+    bl_idname, bl_label, bl_width_default = "BPBaseModel", "02 Base model (from data sheet)", 280
+    settings = ("where", "mode", "resolution", "steps", "seed")
+    where: EnumProperty(name="Runs on", items=[("server", "Uni server", ""), ("pc", "This PC", "")])
+    mode: EnumProperty(name="Mode", items=[(m, m, "") for m in ("multidiffusion", "stochastic")])
+    resolution: EnumProperty(name="Resolution", items=[(r, r, "") for r in ("1024", "1536", "512")])
+    steps: IntProperty(name="Steps", default=25, min=4, max=100)
+    seed: IntProperty(name="Seed", default=42, min=0)
+
+    def init(self, context):
+        self.inputs.new("BPSortedSocket", "data")
+        self.outputs.new("BPModelSocket", "model")
+
+    def job(self):
+        return core.base_model(self.upstream("data").value("data"), self.where, self.mode, self.resolution, self.steps,
+                               self.seed), None
+
+
+class PickSeedNode(BPNode, bpy.types.Node):
+    """02b: measured: the model whose outline fits the input's views best"""
+    bl_idname, bl_label, bl_width_default = "BPPickSeed", "02b Pick seed (measured)", 280
+
+    def init(self, context):
+        self.inputs.new("BPSortedSocket", "data")
+        self.inputs.new("BPModelSocket", "candidates", use_multi_input=True)
+        self.outputs.new("BPModelSocket", "best")
+
+    def job(self):
+        return core.pick_seed(self.upstream("data").value("data"), candidates_of(self.upstream("candidates"))), None
+
+
+class EditNode(BPNode, bpy.types.Node):
+    """03: where the part goes: before, after (collage) and 2D mask per side, and the 3D area (keep / delete / edit)"""
+    bl_idname, bl_label, bl_width_default = "BPEdit", "03 Edit (pictures + area)", 300
+    settings = ("fit", "replace", "width", "sink", "head")
+    fit: EnumProperty(name="Fit", items=[("between", "Between (free gap)", "as wide as the gap between things beside the middle"),
+                                         ("over", "Over (full width)", "over them; with Replace, what the part covers is regenerated")])
+    head: FloatProperty(name="Top", default=0.12, min=0.02, max=0.6, description="what counts as the top: share of the object's height")
+    replace: BoolProperty(name="Replace what the part covers", default=False)
+    width: FloatProperty(name="Width", default=0.75, min=0.1, max=2.0, description="share of the top of the object")
+    sink: FloatProperty(name="Sink", default=0.15, min=0.0, max=0.9, description="share of the part pushed into the object")
+
+    def init(self, context):
+        self.inputs.new("BPModelSocket", "model")
+        self.inputs.new("BPSortedSocket", "part")
+        self.inputs.new("BPSortedSocket", "object")
+        self.outputs.new("BPEditSocket", "edit")
+
+    def job(self):
+        return core.edit(self.upstream("model").value("model"), self.upstream("part").value("data"),
+                         self.upstream("object").value("data"), self.replace, round(self.width, 3), round(self.sink, 3),
+                         round(self.head, 3), self.fit), None
+
+
+class InpaintNode(BPNode, bpy.types.Node):
+    """04: one inpainting step (always shape, then details, then colours), several seeds = several candidates"""
+    bl_idname, bl_label, bl_width_default = "BPInpaint", "04 Inpaint step", 280
+    settings = ("step", "seeds", "where")
+    step: EnumProperty(name="Step", items=[("shape", "1 Shape", ""), ("details", "2 Details", ""), ("colours", "3 Colours", "")])
+    seeds: StringProperty(name="Seeds", default="1 2")
+    where: EnumProperty(name="Runs on", items=[("server", "Uni server", "")])
+
+    def init(self, context):
+        self.inputs.new("BPModelSocket", "model")
+        self.inputs.new("BPEditSocket", "edit")
+        self.outputs.new("BPModelSocket", "candidates")
+
+    def job(self):
+        return core.inpaint_step(self.upstream("model").value("model"), self.upstream("edit").value("edit"), self.step,
+                                 [int(s) for s in self.seeds.replace(",", " ").split()], self.where), None
+
+
+class JudgeNode(BPNode, bpy.types.Node):
+    """05: the local judge: is the rest kept, is the part there (measured), defects (local vision AI); best goes on"""
+    bl_idname, bl_label, bl_width_default = "BPJudge", "05 Judge edit (local)", 300
+    settings = ("step", "ai", "keep_min", "part_min")
+    step: EnumProperty(name="Step", items=[(s, s, "") for s in ("shape", "details", "colours")])
+    ai: BoolProperty(name="Local vision AI", default=True)
+    keep_min: IntProperty(name="Kept at least", default=85, min=0, max=100)
+    part_min: IntProperty(name="Part at least", default=70, min=0, max=100)
+
+    def init(self, context):
+        self.inputs.new("BPModelSocket", "candidates", use_multi_input=True)
+        self.inputs.new("BPEditSocket", "edit")
+        self.outputs.new("BPModelSocket", "best")
+
+    def draw_buttons(self, context, layout):
+        for prop in self.settings:
+            layout.prop(self, prop)
+        if self.value("verdict"):
+            layout.label(text=f"verdict: {self.value('verdict')}", icon="CHECKMARK" if self.value("verdict").startswith("pass") else "ERROR")
+        self.draw_result(layout)
+
+    def job(self):
+        return core.edit_judge(candidates_of(self.upstream("candidates")), self.upstream("edit").value("edit"), self.step,
+                               self.ai, self.keep_min, self.part_min), None
+
+
+NODES = (PicturesNode, SortNode, BaseNode, RefineNode, PickBestNode, CombineNode, HairNode, CompareNode,
+         InputNode, DataSheetNode, BaseModelNode, PickSeedNode, EditNode, InpaintNode, JudgeNode)
 
 
 # ------------------------------------------------------------------ running
@@ -550,9 +697,56 @@ class BP_OT_new_pipeline(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _node(tree, kind, x, y, props):
+class BP_OT_new_inpaint_flow(bpy.types.Operator):
+    """A new tree with the inpainting flow connected: two inputs (object, part) -> data sheets -> base model ->
+    edit -> shape -> judge -> details -> judge -> colours -> judge (the same as flows/girl_crown.json)"""
+    bl_idname, bl_label = "bp.new_inpaint_flow", "New inpainting flow"
+    flow: StringProperty(name="Name", default="girl_crown")
+    object_path: StringProperty(name="Object: file or folder", default="pictures/tetiana-kravchuk-sculpt.jpg", subtype="FILE_PATH")
+    part_path: StringProperty(name="Part: file or folder", default="pictures/crownrenderspin.mp4", subtype="FILE_PATH")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def execute(self, context):
+        tree = bpy.data.node_groups.new(f"BP Inpaint {self.flow}", TREE)
+        add = lambda kind, x, y, label=None, **props: _node(tree, kind, x, y, props, label)
+        link = lambda a, b, inp: tree.links.new(a.outputs[0], b.inputs[inp])
+        obj = add("BPInput", 0, 0, "00 Input: the object", flow=self.flow, path=self.object_path)
+        part = add("BPInput", 0, -420, "00 Input: the part", flow=self.flow, path=self.part_path)
+        obj_sheet = add("BPDataSheet", 330, 0, role="object")
+        part_sheet = add("BPDataSheet", 330, -420, role="part")
+        link(obj, obj_sheet, "pictures")
+        link(part, part_sheet, "pictures")
+        pick = add("BPPickSeed", 1030, 0)
+        link(obj_sheet, pick, "data")
+        for k, seed in enumerate((42, 1)):
+            base = add("BPBaseModel", 680, -k * 420, f"02 Base model seed {seed}", seed=seed)
+            link(obj_sheet, base, "data")
+            link(base, pick, "candidates")
+        edit = add("BPEdit", 1360, 0, fit="over", replace=True, width=0.55, sink=0.2)  # as flows/girl_crown.json
+        link(pick, edit, "model")
+        link(part_sheet, edit, "part")
+        link(obj_sheet, edit, "object")
+        model, x = pick, 1710
+        for step, seeds in (("shape", "1 2"), ("details", "1"), ("colours", "1")):
+            inpaint = add("BPInpaint", x, 0, f"04 Inpaint: {step}", step=step, seeds=seeds)
+            judge = add("BPJudge", x + 330, 0, f"05 Judge: {step}", step=step)
+            link(model, inpaint, "model")
+            link(edit, inpaint, "edit")
+            link(inpaint, judge, "candidates")
+            link(edit, judge, "edit")
+            model, x = judge, x + 680
+        if context.space_data and context.space_data.type == "NODE_EDITOR":
+            context.space_data.node_tree = tree
+        return {"FINISHED"}
+
+
+def _node(tree, kind, x, y, props, label=None):
     node = tree.nodes.new(kind)
     node.location = (x, y)
+    if label:
+        node.label = label
     for key, value in props.items():
         setattr(node, key, value)
     return node
@@ -568,6 +762,7 @@ class BP_PT_pipeline(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         layout.operator("bp.new_pipeline", icon="ADD")
+        layout.operator("bp.new_inpaint_flow", icon="ADD")
         tree = context.space_data.edit_tree
         if tree and tree.nodes.active:
             layout.operator("bp.run", text=f"Run up to: {tree.nodes.active.label or tree.nodes.active.bl_label}",
@@ -897,8 +1092,8 @@ def add_menu(self, context):
         self.layout.menu("BP_MT_add")
 
 
-CLASSES = (BPPipelineTree, PicturesSocket, SortedSocket, ModelSocket, *NODES, BP_OT_run, BP_OT_cancel,
-           BP_OT_view_picture, BP_OT_show_model, BP_OT_new_pipeline, BP_PT_pipeline, BP_MT_add,
+CLASSES = (BPPipelineTree, PicturesSocket, SortedSocket, ModelSocket, EditSocket, *NODES, BP_OT_run, BP_OT_cancel,
+           BP_OT_view_picture, BP_OT_show_model, BP_OT_new_pipeline, BP_OT_new_inpaint_flow, BP_PT_pipeline, BP_MT_add,
            BP_OT_setup, BP_OT_login, BP_OT_pictures, BP_PT_setup,
            BP_OT_server_send, BP_OT_server_fetch, BP_OT_server_auto, BP_OT_server_open, BP_PT_server)
 

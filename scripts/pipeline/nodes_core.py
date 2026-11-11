@@ -220,8 +220,143 @@ def pick_best(candidates):
 
 
 def resolve(outputs):
-    """Outputs that are only known after the run (pick_best: which candidate won)."""
+    """Outputs that are only known after the run (pick_best: which candidate won; a server job: its files)."""
+    if "models_from" in outputs:  # a server job (cloud.py --wait): the models it sent back
+        like = outputs["model_like"]
+        files = sorted(f for f in json.load(open(outputs["models_from"]))["results"] if f.endswith(".glb"))
+        models = [{**like, "glb": f, "label": f"{like['label']} {os.path.basename(f)[-14:-4].split('_')[-1]}"} for f in files]
+        outputs = {**outputs, "models": models, "model": models[0]}
     if "model_from" in outputs:
-        best = json.load(open(outputs["model_from"]))["best"]
-        outputs = {**outputs, "model": next(c for c in outputs["candidates"] if c["glb"] == best)}
+        answer = json.load(open(outputs["model_from"]))
+        best = os.path.abspath(answer["best"])
+        outputs = {**outputs, "model": next(c for c in outputs["candidates"] if os.path.abspath(c["glb"]) == best)}
+        if "verdict" in answer:
+            outputs["verdict"] = answer["verdict"] + (f" ({'; '.join(answer['why'])})" if answer.get("why") else "")
     return outputs
+
+
+# ------------------------------------------------------------------ the inpainting flow (a new part onto a model)
+#
+#   00 Input (object) -> 01 Data sheet -> 02 Base model (x seeds) -> 02b Pick seed --+
+#                                                                                    +-> 03 Edit -> 04 Inpaint: shape
+#   00 Input (part)   -> 01 Data sheet ---------------------------------------------+      -> 05 Judge -> 04 details
+#                                                                                           -> 05 Judge -> 04 colours -> 05 Judge
+#
+# An input is pictures (1..n), videos, or both. "where" = "server" sends the TRELLIS.2 work to the uni GPU server
+# through the cloud and waits for the result (cloud.py --wait), "pc" runs it on this computer.
+
+def inputs(name, files):
+    """00: pictures and videos of one thing (files, or folders with everything in them)."""
+    found = []
+    for path in files if isinstance(files, (list, tuple)) else [f for f in files.split(";") if f.strip()]:
+        path = project_path(path)
+        if os.path.isdir(path):
+            found += sorted(os.path.join(path, f) for f in os.listdir(path))
+        elif os.path.isfile(path):
+            found.append(path)
+        else:
+            raise ValueError(f"no file or folder {path}")
+    found = [f for f in found if f.lower().endswith(PICTURE_TYPES + VIDEO_TYPES)]
+    if not found:
+        raise ValueError("no pictures or videos in the input")
+    return {"name": name.strip().replace(" ", "_"), "files": found}
+
+
+def data_sheet(pics, role="object", frames=8, ai=True):
+    """01: the local AI's data sheet of one input: its single views, what each is, and the lists for TRELLIS.2."""
+    folder = node_folder(pics["name"], f"01_sheet_{role}", {"files": [stamp(f) for f in pics["files"]], "role": role,
+                                                             "frames": frames, "ai": ai})
+    out = os.path.join(folder, "sheet.json")
+    command = py("pipeline/data_sheet.py", *pics["files"], "--role", role, "--frames", frames, "--out", folder)
+    return {"folder": folder, "steps": [(command + ([] if ai else ["--no-ai"]), f"01 data sheet ({role})", out)],
+            "outputs": {"data": {"path": out, "name": pics["name"], "role": role}, "sheet": os.path.join(folder, "contact.jpg")}}
+
+
+def sheet_views(data, which):
+    sheet = json.load(open(data["path"]))
+    paths = {v["name"]: v["path"] for v in sheet["views"]}
+    return [project_path(paths[name]) for name in sheet["lists"][which]]
+
+
+def base_model(data, where="server", mode="multidiffusion", resolution="1024", steps=25, seed=42):
+    """02: the object's model from the views its data sheet chose (the main view first)."""
+    views = sheet_views(data, "base")
+    folder = node_folder(data["name"], "02_base", {"views": [stamp(v) for v in views], "where": where, "mode": mode,
+                                                   "resolution": resolution, "steps": steps, "seed": seed})
+    like = {"name": data["name"], "kind": "base", "label": f"base seed {seed}"}
+    if where == "server":
+        done = os.path.join(folder, "server_job.json")
+        command = py("server/cloud.py", "generate", *views, "--resolution", resolution, "--steps", steps, "--seed", seed,
+                     *(["--mode", mode] if len(views) > 1 else []), "--wait", folder)
+        return {"folder": folder, "steps": [(command, "02 base (uni server)", done)],
+                "outputs": {"models_from": done, "model_like": like}}
+    out = os.path.join(folder, "base.glb")
+    script = "generation/multi_image.py" if len(views) > 1 else "generation/generate.py"
+    command = py(script, *views, "--resolution", resolution, "--steps", steps, "--seed", seed, "--out", out,
+                 *(["--mode", mode] if len(views) > 1 else []))
+    return {"folder": folder, "steps": [(command, "02 base (this PC)", out)], "outputs": {"model": {**like, "glb": out}}}
+
+
+def pick_seed(data, candidates):
+    """02b: the measured judge of seeds: the model whose outline fits the input's views best."""
+    candidates = [c for c in candidates if c]
+    views = sheet_views(data, "base")
+    folder = node_folder(data["name"], "02b_pick_seed", {"views": [stamp(v) for v in views],
+                                                          "candidates": [stamp(c["glb"]) for c in candidates]})
+    out = os.path.join(folder, "pick.json")
+    command = py("pipeline/pick_seed.py", "--pictures", *views, "--models", *[c["glb"] for c in candidates], "--out", folder)
+    return {"folder": folder, "steps": [(command, "02b pick seed", out)],
+            "outputs": {"model_from": out, "candidates": candidates}}
+
+
+def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit="between"):
+    """03: where the part goes. The three pictures per side (before, after = a collage, 2D mask) and the 3D area with
+    a job for every small cube (keep / delete / edit); nothing is placed by hand (make_edit.py)."""
+    sides, reference = sheet_views(part, "sides"), sheet_views(obj, "base")[0]
+    folder = node_folder(model["name"], "03_edit", {"model": stamp(model["glb"]), "sides": [stamp(s) for s in sides],
+                                                    "reference": stamp(reference), "replace": replace, "width": width, "sink": sink,
+                                                    **({"head": head} if head != 0.12 else {}), "fit": fit})
+    turning = os.path.join(folder, "part_sides")  # the part's sides in turning order, as make_edit.py wants a folder
+    os.makedirs(turning, exist_ok=True)
+    for k, side in enumerate(sides[:4]):
+        link = os.path.join(turning, f"{k}{os.path.splitext(side)[1]}")
+        if not os.path.lexists(link):
+            os.symlink(os.path.realpath(side), link)
+    out = os.path.join(folder, "edit.json")
+    command = py("inpainting/make_edit.py", model["glb"], turning, "--reference", reference, "--out", folder,
+                 "--width", width, "--sink", sink, "--head", head, "--fit", fit, *(["--replace"] if replace else []))
+    return {"folder": folder, "steps": [(command, "03 edit (before, after, mask, area)", out)],
+            "outputs": {"edit": {"folder": folder, "name": model["name"], "original": model,
+                                 "object": json.load(open(obj["path"])).get("what") or "an object",
+                                 "part": json.load(open(part["path"])).get("what") or "a new part"},
+                        "sheet": os.path.join(folder, "three.jpg"), "area_map": os.path.join(folder, "area_map.jpg")}}
+
+
+def inpaint_step(model, edit_, step="shape", seeds=(1,), where="server"):
+    """04: one step of the inpainting, always in the order shape -> details -> colours, each from the result of the
+    one before. Several seeds give several candidates in one server job (TRELLIS.2 is loaded once)."""
+    if where != "server":
+        raise ValueError("the inpainting steps run on the uni server for now (where = server)")
+    seeds = [int(s) for s in seeds]
+    folder = node_folder(edit_["name"], f"04_inpaint_{step}", {"model": stamp(model["glb"]), "seeds": seeds,
+                                                                "edit": stamp(os.path.join(edit_["folder"], "edit.json"))})
+    done = os.path.join(folder, "server_job.json")
+    command = py("inpainting/send_edit.py", edit_["folder"], model["glb"], "--seeds", *seeds, "--wait", folder,
+                 *({"shape": [], "details": ["--details"], "colours": ["--colours"]}[step]))
+    return {"folder": folder, "steps": [(command, f"04 inpaint: {step} (uni server)", done)],
+            "outputs": {"models_from": done, "model_like": {"name": edit_["name"], "kind": step, "label": step}}}
+
+
+def edit_judge(candidates, edit_, step="shape", ai=True, keep_min=85, part_min=70):
+    """05: the local judge: measured (is the rest kept, is the part there, the colours) and the local vision AI;
+    the best candidate goes on, with the verdict pass / redo."""
+    candidates = [c for c in candidates if c]
+    folder = node_folder(edit_["name"], f"05_judge_{step}", {"candidates": [stamp(c["glb"]) for c in candidates], "ai": ai,
+                                                              "edit": stamp(os.path.join(edit_["folder"], "edit.json")),
+                                                              "keep_min": keep_min, "part_min": part_min})
+    out = os.path.join(folder, "judge.json")
+    command = py("pipeline/edit_judge.py", "--edit", edit_["folder"], "--original", edit_["original"]["glb"], "--candidates",
+                 *[c["glb"] for c in candidates], "--out", folder, "--step", step, "--object", edit_["object"],
+                 "--part", edit_["part"], "--keep-min", keep_min, "--part-min", part_min, *([] if ai else ["--no-ai"]))
+    return {"folder": folder, "steps": [(command, f"05 judge: {step}", out)],
+            "outputs": {"model_from": out, "candidates": candidates, "sheet": os.path.join(folder, "compare.jpg")}}

@@ -1,0 +1,20 @@
+{
+ "name": "girl_crown",
+ "about": "The crown (a video of it turning) onto the girl's head (a sculpt sheet with five views). TRELLIS.2 runs on the uni server.",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the girl", "files": ["pictures/tetiana-kravchuk-sculpt.jpg"]},
+  {"id": "part", "type": "input", "label": "00 Input: the crown", "files": ["pictures/crownrenderspin.mp4"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "in": {"pictures": "object"}},
+  {"id": "part_sheet", "type": "data_sheet", "role": "part", "in": {"pictures": "part"}},
+  {"id": "base_42", "type": "base", "seed": 42, "where": "server", "in": {"data": "object_sheet"}},
+  {"id": "base_1", "type": "base", "seed": 1, "where": "server", "in": {"data": "object_sheet"}},
+  {"id": "best_base", "type": "pick_seed", "in": {"data": "object_sheet", "candidates": ["base_42", "base_1"]}},
+  {"id": "edit", "type": "edit", "fit": "over", "replace": true, "width": 0.55, "sink": 0.2, "in": {"model": "best_base", "part": "part_sheet", "object": "object_sheet"}},
+  {"id": "shape", "type": "inpaint", "step": "shape", "seeds": [1, 2], "in": {"model": "best_base", "edit": "edit"}},
+  {"id": "judge_shape", "type": "judge", "step": "shape", "in": {"candidates": "shape", "edit": "edit"}},
+  {"id": "details", "type": "inpaint", "step": "details", "seeds": [1], "in": {"model": "judge_shape", "edit": "edit"}},
+  {"id": "judge_details", "type": "judge", "step": "details", "in": {"candidates": "details", "edit": "edit"}},
+  {"id": "colours", "type": "inpaint", "step": "colours", "seeds": [1], "in": {"model": "judge_details", "edit": "edit"}},
+  {"id": "judge_colours", "type": "judge", "step": "colours", "in": {"candidates": "colours", "edit": "edit"}}
+ ]
+}
