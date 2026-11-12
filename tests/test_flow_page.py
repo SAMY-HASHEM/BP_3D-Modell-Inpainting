@@ -18,6 +18,7 @@ from unittest import mock
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(PROJECT, "scripts", "pipeline"))
 
+import accounts  # noqa: E402
 import flow as flows  # noqa: E402
 import flow_page as page  # noqa: E402
 import nodes_core as core  # noqa: E402
@@ -255,7 +256,9 @@ class OneSetOfDefaults(unittest.TestCase):
         self.assertEqual(set(flows.COLOURS), set(flows.TYPES))
 
 
-class OverHttp(InTemporaryProject):
+class WithServer(InTemporaryProject):
+    """The page's server on a free port; ask() is a browser's request."""
+
     def setUp(self):
         super().setUp()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), page.Page)
@@ -272,6 +275,8 @@ class OverHttp(InTemporaryProject):
         except urllib.error.HTTPError as error:
             return error.code, error.read()
 
+
+class OverHttp(WithServer):
     def test_the_pages_and_the_flow_list(self):
         self.assertEqual(self.ask("/app")[0], 200)
         self.assertEqual(self.ask("/")[0], 200)
@@ -303,6 +308,80 @@ class OverHttp(InTemporaryProject):
         code, answer = self.ask("/api/upload?flow=demo&role=object&name=model.glb", b"x", mine)
         self.assertEqual(code, 400)
         self.assertIn("no picture or video", json.loads(answer)["error"])
+
+
+class Accounts(WithServer):
+    """flow_page.py --accounts: nothing without a login, the accounts are handed out (accounts.py)."""
+    mine = {"X-Flow-Page": "1", "Content-Type": "application/json"}
+
+    def setUp(self):
+        super().setUp()
+        for one in (mock.patch.object(accounts, "FILE", os.path.join(self.root, "accounts.json")), mock.patch.object(accounts, "ROUNDS", 1000),
+                    mock.patch.object(accounts, "SESSIONS", {}), mock.patch.object(accounts, "WRONG", {}), mock.patch.object(page.Page, "accounts", True)):
+            one.start()
+            self.addCleanup(one.stop)
+        self.password = accounts.add("anna")
+
+    def log_in(self, name="anna", password=None):
+        """As the login page: gives the answer's code and the cookie to send from then on."""
+        body = json.dumps({"name": name, "password": password or self.password}).encode()
+        request = urllib.request.Request(self.address + "/api/login", data=body, headers=self.mine)
+        try:
+            with urllib.request.urlopen(request, timeout=10) as answer:
+                return answer.status, answer.headers["Set-Cookie"].split(";")[0]
+        except urllib.error.HTTPError as error:
+            return error.code, None
+
+    def test_the_file_keeps_no_password(self):
+        kept = open(accounts.FILE).read()
+        self.assertNotIn(self.password, kept)
+        self.assertTrue(accounts.right("anna", self.password))
+        self.assertFalse(accounts.right("anna", self.password + "x"))
+        self.assertFalse(accounts.right("nobody", self.password))
+        for name in ("a", "Anna Maria", "../anna", ""):
+            with self.assertRaises(ValueError, msg=name):
+                accounts.add(name)
+
+    def test_nothing_without_a_login(self):
+        self.assertEqual(self.ask("/api/flows")[0], 401)
+        self.assertEqual(self.ask("/file/pictures/a.png")[0], 401)
+        self.assertEqual(self.ask("/api/run", b'{"flow": "demo"}', self.mine)[0], 401)
+        self.assertEqual(self.ask("/api/upload?flow=demo&role=object&name=a.png", b"x", {"X-Flow-Page": "1"})[0], 401)
+        code, body = self.ask("/app")  # the pages lead to the login page
+        self.assertEqual(code, 200)
+        self.assertIn(b"Log in", body)
+
+    def test_log_in_and_out(self):
+        self.assertEqual(self.log_in(password="wrong password")[0], 401)
+        self.assertEqual(self.log_in(name="nobody")[0], 401)
+        code, cookie = self.log_in()
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(self.ask("/api/flows", headers={"Cookie": cookie})[1]), [])
+        self.assertEqual(json.loads(self.ask("/api/me", headers={"Cookie": cookie})[1]), {"accounts": True, "name": "anna"})
+        self.assertEqual(self.ask("/api/blender", b'{"model": "a.glb"}', {**self.mine, "Cookie": cookie})[0], 400)
+        self.assertEqual(self.ask("/api/logout", b"{}", {**self.mine, "Cookie": cookie})[0], 200)
+        self.assertEqual(self.ask("/api/flows", headers={"Cookie": cookie})[0], 401)
+
+    def test_a_removed_account_and_a_new_password_end_the_login(self):
+        _, cookie = self.log_in()
+        new = accounts.add("anna")
+        self.assertEqual(self.ask("/api/flows", headers={"Cookie": cookie})[0], 401)
+        self.assertEqual(self.log_in()[0], 401)  # the old password
+        _, cookie = self.log_in(password=new)
+        accounts.remove("anna")
+        self.assertEqual(self.ask("/api/flows", headers={"Cookie": cookie})[0], 401)
+
+    def test_many_wrong_passwords_lock_the_name(self):
+        for _ in range(accounts.TRIES):
+            self.assertEqual(self.log_in(password="wrong password")[0], 401)
+        self.assertEqual(self.log_in()[0], 401)  # even the right one now
+
+
+class WithoutAccounts(WithServer):
+    def test_nobody_is_asked(self):
+        self.assertEqual(json.loads(self.ask("/api/me")[1]), {"accounts": False, "name": None})
+        self.assertEqual(self.ask("/login")[0], 404)
+        self.assertEqual(self.ask("/api/login", b"{}", {"X-Flow-Page": "1"})[0], 404)
 
 
 if __name__ == "__main__":

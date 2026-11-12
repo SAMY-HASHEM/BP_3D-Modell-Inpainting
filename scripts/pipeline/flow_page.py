@@ -9,6 +9,18 @@ goes to outputs/pipeline/<name>/run.log); a flow.py started in a terminal is fol
     python scripts/pipeline/flow_page.py --open     # opens the browser by itself
 
 The page itself is web/index.html; http://127.0.0.1:8777/app is the main page (web/app.html, after UI-skitch/).
+
+For other people (e.g. on the uni server, inside the uni network): --accounts asks for a login first (web/login.html).
+The accounts are handed out with accounts.py, nobody makes one on the page. Only with --accounts may --host be
+another address than this PC's own:
+
+    python scripts/pipeline/accounts.py add anna                         # prints anna's password once
+    python scripts/pipeline/flow_page.py --accounts --host 0.0.0.0       # everybody who reaches this computer, after a login
+
+With --accounts: GET /login is the login page, POST /api/login {"name", "password"} logs in (a cookie),
+POST /api/logout logs out, GET /api/me says who is logged in; everything else answers 401 without a login (the two
+pages go to /login), and "Open in Blender" is off (it would open a window on the computer the page runs on).
+Not yet: every account sees and changes the same projects, and two runs at once are not put in a row.
 The page gets everything from here:
     GET /api/flows              the flow files in flows/
     GET /api/flow?name=<file>   one flow: its nodes, links, states, pictures, and what can be compared
@@ -48,11 +60,14 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import accounts
 import flow as flows
 import nodes_core as core
 
 PAGE = os.path.join(core.PROJECT, "web", "index.html")
 APP = os.path.join(core.PROJECT, "web", "app.html")  # the main page (GET /app)
+LOGIN = os.path.join(core.PROJECT, "web", "login.html")  # GET /login, only with --accounts
+COOKIE = "flow_login"
 UPLOADS = os.path.join(core.PROJECT, "pictures", "uploads")  # what the main page sends: uploads/<flow>/<role>/<file>
 NAME = r"[A-Za-z0-9_-]{1,40}"  # a flow the main page makes: its name is a file name and a folder name
 FLOWS = os.path.join(core.PROJECT, "flows")
@@ -655,6 +670,19 @@ def edit_by_hand(file, wanted):
 
 class Page(BaseHTTPRequestHandler):
     seen, lock = {}, threading.Lock()  # {flow file: (time, its description)}: several tabs don't read the folders twice
+    accounts = False  # --accounts: nothing without a login
+
+    def user(self):
+        """The account that is logged in (its cookie), or None."""
+        for part in self.headers.get("Cookie", "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == COOKIE:
+                return accounts.who(value)
+        return None
+
+    def cookie(self, token, seconds):
+        safe = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""  # behind the web server's HTTPS
+        return ("Set-Cookie", f"{COOKIE}={token}; Path=/; Max-Age={seconds}; HttpOnly; SameSite=Strict{safe}")
 
     def log_message(self, *args):  # quiet: a page asks every few seconds
         pass
@@ -675,6 +703,18 @@ class Page(BaseHTTPRequestHandler):
     def do_GET(self):
         address = urllib.parse.urlparse(self.path)
         try:
+            if self.accounts:
+                name = self.user()
+                if address.path == "/login":
+                    if name:
+                        return self.send(b"", "text/plain", 302, [("Location", "/app")])
+                    return self.send(open(LOGIN, "rb").read(), "text/html; charset=utf-8", extra=[("Cache-Control", "no-store")])
+                if not name and address.path in ("/", "/app"):
+                    return self.send(b"", "text/plain", 302, [("Location", "/login"), ("Cache-Control", "no-store")])
+                if not name:
+                    return self.answer({"error": "log in first"}, 401)
+            if address.path == "/api/me":  # who is logged in; without --accounts nobody is asked
+                return self.answer({"accounts": self.accounts, "name": name if self.accounts else None})
             if address.path == "/":
                 return self.send(open(PAGE, "rb").read(), "text/html; charset=utf-8", extra=[("Cache-Control", "no-store")])
             if address.path == "/app":  # the main page after the sketch in UI-skitch/ (web/app.html)
@@ -715,10 +755,24 @@ class Page(BaseHTTPRequestHandler):
         try:
             host = self.headers.get("Host", "")
             origin = self.headers.get("Origin")
-            if self.headers.get("X-Flow-Page") != "1" or (origin and origin != f"http://{host}") \
-                    or host.split(":")[0] not in ("127.0.0.1", "localhost"):
+            local = host.split(":")[0] in ("127.0.0.1", "localhost")  # with accounts the page has other addresses too
+            if self.headers.get("X-Flow-Page") != "1" or (origin and origin not in (f"http://{host}", f"https://{host}")) \
+                    or not (local or self.accounts):
                 return self.answer({"error": "only the flow page itself may do this"}, 403)
             length = int(self.headers.get("Content-Length") or 0)
+            if self.accounts and self.path in ("/api/login", "/api/logout"):
+                wanted = json.loads(self.rfile.read(min(length, 10_000)) or b"{}")
+                if self.path == "/api/logout":
+                    accounts.log_out(next((p.strip()[len(COOKIE) + 1:] for p in self.headers.get("Cookie", "").split(";")
+                                           if p.strip().startswith(COOKIE + "=")), ""))
+                    return self.send(b'{"ok": true}', "application/json", extra=[self.cookie("", 0)])
+                try:
+                    token = accounts.log_in(wanted.get("name"), wanted.get("password"))
+                except ValueError as e:
+                    return self.answer({"error": str(e)}, 401)
+                return self.send(b'{"ok": true}', "application/json", extra=[self.cookie(token, accounts.KEPT), ("Cache-Control", "no-store")])
+            if self.accounts and not self.user():
+                return self.answer({"error": "log in first"}, 401)
             if self.path.startswith("/api/upload?"):  # the body is the file itself, not JSON
                 try:
                     return self.answer({"ok": True, "path": save_upload(self.path, self.rfile, length)})
@@ -735,6 +789,8 @@ class Page(BaseHTTPRequestHandler):
             wanted = json.loads(self.rfile.read(length) or b"{}")
             file = wanted.get("flow", "")
             if self.path == "/api/blender":
+                if self.accounts:
+                    raise ValueError("not on a shared page: it would open Blender on the computer the page runs on")
                 open_in_blender(wanted.get("model"))
                 return self.answer({"ok": True})
             if self.path == "/api/settings":
@@ -792,13 +848,21 @@ class Page(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="The web page of the node flows (this PC only)")
+    parser = argparse.ArgumentParser(description="The web page of the node flows (this PC only, or with --accounts for others)")
     parser.add_argument("--port", type=int, default=8777)
     parser.add_argument("--open", action="store_true", help="open the page in the browser")
+    parser.add_argument("--accounts", action="store_true", help="a login first; the accounts are made with accounts.py")
+    parser.add_argument("--host", default="127.0.0.1", help="the address to listen on; another one than this PC's own "
+                        "(0.0.0.0 = everybody who reaches this computer) only with --accounts")
     args = parser.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Page)
+    if args.host not in ("127.0.0.1", "localhost") and not args.accounts:
+        parser.error("--host for other computers needs --accounts: without a login everybody there could run and change everything")
+    if args.accounts and not accounts.read():
+        parser.error("no accounts yet: python scripts/pipeline/accounts.py add <name>")
+    Page.accounts = args.accounts
+    server = ThreadingHTTPServer((args.host, args.port), Page)
     address = f"http://127.0.0.1:{args.port}"
-    print(f"The flow page: {address}   (Ctrl+C stops it)", flush=True)
+    print(f"The flow page: {address}   (Ctrl+C stops it)" + (f"\nwith accounts ({len(accounts.read())}), listening on {args.host}" if args.accounts else ""), flush=True)
     if args.open:
         webbrowser.open(address)
     try:

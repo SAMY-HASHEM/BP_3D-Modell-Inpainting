@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inpainting 3D · Log in</title>
+<!-- The login of the web page (flow_page.py --accounts). Nobody makes an account here: they are handed out
+     (scripts/pipeline/accounts.py). The same two colours as web/app.html: sand gold and black. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root { --sand: #D4A853; --ink: #14100A; --page: var(--sand); --panel: var(--ink); --text: var(--sand); }
+:root[data-theme="light"] { --page: var(--ink); --panel: var(--sand); --text: var(--ink); }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--page); color: var(--text);
+  font: 15px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
+form { width: 100%; max-width: 360px; padding: 28px 24px; border-radius: 14px; background: var(--panel); display: flex; flex-direction: column; gap: 14px; }
+h1 { margin: 0; font: 700 22px/1.2 Cinzel, Georgia, serif; letter-spacing: .08em; text-align: center; }
+p { margin: 0; font-size: 13px; text-align: center; }
+label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+input { font: inherit; color: var(--text); background: color-mix(in srgb, var(--text) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--text) 45%, var(--panel));
+  border-radius: 8px; padding: 9px 11px; width: 100%; }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+button { font: inherit; font-weight: 600; cursor: pointer; border: 0; border-radius: 999px; padding: 10px; background: var(--text); color: var(--panel); }
+button:disabled { opacity: .6; cursor: wait; }
+#problem { min-height: 1.5em; font-weight: 600; }
+</style>
+</head>
+<body>
+<form id="form">
+  <h1>INPAINTING 3D</h1>
+  <p>Log in with the account you were given.</p>
+  <label>Name <input id="name" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></label>
+  <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+  <button id="go">Log in</button>
+  <p id="problem" role="alert"></p>
+  <p>No account or the password forgotten? Ask Samy Hashem.</p>
+</form>
+<script>
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+const $ = id => document.getElementById(id);
+$("form").onsubmit = async event => {
+  event.preventDefault();
+  $("go").disabled = true;
+  $("problem").textContent = "";
+  try {
+    const answer = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json", "X-Flow-Page": "1" },
+      body: JSON.stringify({ name: $("name").value, password: $("password").value }) });
+    const data = await answer.json();
+    if (data.error) throw new Error(data.error);
+    location.href = "/app";
+  } catch (error) {
+    $("problem").textContent = error.message;
+    $("password").value = "";
+    $("password").focus();
+  }
+  $("go").disabled = false;
+};
+</script>
+</body>
+</html>

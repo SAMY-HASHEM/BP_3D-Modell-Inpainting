@@ -195,12 +195,13 @@ function h(tag, props = {}, ...kids) {
 }
 const post = async (address, body) => {
   const answer = await fetch(address, { method: "POST", headers: { "Content-Type": "application/json", "X-Flow-Page": "1" }, body: JSON.stringify(body) });
+  if (answer.status === 401) location.href = "/login";
   const data = await answer.json();
   if (data.error) throw new Error(data.error);
   lastText = "";
   await load();
 };
-const get = async address => { const answer = await fetch(address); const data = await answer.json(); if (data.error) throw new Error(data.error); return data; };
+const get = async address => { const answer = await fetch(address); if (answer.status === 401) location.href = "/login"; const data = await answer.json(); if (data.error) throw new Error(data.error); return data; };
 const node = id => flow.nodes.find(n => n.id === id);
 
 // ---------------------------------------------------------------- loading
@@ -221,6 +222,7 @@ async function load() {
   const file = document.getElementById("flows").value;
   try {
     const answer = await fetch(`/api/flow?name=${encodeURIComponent(file)}`);
+    if (answer.status === 401) { location.href = "/login"; return; }
     const text = await answer.text();
     const data = JSON.parse(text);
     if (data.error) throw new Error(data.error);

@@ -55,12 +55,34 @@ sent to the uni GPU server the page asks.
 Also in the menu (≡): light / dark (sand page with black panels, or the other way round), the older node page, and
 the user at the bottom left.
 
+## For other people: accounts
+
+Without anything the page is for this PC only. For others (the plan: on the uni server, for everybody in the uni
+network or its VPN) it asks for a login first. Nobody makes an account on the page: they are handed out.
+
+```
+python scripts/pipeline/accounts.py add anna                      # makes the account, prints its password once
+python scripts/pipeline/accounts.py list                          # remove anna: takes it away, and logs anna out
+python scripts/pipeline/flow_page.py --accounts --host 0.0.0.0    # the page for everybody who reaches this computer
+```
+
+- A password is made up by `accounts.py` and shown once. A forgotten one: `add` the name again (a new password).
+- `accounts.json` (project folder, not in Git, readable only by its owner) keeps per name a salt and the password's
+  hash (PBKDF2-SHA256), never the password.
+- Without a login the pages go to `/login` (`web/login.html`) and every other address answers 401. A login lasts 7
+  days, or until the page is started again. 8 wrong passwords in a row: that name waits ten minutes.
+- `--host` for other computers is refused without `--accounts`. *Open in Blender* is off with accounts.
+- In the menu of the main page: who is logged in; a click logs out.
+
+Still to do before it goes on the uni server (see *Open*): a folder per account, the runs in a row, and the admins'
+OK with an address (HTTPS comes from their web server; the page itself speaks plain HTTP).
+
 ## Tests
 
 ```
-python -W ignore::ResourceWarning -m unittest discover tests      # the back end: uploads, flow files, settings, the edit node, what a POST may do
+python -W ignore::ResourceWarning -m unittest discover tests      # the back end: uploads, flow files, settings, the edit node, what a POST may do, the accounts
 ```
-They run in a temporary folder with any Python 3 (no GPU, no server, no browser), in about two seconds.
+They run in a temporary folder with any Python 3 (no GPU, no server, no browser), in about five seconds.
 
 ## Blender
 
@@ -87,6 +109,9 @@ the page itself (the header `X-Flow-Page`, the page's own address).
   the part): it becomes the data sheet's `what`, which the judge reads instead of the local AI's guess. A part from
   words is the edit node's `prompt`. The prompt for the whole result is only kept as the project's description
   (`"prompt"`): no node reads it yet.
+- **Accounts are only the door.** Everybody who is logged in sees and changes the same projects (`flows/`,
+  `outputs/`), and two people's runs start at the same time. Next: a folder per account, then one row of runs with
+  "you are number 3" on the page, then limits (uploads, runs per day).
 - **3D models as input** (.glb) are not taken: the flow starts from pictures or a video.
 - **Windows:** the pipeline's environment is a Linux one (`install.sh`). On Windows the page and the back end start
   (with any Python 3), but a run stops at the first node that needs the environment. Results made on Linux are not

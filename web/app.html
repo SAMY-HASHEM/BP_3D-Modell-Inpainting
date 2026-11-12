@@ -337,9 +337,9 @@ footer .ar { font-family: "Reem Kufi", sans-serif; color: var(--brand); }
   <h2>Look</h2>
   <button class="link" id="theme">Light / dark mode</button>
   <!-- the user, at the bottom left of the menu -->
-  <button class="user" aria-label="Account">
+  <button class="user" id="user" aria-label="Account">
     <span class="avatar"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.5 20c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
-    <span class="who"><b>Samy Hashem</b><small id="modeName">Friendly user</small></span>
+    <span class="who"><b id="userName">Samy Hashem</b><small id="modeName">Friendly user</small></span>
   </button>
 </nav>
 
@@ -426,6 +426,17 @@ const setMode = dev => {
   requestAnimationFrame(() => typeof wires === "function" && wires());
 };
 $("mode").onclick = () => setMode(document.body.dataset.mode !== "dev");
+// with accounts (flow_page.py --accounts): the menu shows who is logged in, a click on it logs out
+fetch("/api/me").then(answer => answer.json()).then(me => {
+  if (!me.accounts || !me.name) return;
+  $("userName").textContent = me.name;
+  $("user").title = "Log out";
+  $("user").onclick = async () => {
+    if (!confirm(`Log out ${me.name}?`)) return;
+    await fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json", "X-Flow-Page": "1" }, body: "{}" });
+    location.href = "/login";
+  };
+}).catch(() => {});
 let savedMode = null; try { savedMode = localStorage.getItem("mode"); } catch {}
 setMode(savedMode === "dev");
 $("theme").onclick = () => {
@@ -605,6 +616,7 @@ function h(tag, props = {}, ...kids) {
 const node = id => flow.nodes.find(n => n.id === id);
 const busy = () => !!flow && (flow.running || !!(flow.run && flow.run.active));
 async function answerOf(response) {
+  if (response.status === 401 && location.pathname !== "/login") { location.href = "/login"; throw new Error("log in first"); }
   let data;
   try { data = await response.json(); } catch { throw new Error(`the server answered ${response.status}`); }
   if (data.error) throw new Error(data.error);
