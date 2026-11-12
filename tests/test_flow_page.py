@@ -256,6 +256,39 @@ class OneSetOfDefaults(unittest.TestCase):
         self.assertEqual(set(flows.COLOURS), set(flows.TYPES))
 
 
+class AProxyThatRefuses(unittest.TestCase):
+    """The uni server's proxy is sometimes down: a run then goes without it, with the models from disk."""
+
+    def test_a_dead_proxy_is_left_out(self):
+        import socket
+        free = socket.socket()
+        free.bind(("127.0.0.1", 0))
+        port = free.getsockname()[1]
+        free.close()  # nothing listens there now
+        env = {"https_proxy": f"http://127.0.0.1:{port}", "http_proxy": f"http://127.0.0.1:{port}", "no_proxy": "git.uni-due.de,"}
+        page.without_dead_proxy(env)
+        self.assertNotIn("https_proxy", env)
+        self.assertNotIn("http_proxy", env)
+        self.assertEqual(env["HF_HUB_OFFLINE"], "1")
+        self.assertEqual(env["no_proxy"], "git.uni-due.de,127.0.0.1,localhost")
+
+    def test_a_proxy_that_answers_stays(self):
+        import socket
+        listening = socket.socket()
+        listening.bind(("127.0.0.1", 0))
+        listening.listen(1)
+        self.addCleanup(listening.close)
+        env = {"https_proxy": f"http://127.0.0.1:{listening.getsockname()[1]}"}
+        page.without_dead_proxy(env)
+        self.assertIn("https_proxy", env)
+        self.assertNotIn("HF_HUB_OFFLINE", env)
+
+    def test_without_a_proxy_only_this_computer_is_named(self):
+        env = {}
+        page.without_dead_proxy(env)
+        self.assertEqual(env, {"no_proxy": "127.0.0.1,localhost", "NO_PROXY": "127.0.0.1,localhost"})
+
+
 class WithServer(InTemporaryProject):
     """The page's server on a free port; ask() is a browser's request."""
 

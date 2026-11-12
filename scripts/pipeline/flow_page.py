@@ -52,6 +52,7 @@ import mimetypes
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -319,7 +320,28 @@ def project_python():
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PATH": os.path.dirname(python) + os.pathsep + os.environ.get("PATH", "")}
     env.setdefault("HF_HUB_CACHE", os.path.join(core.PROJECT, "local_ai_models"))
     env.setdefault("HF_MODULES_CACHE", os.path.join(core.PROJECT, "local_ai_models", "modules"))
+    without_dead_proxy(env)
     return python, env
+
+
+def without_dead_proxy(env):
+    """A proxy that is set but refuses (as JupyterLab's on the uni server, 127.0.0.1:3129, sometimes) would end a run
+    at the first model that is looked up, although the models are on disk. Then the run goes without it: the models
+    from disk only, everything else directly (as cloud.py and cloud_worker.py do). This computer's own servers (the
+    local AI, ComfyUI) are never asked through a proxy."""
+    names = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY")
+    local = [a for a in (env.get("no_proxy") or env.get("NO_PROXY") or "").split(",") if a.strip()] + ["127.0.0.1", "localhost"]
+    env["no_proxy"] = env["NO_PROXY"] = ",".join(dict.fromkeys(local))
+    proxy = next((env[n] for n in names if env.get(n)), None)
+    if not proxy:
+        return
+    address = urllib.parse.urlparse(proxy if "://" in proxy else "http://" + proxy)
+    try:
+        socket.create_connection((address.hostname, address.port or 80), timeout=3).close()
+    except OSError:
+        for name in names:
+            env.pop(name, None)
+        env.setdefault("HF_HUB_OFFLINE", "1")
 
 
 def start_run(file, upto=None):
