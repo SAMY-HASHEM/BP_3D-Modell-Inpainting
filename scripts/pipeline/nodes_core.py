@@ -262,12 +262,15 @@ def inputs(name, files):
     return {"name": name.strip().replace(" ", "_"), "files": found}
 
 
-def data_sheet(pics, role="object", frames=8, ai=True):
-    """01: the local AI's data sheet of one input: its single views, what each is, and the lists for TRELLIS.2."""
+def data_sheet(pics, role="object", frames=8, ai=True, what=""):
+    """01: the local AI's data sheet of one input: its single views, what each is, and the lists for TRELLIS.2.
+    what = the user's own words for what the input shows: the judge gets them instead of the local AI's guess."""
+    what = " ".join(str(what or "").split())
     folder = node_folder(pics["name"], f"01_sheet_{role}", {"files": [stamp(f) for f in pics["files"]], "role": role,
-                                                             "frames": frames, "ai": ai})
+                                                             "frames": frames, "ai": ai, **({"what": what} if what else {})})
     out = os.path.join(folder, "sheet.json")
-    command = py("pipeline/data_sheet.py", *pics["files"], "--role", role, "--frames", frames, "--out", folder)
+    command = py("pipeline/data_sheet.py", *pics["files"], "--role", role, "--frames", frames, "--out", folder,
+                 *(["--what", what] if what else []))
     return {"folder": folder, "steps": [(command + ([] if ai else ["--no-ai"]), f"01 data sheet ({role})", out)],
             "outputs": {"data": {"path": out, "name": pics["name"], "role": role}, "sheet": os.path.join(folder, "contact.jpg")}}
 
@@ -309,13 +312,27 @@ def pick_seed(data, candidates):
             "outputs": {"model_from": out, "candidates": candidates}}
 
 
-def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit="between"):
+def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit="between", place=None, side=None, hand=None,
+         after=None, prompt=None, prompt_seed=1):
     """03: where the part goes. The three pictures per side (before, after = a collage, 2D mask) and the 3D area with
-    a job for every small cube (keep / delete / edit); nothing is placed by hand (make_edit.py)."""
-    sides, reference = sheet_views(part, "sides"), sheet_views(obj, "base")[0]
+    a job for every small cube (keep / delete / edit). The place is measured (make_edit.py), or given by hand (the web
+    page): place = the part's left, top, width in the picture of `side`, hand = a folder with the painted corrections
+    of the 2D mask (add_<view>.png, erase_<view>.png), after = a ready AFTER picture of `side` (made from a prompt).
+    No picture of the part (part = None): prompt = what should be added; the local picture AI paints it onto the
+    model's picture and what differs is the part (make_edit.py --prompt)."""
+    prompt = " ".join(str(prompt or "").split())
+    if not part and not prompt:
+        raise ValueError("the edit needs a part: its pictures (the input `part`), or a prompt that says what to add")
+    sides, reference = sheet_views(part, "sides") if part else [], sheet_views(obj, "base")[0]
+    words = {"prompt": prompt, "prompt_seed": int(prompt_seed)} if prompt and not part else {}
+    hand = project_path(hand) if hand else None
+    painted = sorted(os.path.join(hand, f) for f in os.listdir(hand) if f.endswith(".png")) if hand and os.path.isdir(hand) else []
+    by_hand = {**({"place": [int(v) for v in place]} if place else {}), **({"side": int(side)} if side is not None else {}),
+               **({"hand": [stamp(f) for f in painted if os.path.basename(f).startswith(("add_", "erase_"))]} if painted else {}),
+               **({"after": stamp(project_path(after))} if after else {})}  # nothing by hand: the folder's name stays as it was
     folder = node_folder(model["name"], "03_edit", {"model": stamp(model["glb"]), "sides": [stamp(s) for s in sides],
                                                     "reference": stamp(reference), "replace": replace, "width": width, "sink": sink,
-                                                    **({"head": head} if head != 0.12 else {}), "fit": fit})
+                                                    **({"head": head} if head != 0.12 else {}), "fit": fit, **by_hand, **words})
     turning = os.path.join(folder, "part_sides")  # the part's sides in turning order, as make_edit.py wants a folder
     os.makedirs(turning, exist_ok=True)
     for k, side in enumerate(sides[:4]):
@@ -323,12 +340,15 @@ def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit=
         if not os.path.lexists(link):
             os.symlink(os.path.realpath(side), link)
     out = os.path.join(folder, "edit.json")
-    command = py("inpainting/make_edit.py", model["glb"], turning, "--reference", reference, "--out", folder,
-                 "--width", width, "--sink", sink, "--head", head, "--fit", fit, *(["--replace"] if replace else []))
+    command = py("inpainting/make_edit.py", model["glb"], *([turning] if part else ["--prompt", prompt, "--prompt-seed", words["prompt_seed"]]),
+                 "--reference", reference, "--out", folder,
+                 "--width", width, "--sink", sink, "--head", head, "--fit", fit, *(["--replace"] if replace else []),
+                 *(["--place", *by_hand["place"]] if place else []), *(["--side", by_hand["side"]] if "side" in by_hand else []),
+                 *(["--hand", hand] if painted else []), *(["--after", project_path(after)] if after else []))
     return {"folder": folder, "steps": [(command, "03 edit (before, after, mask, area)", out)],
             "outputs": {"edit": {"folder": folder, "name": model["name"], "original": model,
                                  "object": json.load(open(obj["path"])).get("what") or "an object",
-                                 "part": json.load(open(part["path"])).get("what") or "a new part"},
+                                 "part": (json.load(open(part["path"])).get("what") if part else prompt) or "a new part"},
                         "sheet": os.path.join(folder, "three.jpg"), "area_map": os.path.join(folder, "area_map.jpg")}}
 
 

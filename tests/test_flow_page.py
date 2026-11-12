@@ -1,0 +1,309 @@
+"""Tests of the web page's back end (scripts/pipeline/flow_page.py) and of the edit node, without GPU, server or browser.
+
+    python -W ignore::ResourceWarning -m unittest discover tests      # any Python 3, from the project folder
+
+Everything is written into a temporary folder: the project's own flows/ and pictures/ are not touched.
+"""
+import json
+import os
+import sys
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
+from unittest import mock
+
+PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(PROJECT, "scripts", "pipeline"))
+
+import flow as flows  # noqa: E402
+import flow_page as page  # noqa: E402
+import nodes_core as core  # noqa: E402
+
+
+class InTemporaryProject(unittest.TestCase):
+    """flow_page with its folders in a temporary project."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        root = os.path.realpath(self.temporary.name)
+        self.root = root
+        patches = [mock.patch.object(core, "PROJECT", root), mock.patch.object(core, "OUTPUTS", os.path.join(root, "outputs", "pipeline")),
+                   mock.patch.object(page, "FLOWS", os.path.join(root, "flows")),
+                   mock.patch.object(page, "HAND", os.path.join(root, "flows", "hand")),
+                   mock.patch.object(page, "UPLOADS", os.path.join(root, "pictures", "uploads"))]
+        for one in patches:
+            one.start()
+            self.addCleanup(one.stop)
+        self.addCleanup(self.temporary.cleanup)
+        os.makedirs(page.FLOWS)
+
+    def upload(self, flow, role, name, body=b"\x89PNG picture"):
+        """As the page's POST /api/upload: gives the path from the project folder."""
+        import io
+        return page.save_upload(f"/api/upload?flow={flow}&role={role}&name={name}", io.BytesIO(body), len(body))
+
+    def flow(self, name):
+        return json.load(open(os.path.join(page.FLOWS, name + ".json")))
+
+
+class Uploads(InTemporaryProject):
+    def test_a_picture_is_saved_under_the_project_and_role(self):
+        path = self.upload("demo", "object", "front.png")
+        self.assertEqual(path, "pictures/uploads/demo/object/front.png")
+        self.assertTrue(os.path.isfile(os.path.join(self.root, path)))
+
+    def test_a_name_cannot_leave_the_upload_folder(self):
+        path = self.upload("demo", "part", "..%2F..%2F..%2Fevil.png")
+        self.assertTrue(path.startswith("pictures/uploads/demo/part/"))
+        self.assertNotIn("..", path)
+
+    def test_only_pictures_and_videos(self):
+        for name in ("model.glb", "script.py", "noending"):
+            with self.assertRaises(ValueError):
+                self.upload("demo", "object", name)
+
+    def test_project_name_and_role_are_checked(self):
+        with self.assertRaises(ValueError):
+            self.upload("../demo", "object", "a.png")
+        with self.assertRaises(ValueError):
+            self.upload("demo", "other", "a.png")
+
+
+class CreatingAFlow(InTemporaryProject):
+    def create(self, name="demo", parts=0, **more):
+        items = [{"path": self.upload(name, "object", "front.png"), "role": "object", "prompt": "the  front "}]
+        items += [{"path": self.upload(name, "part", f"part{k}.png"), "role": "part", "prompt": ""} for k in range(parts)]
+        page.create_flow({"flow": name, "prompt": "a test", "items": items, **more})
+        return self.flow(name)
+
+    def test_only_an_object_ends_at_the_base_model(self):
+        made = self.create(settings={"seed": 7, "steps": 12, "resolution": "512", "where": "pc"})
+        self.assertEqual([n["id"] for n in made["nodes"]], ["object", "object_sheet", "base"])
+        base = made["nodes"][-1]
+        self.assertEqual((base["seed"], base["steps"], base["resolution"], base["where"]), (7, 12, "512", "pc"))
+        self.assertEqual(made["nodes"][0]["prompts"], ["front.png: the front"])
+        self.assertEqual(made["nodes"][1]["what"], "the front")  # the row's prompt is what the object is called
+        self.assertEqual(made["made_by"], "app")
+
+    def test_a_part_gives_the_edit_and_the_three_steps(self):
+        made = self.create(parts=1)
+        ids = [n["id"] for n in made["nodes"]]
+        self.assertEqual(ids, ["object", "part", "object_sheet", "part_sheet", "base", "edit", "shape", "judge_shape", "details",
+                               "judge_details", "colours", "judge_colours"])
+        edit = next(n for n in made["nodes"] if n["id"] == "edit")
+        self.assertEqual(edit["in"], {"model": "base", "part": "part_sheet", "object": "object_sheet"})
+        self.assertNotIn("prompt", edit)
+        self.assertNotIn("what", next(n for n in made["nodes"] if n["id"] == "part_sheet"))  # no prompt: the local AI says what it is
+
+    def test_a_part_from_words_needs_no_part_input(self):
+        made = self.create(part_prompt="  a wide   pointed hat on the head ")
+        ids = [n["id"] for n in made["nodes"]]
+        self.assertNotIn("part", ids)
+        self.assertNotIn("part_sheet", ids)
+        edit = next(n for n in made["nodes"] if n["id"] == "edit")
+        self.assertEqual(edit["prompt"], "a wide pointed hat on the head")
+        self.assertEqual(edit["in"], {"model": "base", "object": "object_sheet"})
+        self.assertEqual(ids[-1], "judge_colours")
+
+    def test_words_and_pictures_of_a_part_together_are_refused(self):
+        with self.assertRaises(ValueError):
+            self.create(parts=1, part_prompt="a hat")
+
+    def test_every_node_lists_only_nodes_before_it(self):
+        for made in (self.create("one", parts=2), self.create("two", part_prompt="a hat")):
+            seen = set()
+            for node in made["nodes"]:
+                for sources in flows.links(node).values():
+                    self.assertTrue(set(sources) <= seen, node["id"])
+                self.assertIn(node["type"], flows.TYPES)
+                seen.add(node["id"])
+
+    def test_it_needs_an_object(self):
+        item = {"path": self.upload("demo", "part", "crown.png"), "role": "part"}
+        with self.assertRaises(ValueError):
+            page.create_flow({"flow": "demo", "items": [item]})
+
+    def test_a_file_from_elsewhere_is_refused(self):
+        other = os.path.join(self.root, "secret.png")
+        open(other, "w").close()
+        for path in ("secret.png", "../secret.png", self.upload("other", "object", "a.png")):
+            with self.assertRaises(ValueError):
+                page.create_flow({"flow": "demo", "items": [{"path": path, "role": "object"}]})
+
+    def test_a_flow_made_by_hand_is_never_overwritten(self):
+        page.save_flow(os.path.join(page.FLOWS, "mine.json"), {"name": "mine", "nodes": []})
+        with self.assertRaises(ValueError):
+            self.create("mine")
+        self.create("mine2")
+        self.create("mine2")  # its own flows it may write again
+
+    def test_settings_that_do_not_fit(self):
+        for settings in ({"resolution": "2048"}, {"where": "moon"}, {"steps": 0}, {"steps": "many"}, {"seed": -1}):
+            with self.assertRaises(ValueError, msg=settings):
+                self.create(settings=settings)
+
+    def test_what_was_taken_off_the_page_leaves_the_upload_folder(self):
+        self.create(parts=2)
+        folder = os.path.join(page.UPLOADS, "demo", "part")
+        self.assertEqual(len(os.listdir(folder)), 2)
+        self.create(parts=0)
+        self.assertEqual(os.listdir(folder), [])
+
+
+class NodeSettings(InTemporaryProject):
+    def setUp(self):
+        super().setUp()
+        page.save_flow(os.path.join(page.FLOWS, "demo.json"), {"name": "demo", "nodes": [
+            {"id": "base", "type": "base", "seed": 42}, {"id": "edit", "type": "edit", "in": {"model": "base"}},
+            {"id": "shape", "type": "inpaint", "seeds": [1]}]})
+
+    def node(self, key):
+        return next(n for n in self.flow("demo")["nodes"] if n["id"] == key)
+
+    def test_each_setting_keeps_the_kind_of_its_default(self):
+        page.set_settings("demo", {"node": "base", "settings": {"seed": "7", "steps": 30.0, "resolution": 512}})
+        self.assertEqual((self.node("base")["seed"], self.node("base")["steps"], self.node("base")["resolution"]), (7, 30, "512"))
+        page.set_settings("demo", {"node": "shape", "settings": {"seeds": "1, 2;3"}})
+        self.assertEqual(self.node("shape")["seeds"], [1, 2, 3])
+        page.set_settings("demo", {"node": "edit", "settings": {"replace": 1, "width": "0.5", "prompt": " a hat ", "prompt_seed": "3"}})
+        edit = self.node("edit")
+        self.assertEqual((edit["replace"], edit["width"], edit["prompt"], edit["prompt_seed"]), (True, 0.5, "a hat", 3))
+
+    def test_a_default_that_was_not_in_the_file_stays_out(self):
+        page.set_settings("demo", {"node": "base", "settings": {"steps": 25}})
+        self.assertNotIn("steps", self.node("base"))
+
+    def test_what_cannot_be_set(self):
+        for node, settings in (("base", {"faces": 1}), ("base", {"where": "moon"}), ("base", {"seed": "x"}), ("shape", {"seeds": ""}),
+                               ("nobody", {"seed": 1})):
+            with self.assertRaises(ValueError, msg=(node, settings)):
+                page.set_settings("demo", {"node": node, "settings": settings})
+
+
+class TheEditNode(InTemporaryProject):
+    """nodes_core.edit: the folder's name is the node's memory, so it must not change for flows that are there already."""
+
+    def setUp(self):
+        super().setUp()
+        self.model = {"glb": os.path.join(self.root, "model.glb"), "name": "demo"}
+        for name, lists in (("object", {"base": ["front"]}), ("part", {"sides": ["side"]})):
+            json.dump({"what": f"the {name}", "views": [{"name": "front", "path": "front.png"}, {"name": "side", "path": "side.png"}],
+                       "lists": lists}, open(os.path.join(self.root, name + ".json"), "w"))
+        self.object = {"path": os.path.join(self.root, "object.json"), "name": "demo"}
+        self.part = {"path": os.path.join(self.root, "part.json"), "name": "demo"}
+        open(os.path.join(self.root, "side.png"), "w").close()
+
+    def test_with_a_part_picture_nothing_changed(self):
+        job = core.edit(self.model, self.part, self.object)
+        settings = json.load(open(os.path.join(job["folder"], "settings.json")))
+        self.assertEqual(sorted(settings), ["fit", "model", "reference", "replace", "sides", "sink", "width"])  # as before the prompt
+        command = job["steps"][0][0]
+        self.assertTrue(command[3].endswith("part_sides"))
+        self.assertNotIn("--prompt", command)
+        self.assertEqual(job["outputs"]["edit"]["part"], "the part")
+
+    def test_a_prompt_beside_a_part_picture_is_not_used(self):
+        self.assertEqual(core.edit(self.model, self.part, self.object)["folder"],
+                         core.edit(self.model, self.part, self.object, prompt="a hat")["folder"])
+
+    def test_words_only(self):
+        job = core.edit(self.model, None, self.object, prompt=" a wide  hat ", prompt_seed=2)
+        command = job["steps"][0][0]
+        at = command.index("--prompt")
+        self.assertEqual(command[at:at + 4], ["--prompt", "a wide hat", "--prompt-seed", "2"])
+        self.assertEqual(job["outputs"]["edit"]["part"], "a wide hat")
+        other = core.edit(self.model, None, self.object, prompt="a wide hat", prompt_seed=3)
+        self.assertNotEqual(job["folder"], other["folder"])  # another seed is another result
+
+    def test_neither_a_part_nor_words(self):
+        with self.assertRaises(ValueError):
+            core.edit(self.model, None, self.object)
+
+
+class TheDataSheetNode(InTemporaryProject):
+    def test_the_users_words_are_only_in_the_folders_name_when_given(self):
+        picture = os.path.join(self.root, "a.png")
+        open(picture, "w").close()
+        pics = {"name": "demo", "files": [picture]}
+        plain, named = core.data_sheet(pics), core.data_sheet(pics, what=" the  girl's head ")
+        self.assertEqual(sorted(json.load(open(os.path.join(plain["folder"], "settings.json")))), ["ai", "files", "frames", "role"])
+        self.assertNotEqual(plain["folder"], named["folder"])
+        self.assertEqual(named["steps"][0][0][-2:], ["--what", "the girl's head"])
+        self.assertNotIn("--what", plain["steps"][0][0])
+
+
+class OneSetOfDefaults(unittest.TestCase):
+    """A setting's default is written down in the page's back end (SETTINGS) and in the node itself (nodes_core):
+    the page shows the first, the flow runs with the second. They must say the same."""
+
+    def test_the_pages_defaults_are_the_nodes_defaults(self):
+        import inspect
+        nodes = {"data_sheet": core.data_sheet, "base": core.base_model, "edit": core.edit, "inpaint": core.inpaint_step,
+                 "judge": core.edit_judge}
+        same = lambda value: list(value) if isinstance(value, (list, tuple)) else "" if value is None else value
+        for kind, function in nodes.items():
+            real = {name: p.default for name, p in inspect.signature(function).parameters.items() if p.default is not p.empty}
+            for key, shown in page.SETTINGS[kind].items():
+                self.assertIn(key, real, f"{kind}: {key} is on the page but the node has no such setting")
+                self.assertEqual(same(shown), same(real[key]), f"{kind}: {key}")
+
+    def test_every_node_type_is_known_everywhere(self):
+        self.assertEqual(set(page.SETTINGS), set(flows.TYPES))
+        self.assertEqual(set(flows.COLOURS), set(flows.TYPES))
+
+
+class OverHttp(InTemporaryProject):
+    def setUp(self):
+        super().setUp()
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), page.Page)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.address = f"http://127.0.0.1:{self.server.server_port}"
+
+    def ask(self, path, body=None, headers=None):
+        request = urllib.request.Request(self.address + path, data=body, headers=headers or {})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as answer:
+                return answer.status, answer.read()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read()
+
+    def test_the_pages_and_the_flow_list(self):
+        self.assertEqual(self.ask("/app")[0], 200)
+        self.assertEqual(self.ask("/")[0], 200)
+        self.assertEqual(json.loads(self.ask("/api/flows")[1]), [])
+
+    def test_a_post_without_the_pages_header_is_refused(self):
+        body = json.dumps({"flow": "demo"}).encode()
+        self.assertEqual(self.ask("/api/run", body, {"Content-Type": "application/json"})[0], 403)
+        self.assertEqual(self.ask("/api/run", body, {"X-Flow-Page": "1", "Origin": "http://evil.example"})[0], 403)
+
+    def test_only_pictures_out_of_the_open_folders(self):
+        os.makedirs(os.path.join(self.root, "pictures"))
+        open(os.path.join(self.root, "pictures", "a.png"), "wb").write(b"x")
+        open(os.path.join(self.root, "secret.png"), "wb").write(b"x")
+        open(os.path.join(self.root, "pictures", "notes.txt"), "wb").write(b"x")
+        self.assertEqual(self.ask("/file/pictures/a.png")[0], 200)
+        for path in ("/file/secret.png", "/file/pictures/../secret.png", "/file/pictures/notes.txt", "/file/pictures/%2e%2e/secret.png"):
+            self.assertEqual(self.ask(path)[0], 404, path)
+
+    def test_upload_then_create_as_the_page_does(self):
+        mine = {"X-Flow-Page": "1", "Content-Type": "application/octet-stream"}
+        code, answer = self.ask("/api/upload?flow=demo&role=object&name=front.png", b"\x89PNG", mine)
+        self.assertEqual(code, 200)
+        wanted = {"flow": "demo", "items": [{"path": json.loads(answer)["path"], "role": "object"}], "part_prompt": "a hat"}
+        code, answer = self.ask("/api/app/create", json.dumps(wanted).encode(), {"X-Flow-Page": "1", "Content-Type": "application/json"})
+        self.assertEqual((code, json.loads(answer)), (200, {"ok": True}))
+        listed = json.loads(self.ask("/api/flows")[1])
+        self.assertEqual([(f["file"], f["nodes"], f["app"]) for f in listed], [("demo", 10, True)])
+        code, answer = self.ask("/api/upload?flow=demo&role=object&name=model.glb", b"x", mine)
+        self.assertEqual(code, 400)
+        self.assertIn("no picture or video", json.loads(answer)["error"])
+
+
+if __name__ == "__main__":
+    unittest.main()

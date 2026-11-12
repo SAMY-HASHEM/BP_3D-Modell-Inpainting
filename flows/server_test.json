@@ -1,0 +1,11 @@
+{
+ "name": "server_test",
+ "about": "small test: a base model through the uni server",
+ "prompt": "small test: a base model through the uni server",
+ "made_by": "app",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the object", "files": ["pictures/uploads/server_test/object/sculpt.jpg"], "prompts": ["sculpt.jpg: the wanderer with the lanterns"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "in": {"pictures": "object"}},
+  {"id": "base", "type": "base", "seed": 42, "where": "server", "resolution": "512", "steps": 12, "in": {"data": "object_sheet"}}
+ ]
+}

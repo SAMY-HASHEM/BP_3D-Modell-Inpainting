@@ -137,6 +137,8 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--frames", type=int, default=8, help="frames taken from a video's turn (a multiple of 4)")
     parser.add_argument("--no-ai", action="store_true", help="only the measured facts (every single picture counts as front)")
+    parser.add_argument("--what", default="", help="what the input shows, in the user's own words: taken instead of the local "
+                        "AI's guess (which reads e.g. a logo on the picture as the object's name)")
     args = parser.parse_args()
     views_dir = os.path.join(args.out, "views")
     os.makedirs(views_dir, exist_ok=True)
@@ -193,7 +195,8 @@ def main():
             print(f"  {view['name']}: {view['side']}, {view['colour']}, {view['what']}", flush=True)
     lists = choose_lists(views, args.role)
     what = next((v["what"] for v in views if v["name"] in (lists["base"] + lists["sides"])[:1] and v["what"]), "")
-    sheet = {"role": args.role, "what": what, "files": files, "ai": None if args.no_ai else MODEL, "views": views,
+    said = " ".join(args.what.split())
+    sheet = {"role": args.role, "what": said or what, **({"what_ai": what} if said else {}), "files": files, "ai": None if args.no_ai else MODEL, "views": views,
              "lists": lists}
     contact(views, lists, os.path.join(args.out, "contact.jpg"))
     json.dump(sheet, open(os.path.join(args.out, "sheet.json"), "w"), indent=1)

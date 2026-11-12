@@ -10,6 +10,19 @@ EDIT the empty room the new part grows into. Only DELETE + EDIT are regenerated,
 
     python scripts/inpainting/make_edit.py model.glb crown.png --reference robot.png --out outputs/edits/robot_crown
 
+By hand (the web page's "Edit by hand", scripts/pipeline/flow_page.py): --place X Y WIDTH puts the part there instead
+of the measured place (pixels of the main side's picture), and --hand FOLDER has the painted corrections of the 2D
+mask, per side: add_<view>.png (white = this changes too) and erase_<view>.png (white = this stays).
+--after PICTURE is a ready AFTER picture of the main side (prompt_picture.py: a prompt painted into the painted area):
+what differs from BEFORE inside add_<side>.png is the new part, no part picture is used.
+
+No picture of the part at all: --prompt "a wide pointed wizard hat on the head" instead of the part. The local picture
+AI (Qwen-Image-Edit, as prompt_picture.py) paints the words onto BEFORE of the main side; what differs from BEFORE is
+the new part and its 2D mask. Such a part can be anywhere on the model, so the 3D area is put where the model's
+surface is under the part (tried on the wanderer, Nov 11: a hat, a shield in the hand, wings on the back).
+
+    python scripts/inpainting/make_edit.py model.glb --prompt "a round wooden shield in the free hand" --out outputs/edits/shield
+
 Writes before.png, after.png, mask.png, area.npy, area_map.jpg, edit.json, then send with cloud.py inpaint (edit.json has the line).
 """
 import _paths  # noqa: F401  (the scripts of the other folders)
@@ -29,6 +42,10 @@ PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file
 BLENDER = os.environ.get("BLENDER", os.path.expanduser("~/Applications/blender/blender"))
 GREY = (190, 190, 192)
 GRID = 64  # TRELLIS.2's voxels per side
+# the sentence around --prompt: nothing is marked in the picture, the picture AI finds the place from the words
+WORDS = ("In image 1, add {prompt} to the object{reference}. Keep everything else in image 1 exactly as it is: "
+         "same object, same pose, same camera angle, same lighting, same plain grey background. "
+         "The new part fits the scale, material and style of the object.")
 
 
 def background_remover():
@@ -99,6 +116,60 @@ def collage(render, part, x, y):
     return before, after, mask.filter(ImageFilter.MaxFilter(9))
 
 
+def changed_part(args, render, side):
+    """A ready AFTER picture instead of a part's picture: the new part is what differs from BEFORE inside the painted
+    area. Sets --place to where it is; returns it cut out, as a part's picture would be."""
+    before = np.asarray(on_grey(render), int)
+    wanted = Image.open(args.after).convert("RGB").resize(render.size, Image.LANCZOS)
+    painted = Image.open(os.path.join(args.hand or "", f"add_{side}.png"))
+    painted = painted.getchannel("A") if painted.mode == "RGBA" else painted.convert("L")
+    area = np.asarray(painted.resize(render.size, Image.NEAREST)) > 127
+    differs = (np.abs(np.asarray(wanted, int) - before).sum(-1) > 40) & area
+    differs = ndimage.binary_fill_holes(ndimage.binary_closing(differs, iterations=3))
+    if differs.sum() < 50:  # nothing to see of the change: the whole painted area
+        differs = area
+    ys, xs = np.nonzero(differs)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+    part = wanted.convert("RGBA")
+    part.putalpha(Image.fromarray((differs * 255).astype(np.uint8)))
+    args.place = [box[0], box[1], box[2] - box[0]]
+    return part.crop(box)
+
+
+def part_from_words(args, render):
+    """No picture of the part: the picture AI paints --prompt onto BEFORE, the new part is what differs from BEFORE
+    (only the big changes: the picture AI's small noise elsewhere is not the part). Sets --place to where it is;
+    returns it cut out, as a part's picture would be. Writes words.png (what the picture AI painted)."""
+    import torch
+    from picture_from_prompt import comfy_edit
+    torch.cuda.empty_cache()  # the picture AI needs this PC's whole GPU
+    plate = on_grey(render)
+    painted = os.path.join(args.out, "words.png")
+    if not os.path.isfile(painted):  # the same words and seed give the same picture: not painted twice
+        comfy_edit(plate, args.prompt, args.prompt_seed, report=lambda text: print(f"    {text}", flush=True),
+                   template=WORDS).resize(render.size, Image.LANCZOS).save(painted)
+    wanted = Image.open(painted).convert("RGB")
+    differs = np.abs(np.asarray(wanted, int) - np.asarray(plate, int)).sum(-1) > 60
+    differs = ndimage.binary_closing(ndimage.binary_opening(differs, iterations=2), iterations=4)
+    labels, count = ndimage.label(differs)
+    if not count:
+        raise SystemExit(f"the picture AI changed nothing to see for “{args.prompt}”: other words, or another --prompt-seed")
+    sizes = ndimage.sum(np.ones(labels.shape), labels, range(1, count + 1))
+    big = [k + 1 for k, pixels_ in enumerate(sizes) if pixels_ > max(400, 0.25 * sizes.max())]
+    differs = ndimage.binary_fill_holes(np.isin(labels, big))
+    share = differs.mean()
+    print(f"    the words changed {100 * share:.1f} % of the picture, in {len(big)} piece(s)", flush=True)
+    if share > 0.5:
+        raise SystemExit("the picture AI changed more than half of the picture: that is a new object, not a new part")
+    ys, xs = np.nonzero(differs)
+    box = (int(xs.min()), max(1, int(ys.min())), int(xs.max()) + 1, min(render.size[1] - 2, int(ys.max()) + 1))
+    part = wanted.convert("RGBA")
+    part.putalpha(Image.fromarray((differs * 255).astype(np.uint8)))
+    if not args.place:
+        args.place = [box[0], box[1], box[2] - box[0]]
+    return part.crop(box)
+
+
 def pixels(points, origin, right, size, per_pixel):
     """Where points of the model fall in a straight view (views.json): column and row."""
     u = ((points - origin) @ right / per_pixel + size / 2).astype(int)
@@ -129,7 +200,11 @@ def show_area(front, side_view, info, side, points, keep, delete, edit, origin, 
 def main():
     parser = argparse.ArgumentParser(description="BEFORE, AFTER and the 2D mask for inpainting by picture")
     parser.add_argument("model")
-    parser.add_argument("part", help="picture of the new part; a video of it turning once, or a folder of its sides in turning order: all four sides are made")
+    parser.add_argument("part", nargs="?", help="picture of the new part; a video of it turning once, or a folder of its sides in "
+                        "turning order: all four sides are made. Left out with --prompt")
+    parser.add_argument("--prompt", help="no picture of the part: the local picture AI paints these words onto the model's "
+                        "picture of the main side, what differs from BEFORE is the new part")
+    parser.add_argument("--prompt-seed", type=int, default=1, help="another seed gives another picture for the same words")
     parser.add_argument("--reference", help="the model's own picture: picks the side the collage is made on")
     parser.add_argument("--side", type=int, choices=range(4), help="or the side by hand")
     parser.add_argument("--out", required=True)
@@ -139,9 +214,17 @@ def main():
     parser.add_argument("--fit", choices=["between", "over"], default="between",
                         help="when things stand up beside the middle (hair buns, horns): between = as wide as the free gap; "
                         "over = the full width, over them (use it with --replace: what the part covers is regenerated)")
+    parser.add_argument("--place", type=int, nargs=3, metavar=("X", "Y", "WIDTH"),
+                        help="by hand: the part's left, top and width in the main side's picture (pixels), nothing is measured")
+    parser.add_argument("--hand", metavar="FOLDER", help="by hand: painted corrections of the 2D mask, "
+                        "add_<view>.png (white = changes too) and erase_<view>.png (white = stays) per side")
+    parser.add_argument("--after", metavar="PICTURE", help="by hand: a ready AFTER picture of the main side (--side), e.g. "
+                        "from a prompt; the new part is what differs from BEFORE inside the painted area (--hand, add_<side>.png)")
     parser.add_argument("--replace", action="store_true", help="the model's surface under the 2D mask goes too (DELETE); "
                         "without it the whole surface stays and the part grows only into the empty room")
     args = parser.parse_args()
+    if not (args.part or args.prompt or args.after):
+        parser.error("give the part's picture, or --prompt with what should be added")
     os.makedirs(args.out, exist_ok=True)
 
     if not os.path.isfile(os.path.join(args.out, "views.json")):
@@ -167,12 +250,22 @@ def main():
     columns = np.nonzero(blob.any(0))[0]
     left, right = int(columns[0]), int(columns[-1])
 
-    video = args.part.lower().endswith((".mp4", ".mov", ".webm", ".mkv"))
-    if os.path.isdir(args.part):  # a folder: its pictures in turning order
-        paths = [os.path.join(args.part, n) for n in sorted(os.listdir(args.part)) if n.lower().endswith((".png", ".jpg", ".jpeg"))][:4]
+    given = bool(args.place)  # a place from the command line (the web page's edit by hand)
+    if args.after:
+        parts = [changed_part(args, render, side)]
+    elif args.part:
+        video = args.part.lower().endswith((".mp4", ".mov", ".webm", ".mkv"))
+        if os.path.isdir(args.part):  # a folder: its pictures in turning order
+            paths = [os.path.join(args.part, n) for n in sorted(os.listdir(args.part)) if n.lower().endswith((".png", ".jpg", ".jpeg"))][:4]
+        else:
+            paths = turning_frames(args.part, args.out) if video else [args.part]
+        parts = [cut_out(remover, p) for p in paths]
     else:
-        paths = turning_frames(args.part, args.out) if video else [args.part]
-    parts = [cut_out(remover, p) for p in paths]
+        del remover
+        parts = [part_from_words(args, render)]
+    anywhere = bool(args.after or (args.prompt and not args.part))  # such a part is where the picture shows it, not only on the top
+    for k, one in enumerate(parts):  # the cut-out parts: the web page shows them to place the part by hand
+        one.save(os.path.join(args.out, f"cut_{k}.png"))
     part = parts[0]
     width = int(args.width * (right - left))
     part_height = int(part.height * width / part.width)
@@ -182,7 +275,7 @@ def main():
     profile = np.where(alpha.any(0), alpha.argmax(0), alpha.shape[0])  # the object's top row in every column
     near = slice(centre - max(4, (right - left) // 20), centre + max(4, (right - left) // 20) + 1)
     middle_top = int(profile[near].max())  # the floor of the valley in the middle (a parting counts as its floor)
-    fitted = middle_top - top > 0.1 * part_height
+    fitted = middle_top - top > 0.1 * part_height and not args.place
     if fitted:
         level = (middle_top + top) / 2  # the gap is measured halfway up the things beside it
         free = profile > level
@@ -195,12 +288,26 @@ def main():
         print(f"    the top stands {middle_top - top} px above the middle: the part sits on the middle, {width} px wide "
               f"(the free gap is {gap} px, fit: {args.fit})", flush=True)
         top = middle_top
-    part = part.resize((width, part_height), Image.LANCZOS)
     x = (left + right - width) // 2
     y = top - part_height + int(args.sink * part_height)
-    assert y > 0, "the part doesn't fit into the picture"
+    if args.place:  # by hand
+        x, y, width = args.place[0], args.place[1], max(8, args.place[2])
+        part_height = max(2, int(part.height * width / part.width))
+        print(f"    {'where the picture shows it' if anywhere and not given else 'placed by hand'}: left {x}, top {y}, {width} x {part_height} px", flush=True)
+    part = part.resize((width, part_height), Image.LANCZOS)
+    assert y > 0 and y + part_height < size and 0 <= x and x + width <= size, "the part doesn't fit into the picture"
+
+    def by_hand(one, view_index):
+        """The 2D mask of a side with the painted corrections: what was added changes too, what was erased stays."""
+        for name, lighter in (("add", True), ("erase", False)):
+            path = os.path.join(args.hand or "", f"{name}_{view_index}.png")
+            if args.hand and os.path.isfile(path):
+                painted = Image.open(path).convert("L").resize(one.size, Image.NEAREST).point(lambda v: 255 if v > 127 else 0)
+                one = Image.composite(Image.new("L", one.size, 255 if lighter else 0), one, painted)
+        return one
 
     before, after, mask = collage(render, part, x, y)
+    mask = by_hand(mask, side)
     for picture, name in ((before, "before"), (after, "after")):
         picture.save(os.path.join(args.out, f"{name}.png"))
     mask.save(os.path.join(args.out, "mask.png"))
@@ -222,13 +329,35 @@ def main():
     depth_axis = to_gltf(np.array(view["toward"]))
     middle = middle + depth_axis * ((head_middle - to_gltf(center)) @ depth_axis)
     half = (across[1] - across[0]) / 2 + 2 * voxel
+    surface = trimesh.sample.sample_surface(mesh, 2_000_000, seed=0)[0]
+    behind = None  # how far behind the area's middle it still reaches (None: all around, as a crown)
+    if anywhere:
+        # where the model is under the part, seen from the main side. A part that tops the model there (a hat) goes
+        # all around the model's middle; any other (a shield, wings) sits on the side that is seen: the area starts
+        # at the surface there and takes only a little of what lies behind it, so the far side stays out of it
+        u, v = pixels(surface, to_gltf(center), right_axis, size, per_pixel)
+        in_columns = (u >= x) & (u < x + width)
+        under = in_columns & (v >= y) & (v < y + part_height)
+        if not under.any():  # the part is beside the model: the nearest of the model counts
+            reach = np.hypot(u - (x + width / 2), v - (y + part_height / 2))
+            under = reach <= np.partition(reach, 2000)[2000]
+        depth = (surface - to_gltf(center)) @ depth_axis
+        tops = in_columns.any() and y <= v[in_columns].min() + 2
+        low, high = np.percentile(depth[under], [2, 98])
+        if tops:
+            at = (low + high) / 2
+        else:
+            at, behind = high, max(3 * voxel, 0.35 * half)
+        middle = to_gltf(center) + right_axis * across.mean() + depth_axis * at
+        print(f"    the part {'tops the model: the area goes all around it' if tops else 'sits on the side that is seen: the area starts at the surface there'}", flush=True)
     steps = np.arange(-half, half + voxel / 2, voxel / 2)
     heights = np.arange(up[0] - voxel, up[1] + 2 * voxel, voxel / 2)
     a, b, c = np.meshgrid(steps, steps, heights, indexing="ij")
     points = middle + a[..., None] * right_axis + b[..., None] * depth_axis
     points = points.reshape(-1, 3)
     points[:, 1] = c.reshape(-1)
-    points = points[np.hypot(a.reshape(-1), b.reshape(-1)) <= half]  # a round area for a round part
+    round_ = np.hypot(a.reshape(-1), b.reshape(-1)) <= half  # a round area for a round part
+    points = points[round_ & (b.reshape(-1) >= -behind)] if behind is not None else points[round_]
 
     sides = []
     masks = [mask]
@@ -239,6 +368,7 @@ def main():
         middle_x = pixels(middle[None], origin, right_k, size, per_pixel)[0][0]
         one = parts[k].resize((max(2, int(parts[k].width * part_height / parts[k].height)), part_height), Image.LANCZOS)
         pictures = collage(renders[index], one, int(middle_x - one.width / 2), y)
+        pictures = (pictures[0], pictures[1], by_hand(pictures[2], index))
         names = [os.path.join(args.out, f"{what}_{k}.png") for what in ("after", "before", "mask")]
         pictures[1].save(names[0])
         pictures[0].save(names[1])
@@ -247,7 +377,6 @@ def main():
         sides += ["--more-edit", *names]
 
     # every small cube of the area: KEEP (model surface that stays), DELETE (old surface under the 2D mask), EDIT (empty)
-    surface = trimesh.sample.sample_surface(mesh, 2_000_000, seed=0)[0]
     surface = surface[surface[:, 1] > up[0] - 4 * voxel]
     on_surface = cKDTree(surface).query(points)[0] <= 1.5 * voxel if len(surface) else np.zeros(len(points), bool)
     # under the model's surface is inside the model: it is no empty room (new parts grew out through the head)
@@ -271,7 +400,9 @@ def main():
     room = round(float(min(0.5, 1.05 * above / (above + model_size))), 3)
     report = {"side": side, "room": room, "keep": int(keep.sum()), "delete": int(delete.sum()), "edit": int(edit.sum()),
               "box_y": [float(up[0]), float(up[1])], "part_pixels": [x, y, width, part_height],
-              "fitted_between": bool(fitted)}
+              "fitted_between": bool(fitted), "by_hand": bool(args.place or args.hand)}
+    if args.prompt and not args.part:
+        report.update(prompt=args.prompt, prompt_seed=args.prompt_seed, by_hand=bool(args.hand))
     report["more_edit"] = sides
     json.dump(report, open(os.path.join(args.out, "edit.json"), "w"), indent=1)
     sheet = Image.new("RGB", (1500, 500), "white")

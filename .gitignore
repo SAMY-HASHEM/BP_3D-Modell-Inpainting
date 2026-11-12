@@ -18,3 +18,6 @@ __pycache__/
 /local_ai_models/
 /models
 /VoxHammer/
+
+# The picture AI's output while it paints a prompt (web page, edit by hand)
+flows/hand/*/prompt.log

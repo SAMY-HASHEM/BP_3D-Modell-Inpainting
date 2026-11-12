@@ -278,6 +278,7 @@ textarea.hprompt, .detail input[type=number] { width: 100%; background: var(--ra
 .scores th:first-child, .scores td:first-child { text-align: left; padding-left: 0; }
 .scores th { color: var(--dim); font-weight: 500; font-size: 12px; }
 .scores tr.shown td { font-weight: 700; }
+.wide { overflow-x: auto; max-width: 100%; }
 .low { font-weight: 700; text-decoration: underline wavy; }  /* below the limit: no third color, a wavy line */
 .badge { font-size: 11px; background: var(--brand); color: var(--on-brand); border-radius: 20px; padding: 1px 7px; margin-left: 6px; font-weight: 600; }
 .defects { margin: 6px 0 0; padding-left: 18px; } .defects li { margin: 2px 0; }
@@ -323,6 +324,7 @@ footer .ar { font-family: "Reem Kufi", sans-serif; color: var(--brand); }
     </g>
   </symbol>
   <symbol id="cube" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7zM3 7l9 5 9-5M12 12v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="words" viewBox="0 0 24 24"><path d="M4 7V5h16v2M12 5v14M9 19h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
 </svg>
 
@@ -405,7 +407,7 @@ footer .ar { font-family: "Reem Kufi", sans-serif; color: var(--brand); }
 <script>
 "use strict";
 const MODEL = /\.(glb|gltf|obj|ply)$/i;
-const items = [];  // {id, file, name, kind: picture|video|model, url, prompt, role: object|part}
+const items = [];  // {id, file, name, kind: picture|video|model|words, url, prompt, role: object|part}; words = a part without a picture: its prompt is the part
 let nextId = 1;
 const $ = id => document.getElementById(id);
 
@@ -447,14 +449,24 @@ function add(files) {
     const kind = file.type.startsWith("image/") ? "picture" : file.type.startsWith("video/") ? "video" : null;
     if (!kind) { skipped++; continue; }
     items.push({ id: nextId++, file, name: file.name, kind, url: URL.createObjectURL(file), prompt: "",
-                 role: items.length === 0 ? "object" : "part" });
+                 role: items.some(i => i.role === "object") ? "part" : "object" });
   }
   if (skipped) toast(`${skipped} file(s) skipped: the pipeline reads pictures and videos`);
   render();
 }
 
+// a part there is no picture of: only its words. The local picture AI paints it onto the model's picture (the edit node's prompt)
+function addWords() {
+  if (items.some(i => i.role === "part")) return toast("A project has one part: its pictures or its words");
+  items.push({ id: nextId++, file: null, name: "A part from words", kind: "words", url: null, prompt: "", role: "part" });
+  render();
+  const area = document.querySelector(`.row[data-id="${items[items.length - 1].id}"] .prompt`);
+  if (area) area.focus();
+}
+
 // ---------------------------------------------------------------- drawing
 function preview(item, tag = "div") {
+  if (item.kind === "words") return `<svg><use href="#words"/></svg>`;
   if (item.kind === "picture") return `<img src="${item.url}" alt="">`;
   if (item.kind === "video") return `<video src="${item.url}" muted loop playsinline preload="metadata"></video>`;
   return `<svg><use href="#cube"/></svg>`;
@@ -465,9 +477,12 @@ const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&
 function drawInputs() {
   const files = flow.nodes.filter(n => n.type === "input").flatMap(n => (n.files || []).map(f => ({ ...f, role: n.id === "part" ? "part" : "object",
     said: (n.settings.prompts || []).find(p => p.startsWith(f.name + ": ")) })));
+  const said = flow.nodes.find(n => n.type === "edit" && n.settings.prompt && !n.inputs.part);  // a part from words
+  if (said) files.push({ words: true, name: "A part from words", role: "part", said: "A part from words: " + said.settings.prompt });
   $("count").textContent = files.length;
   $("rows").replaceChildren(...(files.length ? files.map(f => h("div", { class: "row" },
-    h("div", { class: "thumb" }, f.video ? h("video", { src: f.url, muted: true, preload: "metadata" }) : h("img", { src: f.url, alt: "" }), h("span", { class: "kind" }, f.role)),
+    h("div", { class: "thumb" }, f.words ? h("span", { style: "font: 700 26px Cinzel, Georgia, serif; color: var(--dim)", "aria-hidden": "true" }, "Aa")
+      : f.video ? h("video", { src: f.url, muted: true, preload: "metadata" }) : h("img", { src: f.url, alt: "" }), h("span", { class: "kind" }, f.role)),
     h("div", { class: "row-main" }, h("div", { class: "row-head" }, h("span", { class: "name", title: f.name }, f.name)),
       h("div", { class: "said" }, f.said ? f.said.slice(f.name.length + 2) : `the ${f.role} of this project`)),
     h("span", {})))
@@ -488,17 +503,18 @@ function render() {
       <div class="row-main">
         <div class="row-head">
           <span class="name" title="${esc(item.name)}">${esc(item.name)}</span>
+          ${item.kind === "words" ? `<span class="meta dev-only">the part · painted by the local picture AI</span>` : `
           <span class="meta dev-only">${item.file.type || "3D model"} · ${(item.file.size / 1048576).toFixed(1)} MB</span>
           <select class="role dev-only" aria-label="Role of ${esc(item.name)}" title="object = what is built first, part = what is inpainted onto it">
             <option value="object"${item.role === "object" ? " selected" : ""}>object</option>
             <option value="part"${item.role === "part" ? " selected" : ""}>part</option>
-          </select>
+          </select>`}
         </div>
-        <textarea class="prompt" rows="1" placeholder="Prompt for this data…" aria-label="Prompt for ${esc(item.name)}">${esc(item.prompt)}</textarea>
+        <textarea class="prompt" rows="1" placeholder="${item.kind === "words" ? "What should be added and where, e.g. a wide pointed wizard hat on the head" : "Prompt for this data: what it shows, e.g. the girl's head"}" title="${item.kind === "words" ? "The local picture AI paints this onto the model's picture; what changed becomes the new part" : "Optional. The first prompt of the object and of the part is what that thing is called in the project (the judge reads it)"}" aria-label="${item.kind === "words" ? "What the new part is" : `Prompt for ${esc(item.name)}`}">${esc(item.prompt)}</textarea>
       </div>
       <button class="remove" aria-label="Remove ${esc(item.name)}" title="Remove"><svg><use href="#x"/></svg></button>`;
-    row.querySelector(".prompt").oninput = e => { item.prompt = e.target.value; grow(e.target); };
-    row.querySelector(".role").onchange = e => { item.role = e.target.value; renderStage(); };
+    row.querySelector(".prompt").oninput = e => { item.prompt = e.target.value; grow(e.target); if (item.kind === "words") renderStage(); };
+    if (item.kind !== "words") row.querySelector(".role").onchange = e => { item.role = e.target.value; render(); };
     row.querySelector(".remove").onclick = () => { if (item.url) URL.revokeObjectURL(item.url); items.splice(items.indexOf(item), 1); render(); };
     const video = row.querySelector("video");
     if (video) { row.onmouseenter = () => video.play(); row.onmouseleave = () => video.pause(); }
@@ -509,6 +525,11 @@ function render() {
     const more = document.createElement("button");
     more.className = "more"; more.textContent = "+ Add more data"; more.onclick = () => picker.click();
     rows.append(more);
+    if (!items.some(i => i.role === "part")) {  // no part yet: it can also be described, without a picture of it
+      const say = document.createElement("button");
+      say.className = "more"; say.textContent = "+ Describe a new part in words (no picture needed)"; say.onclick = addWords;
+      rows.append(say);
+    }
   }
   renderStage();
   requestAnimationFrame(wires);
@@ -526,10 +547,11 @@ function renderStage() {
     stage.innerHTML = `<div class="hint"><svg><use href="#cube"/></svg>Every piece of data flows in here. The result of the whole workflow is shown here.</div>`;
   } else {
     stage.innerHTML = `<div class="stack">${items.slice(0, 6).map(i => `<div class="chip">${preview(i)}</div>`).join("")}</div>
-      <div class="caption">${objects} object${objects === 1 ? "" : "s"} · ${parts} part${parts === 1 ? "" : "s"}${items.length > 6 ? ` · +${items.length - 6} more` : ""}</div>`;
+      <div class="caption">${objects} picture${objects === 1 ? "" : "s"} of the object · ${parts ? (items.some(i => i.kind === "words") ? "a part from words" : `${parts} of the part`) : "no part"}${items.length > 6 ? ` · +${items.length - 6} more` : ""}</div>`;
   }
   $("run").disabled = !items.length && !currentFile;
-  $("status").textContent = items.length ? (objects ? "Ready to run" : "Mark one data as the object") : "Add data to start";
+  const unsaid = items.some(i => i.kind === "words" && !i.prompt.trim());
+  $("status").textContent = items.length ? (!objects ? "Mark one data as the object" : unsaid ? "Write what the new part is" : "Ready to run") : "Add data to start";
 }
 
 // the arrows from every row into the total workflow (as in the sketch)
@@ -664,7 +686,8 @@ function friendly(n) {
   const step = n.settings.step || "shape";
   return { input: n.id === "part" ? "Your part" : "Your object",
            data_sheet: n.settings.role === "part" ? "Looking at the part" : "Looking at the object",
-           base: "Building the 3D model", pick_seed: "Choosing the best model", edit: "Placing the new part",
+           base: "Building the 3D model" + (flow.nodes.filter(one => one.type === "base").length > 1 ? ` (seed ${n.settings.seed ?? n.defaults.seed})` : ""),
+           pick_seed: "Choosing the best model", edit: n.settings.prompt && !n.inputs.part ? "Painting the new part from your words" : "Placing the new part",
            inpaint: `Inpainting the ${step}`, judge: `Checking the ${step}` }[n.type] || n.label;
 }
 
@@ -713,6 +736,9 @@ async function start(upto = null, asIs = false) {
     let file = currentFile;
     if (items.length && !upto && !asIs) {
       if (!items.some(i => i.role === "object")) return toast("One of your data must be the object: the model is built from it (developer view: object / part)");
+      const words = items.find(i => i.kind === "words");
+      if (words && !words.prompt.trim()) return toast("Write what the new part is (the row “A part from words”), or remove that row");
+      if (words && items.some(i => i.role === "part" && i !== words)) return toast("A project has one part: its pictures or its words, not both");
       const typed = $("projectName").value.trim();
       if (typed && !/^[A-Za-z0-9_-]{1,40}$/.test(typed)) return toast("A project name has only letters, numbers, _ and -");
       const now = new Date(), two = v => String(v).padStart(2, "0");
@@ -724,6 +750,7 @@ async function start(upto = null, asIs = false) {
       $("run").disabled = true;
       const taken = { object: new Set(), part: new Set() }, sent = [];
       for (const [k, item] of items.entries()) {
+        if (item.kind === "words") continue;  // nothing to upload: its words go into the flow
         let name = item.name.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^\.+/, "");
         if (taken[item.role].has(name)) name = `${k}_${name}`;
         taken[item.role].add(name);
@@ -736,7 +763,7 @@ async function start(upto = null, asIs = false) {
         sent.push({ path: item.path, role: item.role, prompt: item.prompt });
       }
       $("status").textContent = "Writing the flow…";
-      await send("/api/app/create", { flow: file, prompt: $("mainPrompt").value, items: sent, settings });
+      await send("/api/app/create", { flow: file, prompt: $("mainPrompt").value, items: sent, settings, part_prompt: words ? words.prompt : "" });
       if (file !== currentFile) { currentFile = file; flow = null; selected = null; hand = null; draft = null; shown = ""; }
       try { localStorage.setItem("project", file); } catch {}
       $("projectName").value = file;
@@ -907,6 +934,7 @@ const NAMES = {
   role: ["Role", "object = what is built first, part = what is inpainted onto it"],
   frames: ["Frames per video", "How many frames of a video are looked at"],
   ai: ["Local AI looks too", "Off: only what is measured"],
+  what: ["What it shows", "Your own words for the thing, e.g. the girl's head. The judge reads them; empty = the local AI's guess"],
   seed: ["Seed", "Another seed gives another model from the same pictures"],
   seeds: ["Seeds", "One candidate per seed, e.g. 1, 2, 3"],
   where: ["Runs on", "server = the uni GPU server, pc = this PC"],
@@ -918,6 +946,8 @@ const NAMES = {
   sink: ["Sunk in", "Share of the part's height pushed down into the object (measured place)"],
   head: ["Top of the object", "What counts as the top: share of the object's height"],
   fit: ["Fit", "between = into the free gap between things standing up, over = over them"],
+  prompt: ["The part in words", "Only when the edit has no pictures of the part: the local picture AI paints these words onto the model's picture"],
+  prompt_seed: ["Seed of the words", "Another seed gives another picture for the same words"],
   keep_min: ["Kept at least", "Below this the judge says redo (0 to 100)"],
   part_min: ["Part at least", "Below this the judge says redo (0 to 100)"],
 };
@@ -1037,7 +1067,7 @@ function scores(compared, groups, sideName) {
   const limits = compared.limits || {};
   const low = (value, limit) => (limit != null && value != null && value < limit) ? "low" : "";
   const cell = (value, limit) => h("td", { class: low(value, limit) }, value == null ? "–" : value);
-  const table = h("table", { class: "scores" },
+  const table = h("table", { class: "scores", style: "min-width:420px" },
     h("tr", {}, h("th", {}, "Candidate"), h("th", { title: "Outside the area the model must stay the original" }, "Kept"),
       h("th", { title: "Inside the mask the new part must be there" }, "Part"), h("th", { title: "Colours inside the mask against the plan" }, "Colour"),
       h("th", { title: "The lower of kept and part" }, "Measured"), h("th", { title: "The local vision AI, 1 to 10" }, "AI")),
@@ -1047,7 +1077,7 @@ function scores(compared, groups, sideName) {
       cell(g.scores.measured), h("td", {}, g.ai && g.ai.score != null ? `${g.ai.score}/10` : "–"))));
   const group = groups[view.group];
   const side = group.sides[view.side];
-  const out = h("div", {}, table);
+  const out = h("div", {}, h("div", { class: "wide" }, table));  // a narrow phone: the table scrolls sideways, not the page
   if (side.scores && Object.keys(side.scores).length) out.append(h("p", { class: "hint" },
     `${sideName} of ${group.name}: ` + Object.entries(side.scores).map(([name, value]) => `${name} ${value}`).join(", ") + ". All out of 100; the table is the mean of the four sides. A wavy line: below the limit."));
   if (group.ai && (group.ai.why || (group.ai.defects || []).length)) out.append(
@@ -1089,13 +1119,13 @@ async function cutFromPlan(side, [x, y, width, height]) {
 
 async function openHand(n) {
   const size = n.hand.size, main = n.hand.sides[0];
-  hand = { node: n.id, size, side: 0, tool: "move", brush: 36, changed: false, replace: n.hand.replace, by_hand: n.hand.by_hand,
+  hand = { node: n.id, size, side: 0, tool: "move", brush: 36, fill: false, changed: false, replace: n.hand.replace, by_hand: n.hand.by_hand,
            place: { x: n.hand.part[0], y: n.hand.part[1], width: n.hand.part[2] }, ratio: n.hand.part[3] / n.hand.part[2],
            measured: n.hand.part.slice(), layers: [], cut: null,
            after: n.hand.after, prompts: n.hand.prompts, job: n.hand.prompt_job, seed: 1, reference: true,
            prompt: (n.hand.prompts.find(one => one.number === n.hand.after) || n.hand.prompts[n.hand.prompts.length - 1] || {}).prompt || "" };
   for (const side of n.hand.sides) {  // what was painted before, to go on with it
-    const layer = { add: sheetOf(size), erase: sheetOf(size), used: { add: false, erase: false }, touched: false };
+    const layer = { add: sheetOf(size), erase: sheetOf(size), used: { add: false, erase: false }, touched: false, undo: [], redo: [] };
     for (const [name, colour] of [["add", RED], ["erase", BLUE]]) if (side[name]) {
       const context = layer[name].getContext("2d");
       context.drawImage(await loadPicture(side[name]), 0, 0, size, size);
@@ -1181,8 +1211,29 @@ function drawHand() {
     if (to) { put(...to); event.preventDefault(); }
   });
 
+  // undo and redo of the painting, per side: the two layers as they were before every stroke (the last 15)
+  const copyOf = sheet => { const copy = sheetOf(size); copy.getContext("2d").drawImage(sheet, 0, 0); return copy; };
+  const shot = () => ({ add: copyOf(layer.add), erase: copyOf(layer.erase), used: { ...layer.used } });
+  const back = h("button", { class: "btn", title: "Undo the last stroke (Ctrl+Z)", onclick: () => step(layer.undo, layer.redo) }, "Undo");
+  const forth = h("button", { class: "btn", title: "Redo (Ctrl+Shift+Z or Ctrl+Y)", onclick: () => step(layer.redo, layer.undo) }, "Redo");
+  const marks = () => { back.disabled = !layer.undo.length; forth.disabled = !layer.redo.length; };
+  const remember = () => { layer.undo.push(shot()); if (layer.undo.length > 15) layer.undo.shift(); layer.redo.length = 0; marks(); };
+  function step(from, to) {
+    if (!from.length) return;
+    to.push(shot());
+    const old = from.pop();
+    for (const name of ["add", "erase"]) {
+      const context = layer[name].getContext("2d");
+      context.globalCompositeOperation = "source-over";
+      context.clearRect(0, 0, size, size);
+      context.drawImage(old[name], 0, 0);
+    }
+    layer.used = old.used; layer.touched = hand.changed = true;
+    showPaint(); marks();
+  }
+
   // painting the mask: a stroke on one layer takes the same stroke off the other; a pen's pressure makes the stroke wider
-  let lastSpot = null;
+  let lastSpot = null, outline = [];
   const stroke = event => {
     const [x, y] = spot(event), [fromX, fromY] = lastSpot || [x, y];
     const [on, off, colour] = hand.tool === "add" ? [layer.add, layer.erase, RED] : [layer.erase, layer.add, BLUE];
@@ -1195,19 +1246,61 @@ function drawHand() {
     }
     layer.used[hand.tool] = layer.touched = hand.changed = true;
     lastSpot = [x, y];
+    outline.push([x, y]);
+    showPaint();
+  };
+  // "Fill what I circle": the stroke's line is closed and everything inside it is painted too
+  const fillOutline = () => {
+    if (!hand.fill || hand.tool === "move" || outline.length < 8) return;
+    const [on, off, colour] = hand.tool === "add" ? [layer.add, layer.erase, RED] : [layer.erase, layer.add, BLUE];
+    for (const [sheet, mode] of [[on, "source-over"], [off, "destination-out"]]) {
+      const context = sheet.getContext("2d");
+      context.globalCompositeOperation = mode;
+      context.fillStyle = colour;
+      context.beginPath(); outline.forEach(([x, y], index) => index ? context.lineTo(x, y) : context.moveTo(x, y)); context.closePath(); context.fill();
+    }
     showPaint();
   };
   stage.addEventListener("pointerdown", event => {
     if (hand.tool === "move") return;
     stage.setPointerCapture(event.pointerId);
-    lastSpot = null; stroke(event);
+    stage.focus({ preventScroll: true });  // the keys below go to the picture
+    remember();
+    lastSpot = null; outline = []; stroke(event);
     stage.onpointermove = stroke;
   });
-  for (const end of ["pointerup", "pointercancel"]) stage.addEventListener(end, () => { stage.onpointermove = null; lastSpot = null; });
-  stage.addEventListener("pointermove", event => {
-    const frame = stage.getBoundingClientRect(), wide = hand.brush / size * frame.width;
-    Object.assign(ring.style, { left: (event.clientX - frame.left) + "px", top: (event.clientY - frame.top) + "px", width: wide + "px", height: wide + "px" });
+  for (const end of ["pointerup", "pointercancel"]) stage.addEventListener(end, () => {
+    if (stage.onpointermove && end === "pointerup") fillOutline();
+    stage.onpointermove = null; lastSpot = null; outline = [];
   });
+  let pointer = null;  // where the pointer is on the picture, for the brush's ring
+  const showRing = () => {
+    if (!pointer) return;
+    const frame = stage.getBoundingClientRect(), wide = hand.brush / size * frame.width;
+    Object.assign(ring.style, { left: pointer[0] + "px", top: pointer[1] + "px", width: wide + "px", height: wide + "px" });
+  };
+  stage.addEventListener("pointermove", event => {
+    const frame = stage.getBoundingClientRect();
+    pointer = [event.clientX - frame.left, event.clientY - frame.top];
+    showRing();
+  });
+  const brushSize = h("output", { style: "min-width:3ch;text-align:right;font-variant-numeric:tabular-nums" }, String(hand.brush));
+  const brushRange = h("input", { type: "range", min: "6", max: "140", value: hand.brush, "aria-label": "Brush width in pixels of the picture",
+    oninput: event => setBrush(Number(event.target.value)) });
+  const setBrush = wide => { hand.brush = Math.max(6, Math.min(140, Math.round(wide))); brushRange.value = hand.brush; brushSize.textContent = hand.brush; showRing(); };
+  // keys while painting, anywhere in the edit by hand but not in a text field: Ctrl+Z / Ctrl+Shift+Z, [ and ] for the
+  // brush, B = paint, E = protect, V = move, F = fill
+  const keys = event => {
+    if (event.target.matches("textarea, select, input:not([type=checkbox]):not([type=range])")) return;
+    const key = event.key.toLowerCase(), command = event.ctrlKey || event.metaKey;
+    if (command && key === "z") { event.shiftKey ? step(layer.redo, layer.undo) : step(layer.undo, layer.redo); event.preventDefault(); return; }
+    if (command && key === "y") { step(layer.redo, layer.undo); event.preventDefault(); return; }
+    if (command || event.altKey) return;
+    if (hand.tool !== "move" && (key === "[" || key === "]")) { setBrush(hand.brush * (key === "]" ? 1.25 : 0.8) + (key === "]" ? 1 : -1)); event.preventDefault(); return; }
+    const tool = { b: "add", e: "erase", v: isMain && !fromPrompt ? "move" : null }[key];
+    if (tool && tool !== hand.tool) { Object.assign(hand, { tool }); drawHand(); detailBox.querySelector(".hstage").focus({ preventScroll: true }); event.preventDefault(); }
+    if (key === "f" && hand.tool !== "move") { hand.fill = !hand.fill; drawHand(); detailBox.querySelector(".hstage").focus({ preventScroll: true }); event.preventDefault(); }
+  };
 
   // the tools
   const tool = (name, text, title) => h("button", { class: hand.tool === name ? "on" : "", title, onclick: again({ tool: name }) }, text);
@@ -1218,12 +1311,16 @@ function drawHand() {
     h("span", { class: "what" }, "Tool"), h("div", { class: "tabs", role: "group", "aria-label": "Tool" },
       isMain && !fromPrompt && tool("move", "Move the part", "Drag the part, pull the white dot to size it; arrow keys move it by one pixel"),
       tool("add", "Paint the area", "Red: this changes too"), tool("erase", "Protect", "Blue: this stays as it is")),
-    hand.tool !== "move" && h("label", {}, "Brush", h("input", { type: "range", min: "6", max: "140", value: hand.brush,
-      oninput: event => { hand.brush = Number(event.target.value); } })),
-    hand.tool !== "move" && h("button", { class: "btn", onclick: () => {
-      for (const sheet of [layer.add, layer.erase]) sheet.getContext("2d").clearRect(0, 0, size, size);
+    hand.tool !== "move" && h("label", { title: "The brush's width; the keys [ and ] on the picture change it too" }, "Brush", brushRange, brushSize),
+    hand.tool !== "move" && h("label", { title: "Draw a line around an area: everything inside it is painted too (key F)" },
+      h("input", { type: "checkbox", checked: hand.fill, onchange: event => { hand.fill = event.target.checked; } }), "Fill what I circle"),
+    hand.tool !== "move" && back, hand.tool !== "move" && forth,
+    hand.tool !== "move" && h("button", { class: "btn", title: "Takes everything painted on this side away (Undo brings it back)", onclick: () => {
+      remember();
+      for (const sheet of [layer.add, layer.erase]) { const context = sheet.getContext("2d"); context.globalCompositeOperation = "source-over"; context.clearRect(0, 0, size, size); }
       layer.used = { add: false, erase: false }; layer.touched = hand.changed = true; showPaint();
     } }, "Clear this side's painting"));
+  marks();
 
   const apply = async (place, run) => {
     const layers = {};
@@ -1275,7 +1372,7 @@ function drawHand() {
 
   showPaint(); showPart();
   if (fromPrompt) info.textContent = `The new part is what the prompt made inside the red area: “${fromPrompt.prompt}”.`;
-  detailBox.replaceChildren(h("section", { class: "detail" },
+  detailBox.replaceChildren(h("section", { class: "detail", onkeydown: keys },
     h("div", { class: "titlebar" }, h("h2", {}, "Edit by hand", h("small", {}, `${n.label} · ${n.id}`)), buttons),
     h("div", { class: "columns" },
       h("div", {}, tools, stage, h("div", {}, isMain ? info : h("span", { class: "hint" },
@@ -1290,7 +1387,7 @@ function drawHand() {
           h("input", { type: "checkbox", checked: hand.replace, onchange: event => { hand.replace = event.target.checked; hand.changed = true; } }),
           h("span", {}, "Replace the model's surface under the area", h("span", { class: "hint", style: "display:block" },
             "On: the old surface there is deleted and made new (the part may sink into the model). Off: the whole surface stays and the part only grows into the empty room."))),
-        h("p", { class: "hint" }, "Keys on the picture: arrows move the part by 1 pixel (Shift: 10), + and − size it."),
+        h("p", { class: "hint" }, "Keys on the picture: arrows move the part by 1 pixel (Shift: 10), + and − size it. Keys while painting: Ctrl+Z undo, Ctrl+Shift+Z redo, [ and ] the brush's width, B paint, E protect, V move the part, F fill what is circled."),
         promptBox))));
 }
 

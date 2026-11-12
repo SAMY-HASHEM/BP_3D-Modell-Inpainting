@@ -27,9 +27,10 @@ The page gets everything from here:
 The main page (web/app.html: add data, a prompt per data, the total workflow) makes its own flow files with these:
     POST /api/upload?flow=<name>&role=object|part&name=<file>   the request's body is the picture or video itself; it is
                                 saved as pictures/uploads/<flow>/<role>/<file>
-    POST /api/app/create        {"flow", "prompt", "items": [{"path", "role", "prompt"}], "settings": {"seed", "steps",
-                                "resolution", "where"}}: writes flows/<flow>.json from what was uploaded: the object's
-                                base model, and when there is a part the edit and the three inpainting steps
+    POST /api/app/create        {"flow", "prompt", "items": [{"path", "role", "prompt"}], "part_prompt", "settings": {"seed",
+                                "steps", "resolution", "where"}}: writes flows/<flow>.json from what was uploaded: the object's
+                                base model, and when there is a part the edit and the three inpainting steps. part_prompt:
+                                the part in words, when there is no picture of it (the edit's "prompt")
     GET /file/<path>.glb        a model out of outputs/, for the 3D view on the main page
 """
 import argparse
@@ -60,9 +61,9 @@ OPEN = ("outputs", "pictures", "flows")  # the only folders the page gets files 
 ENV_PYTHON = os.path.join(core.PROJECT, "conda", "envs", "inpainting-3d-modelling", "bin", "python")  # activate.sh's Python
 RUNS = {}  # {flow file: {"process", "upto", "log", "started"}}: the flow.py this page started
 # what can be set on the page per node type, with the value a node has when the flow file doesn't say (as flow.py's TYPES)
-SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8, "ai": True},
+SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8, "ai": True, "what": ""},
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25}, "pick_seed": {},
-            "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between"},
+            "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
 PROMPTS = {}  # {"<flow file>/<node>": {"process", "log", "prompt", "started"}}: the picture AI painting a prompt
@@ -392,15 +393,17 @@ def save_upload(address, stream, length):
 def create_flow(wanted):
     """The main page's Run: a flow file from what was uploaded. Every object file goes into the object's input, every
     part file into the part's. Without a part the flow ends at the base model; with one it goes on as girl_crown does:
-    edit, then shape -> details -> colours, each with its judge.
-    The prompts are written into the flow file (the flow's "prompt", an input's "prompts"); no node reads them yet."""
+    edit, then shape -> details -> colours, each with its judge. A part can also be only words (part_prompt, no part
+    file): the edit node gets them as its prompt and the local picture AI paints the part onto the model's picture.
+    The prompts are written into the flow file (the flow's "prompt", an input's "prompts"). The first prompt of the
+    object's files and of the part's files is what that thing is called: its data sheet's "what", which the judge reads."""
     file = str(wanted.get("flow", ""))
     if not re.fullmatch(NAME, file):
         raise ValueError("a project name has only letters, numbers, _ and - (at most 40)")
     path = os.path.join(FLOWS, file + ".json")
     if os.path.isfile(path) and json.load(open(path)).get("made_by") != "app":
         raise ValueError(f"there is a flow {file} already that was not made on this page: take another project name")
-    files, prompts = {"object": [], "part": []}, {"object": [], "part": []}
+    files, prompts, called = {"object": [], "part": []}, {"object": [], "part": []}, {}
     for item in wanted.get("items") or []:
         role = item.get("role")
         inside = os.path.realpath(os.path.join(UPLOADS, file, str(role))) + os.sep
@@ -411,8 +414,12 @@ def create_flow(wanted):
         text = " ".join(str(item.get("prompt", "")).split())
         if text:
             prompts[role].append(f"{os.path.basename(full)}: {text}")
+            called.setdefault(role, text[:200])
     if not files["object"]:
         raise ValueError("one of your data must be the object: the model is built from it")
+    words = " ".join(str(wanted.get("part_prompt") or "").split())[:400]
+    if words and files["part"]:
+        raise ValueError("a project has one part: its pictures or its words, not both")
     for role, kept in files.items():  # what was taken off the page again is taken out of the upload folder too
         folder = os.path.join(UPLOADS, file, role)
         for name in os.listdir(folder) if os.path.isdir(folder) else []:
@@ -430,13 +437,15 @@ def create_flow(wanted):
     nodes = [{"id": "object", "type": "input", "label": "00 Input: the object", "files": files["object"], **said("object")}]
     if files["part"]:
         nodes.append({"id": "part", "type": "input", "label": "00 Input: the part", "files": files["part"], **said("part")})
-    nodes.append({"id": "object_sheet", "type": "data_sheet", "role": "object", "in": {"pictures": "object"}})
+    name = lambda role: {"what": called[role]} if role in called else {}
+    nodes.append({"id": "object_sheet", "type": "data_sheet", "role": "object", **name("object"), "in": {"pictures": "object"}})
     if files["part"]:
-        nodes.append({"id": "part_sheet", "type": "data_sheet", "role": "part", "in": {"pictures": "part"}})
+        nodes.append({"id": "part_sheet", "type": "data_sheet", "role": "part", **name("part"), "in": {"pictures": "part"}})
     nodes.append({"id": "base", "type": "base", "seed": seed, "where": where, "resolution": resolution, "steps": steps,
                   "in": {"data": "object_sheet"}})
-    if files["part"]:
-        nodes.append({"id": "edit", "type": "edit", "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}})
+    if files["part"] or words:
+        nodes.append({"id": "edit", "type": "edit", "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}} if files["part"]
+                     else {"id": "edit", "type": "edit", "prompt": words, "in": {"model": "base", "object": "object_sheet"}})
         before = "base"
         for step in ("shape", "details", "colours"):
             nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "in": {"model": before, "edit": "edit"}})

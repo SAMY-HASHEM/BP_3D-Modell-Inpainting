@@ -13,6 +13,63 @@ exactly the same:
 | a flow file, no Blender | `python scripts/pipeline/flow.py flows/girl_crown.json` |
 | Blender's node editor | tree type *BP Pipeline* → sidebar (N) → *BP* → **New inpainting flow** → *Run up to here* on a node |
 
+A third place is **the web page**: `python scripts/pipeline/flow_page.py --open` (this PC only,
+http://127.0.0.1:8777, the page itself is `web/index.html`). It shows every flow of `flows/` as its node chain and
+works on the same flow files and result folders as `flow.py`:
+
+| On the page | What it does |
+|---|---|
+| a click on a node | its pictures, settings, folder and model; *Open in Blender* opens the model in a new Blender window |
+| **before / after slider** | the edit node: before against the plan; a judge: the original (or the plan) against every candidate, from the same four sides, with the edit's area in red and the judge's numbers |
+| the settings of a node | changed in place and saved into the flow file (*Save settings*) |
+| **Run up to here**, *Run the whole flow*, *Stop the run* | starts `flow.py` for this flow (its output: `outputs/pipeline/<name>/run.log`); before it uses the uni server it asks |
+| *Uni server* | the server jobs of this flow's nodes and how far they are (`cloud.py status <job> ...`); *All jobs* reads every job in the cloud, which takes over a minute |
+| **Edit by hand** (edit node) | see below |
+
+**Edit by hand** replaces the measured place of the part where it does not fit (e.g. a crown that floats):
+
+1. *Move the part* on the main side: drag it, pull the white dot to size it. The other three sides follow from its
+   place in 3D (`make_edit.py --place`).
+2. *Paint the area* (red: this changes too) or *Protect* (blue: this stays) on any side: corrections of the 2D mask
+   (`make_edit.py --hand`, kept in `flows/hand/<flow>_<node>/add_<view>.png` and `erase_<view>.png`).
+3. Or *describe the new part*: the local picture AI (Qwen-Image-Edit through ComfyUI, `prompt_picture.py`, about half
+   a minute) paints the prompt into the red area of the main side. Every picture made stays in a row to choose
+   from; the chosen one is the AFTER picture then (`make_edit.py --after`), no part picture is pasted.
+4. *Apply* writes it into the flow file (the edit node's `place`, `side`, `hand`, `after`) and makes the edit again
+   (about half a minute on this PC). The inpainting steps after it then wait for a new run. *Back to the measured
+   place* takes it out again; old results stay on disk and are found again.
+
+While painting: *Undo* / *Redo* (Ctrl+Z, Ctrl+Shift+Z; the last 15 strokes per side), `[` and `]` change the brush's
+width, **B** paint, **E** protect, **V** move the part, and *Fill what I circle* (**F**): a line drawn around an area
+fills all of it, so a large area needs one stroke.
+
+## A part from words (no picture of the part)
+
+An edit node without a `part` input and with a `prompt` needs no picture of the new part:
+
+```
+{"id": "edit", "type": "edit", "prompt": "a wide pointed wizard hat on the head", "in": {"model": "base", "object": "object_sheet"}}
+```
+
+`make_edit.py --prompt` then does this on this PC (about 45 s):
+
+1. BEFORE = the model from its main side (the side that fits the object's own picture, or `side`).
+2. The local picture AI (Qwen-Image-Edit) gets BEFORE and the sentence "add … to the object, keep everything else
+   exactly" and paints the part where the words say. Nothing is marked in the picture (`words.png`).
+3. The part and its 2D mask are **what differs** between that picture and BEFORE: differences over a limit, small
+   specks removed, only the big connected pieces kept. Outside of them AFTER stays the exact BEFORE.
+4. The 3D area is put where the model's surface is under the part: a part that tops the model there (a hat) gets the
+   area all around the model's middle; any other (a shield in a hand, wings on the back) gets it on the side that is
+   seen, starting at the surface, so the far side of the model stays out of it.
+
+After that the flow is the same: shape → details → colours, each with its judge (the judge is told the prompt as the
+part's name). `prompt_seed` gives another picture for the same words. *Edit by hand* works on such an edit too: the
+painted corrections of the mask, and moving what the picture AI made. Only one side has a picture (as with a single
+picture of a part); the other sides are TRELLIS.2's guess.
+
+Tried on Nov 11 on the wanderer (512 base): a wizard hat (2.0 % of the picture changed, one piece), a round shield in
+the free hand (3.3 %), wings on the back from behind (3.2 %): the mask was clean each time.
+
 ## The structure
 
 ```
@@ -93,7 +150,7 @@ preference, as a possible second local judge.
 ## Open (to decide together)
 - **The loop:** a `redo` verdict does nothing yet. Next: redo with other seeds / a wider or lower area / `--replace`,
   at most N rounds, keeping only what scores better (as the grid loop does).
-- **Placement:** the Edit node puts the part on the top of the object. Other places (a part on the chest, in a hand)
-  need the place from the local AI or SAM 3.1 (a 2D box → the 3D area).
+- **Placement:** with a picture of the part the Edit node puts it on the top of the object; other places need *Edit by
+  hand*. A part from words (above) is placed by the picture AI, anywhere on the side that is seen.
 - **The judge's limits and weights**, and whether the AI's score should be able to veto.
 - **ComfyUI:** the nodes are only in the flow runner and in Blender so far.

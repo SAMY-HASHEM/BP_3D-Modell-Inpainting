@@ -46,15 +46,16 @@ TYPES = {
     "input": ("00 Input", [], "", lambda i, s, name: (None, {"pictures": core.inputs(name, s["files"])})),
     "data_sheet": ("01 Data sheet", ["pictures"], "this PC: local AI",
                    lambda i, s, name: (core.data_sheet(i["pictures"]["pictures"], s.get("role", "object"), s.get("frames", 8),
-                                                       s.get("ai", True)), None)),
+                                                       s.get("ai", True), s.get("what", "")), None)),
     "base": ("02 Base model", ["data"], "TRELLIS.2",
              lambda i, s, name: (core.base_model(i["data"]["data"], s.get("where", "server"), s.get("mode", "multidiffusion"),
                                                  str(s.get("resolution", "1024")), s.get("steps", 25), s.get("seed", 42)), None)),
     "pick_seed": ("02b Pick seed", ["data", "candidates"], "this PC: measured",
                   lambda i, s, name: (core.pick_seed(i["data"]["data"], models_of(i["candidates"])), None)),
     "edit": ("03 Edit", ["model", "part", "object"], "this PC: measured",
-             lambda i, s, name: (core.edit(i["model"]["model"], i["part"]["data"], i["object"]["data"], s.get("replace", False),
-                                           s.get("width", 0.75), s.get("sink", 0.15), s.get("head", 0.12), s.get("fit", "between")), None)),
+             lambda i, s, name: (core.edit(i["model"]["model"], (i.get("part") or {}).get("data"), i["object"]["data"], s.get("replace", False),
+                                           s.get("width", 0.75), s.get("sink", 0.15), s.get("head", 0.12), s.get("fit", "between"),
+                                           s.get("place"), s.get("side"), s.get("hand"), s.get("after"), s.get("prompt"), s.get("prompt_seed", 1)), None)),
     "inpaint": ("04 Inpaint", ["model", "edit"], "TRELLIS.2",
                 lambda i, s, name: (core.inpaint_step(i["model"]["model"], i["edit"]["edit"], s.get("step", "shape"),
                                                       s.get("seeds", [1]), s.get("where", "server")), None)),
@@ -83,13 +84,14 @@ def needed(nodes, target):
     return keep
 
 
-def with_preview(outputs, folder):
-    """A node that made or chose a model and has no picture of its own gets one: the model from four sides."""
+def with_preview(outputs, folder, render=True):
+    """A node that made or chose a model and has no picture of its own gets one: the model from four sides.
+    render=False only takes a picture that is there already (the web page: it must not start Blender)."""
     model = (outputs.get("model") or {}).get("glb")
     if outputs.get("sheet") or not model or not folder or not os.path.exists(model):
         return outputs
     sheet = os.path.join(folder, "preview.jpg")
-    if not os.path.exists(sheet):
+    if not os.path.exists(sheet) and render:
         subprocess.run([sys.executable, os.path.join(core.SCRIPTS, "pipeline", "preview.py"), "compare", sheet, model],
                        env={**os.environ, "BLENDER": BLENDER}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {**outputs, "sheet": sheet} if os.path.exists(sheet) else outputs
@@ -137,7 +139,7 @@ class Flow:
         except Exception as e:  # noqa: BLE001 (shown on the node; the nodes after it stay waiting)
             self.set(key, "failed", f"{type(e).__name__}: {e}"[:300])
 
-    def peek(self):
+    def peek(self, previews=True):
         """What is there already, without running anything: a node whose results exist is done."""
         for key, node in self.nodes.items():  # a flow file lists a node after the ones it needs
             if not self.ready(key):
@@ -149,13 +151,13 @@ class Flow:
                     given[socket] = results if socket == "candidates" else results[0]
                 job, outputs = TYPES[node["type"]][3](given, self.settings(node), self.name)
                 if job is not None:
+                    self.state[key]["folder"] = job["folder"]
                     if not all(done and os.path.exists(done) for _, _, done in job["steps"]):
                         continue
                     outputs = job["outputs"]
-                    self.state[key]["folder"] = job["folder"]
                     if os.path.isfile(os.path.join(job["folder"], "time.json")):
                         self.state[key]["minutes"] = json.load(open(os.path.join(job["folder"], "time.json")))["minutes"]
-                self.state[key]["outputs"] = with_preview(core.resolve(dict(outputs)), self.state[key]["folder"])
+                self.state[key]["outputs"] = with_preview(core.resolve(dict(outputs)), self.state[key]["folder"], previews)
                 self.state[key].update(status="done", note=self.state[key]["outputs"].get("verdict", ""))
             except Exception as e:  # noqa: BLE001 (it shows when the node runs)
                 self.state[key]["note"] = f"{type(e).__name__}: {e}"[:200]

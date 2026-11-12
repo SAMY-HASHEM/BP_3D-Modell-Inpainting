@@ -354,6 +354,8 @@ def status(args):
     cloud = Cloud()
     names = cloud.list()
     jobs = sorted(n[:-4] for n in names if n.endswith(".zip"))
+    if getattr(args, "jobs", None):  # only these (every job is one question to the cloud: all of them take a while)
+        jobs = [job for job in jobs if job in args.jobs]
     if not jobs:
         print("No jobs in the cloud.")
     for job in jobs:
@@ -540,7 +542,9 @@ def main():
     p.add_argument("job")
     p.add_argument("folder")
     p.set_defaults(run=lambda a: wait_for(Cloud(), a.job, a.folder))
-    sub.add_parser("status", help="list the jobs and how far they are").set_defaults(run=status)
+    p = sub.add_parser("status", help="list the jobs and how far they are")
+    p.add_argument("jobs", nargs="*", help="only these jobs (default: all)")
+    p.set_defaults(run=status)
     p = sub.add_parser("fetch", help="download finished results to outputs/cloud/")
     p.add_argument("job", nargs="?", help="only this job (default: all)")
     p.set_defaults(run=fetch)

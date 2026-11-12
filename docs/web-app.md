@@ -34,6 +34,9 @@ A project on the page **is** a flow file. The page writes the same kind of file 
 
 - only an **object**: input → data sheet → base model
 - an object and a **part**: the same, then edit → inpaint shape → judge → details → judge → colours → judge
+- an object and **a part from words** (*+ Describe a new part in words*, no picture of the part needed): the same
+  chain; the edit node gets the words as its `prompt` and the local picture AI paints the part onto the model's
+  picture (see `docs/inpaint-flow.md`, "A part from words")
 
 The first file added is the object, every further one a part (changed in the developer view). Before anything is
 sent to the uni GPU server the page asks.
@@ -52,6 +55,13 @@ sent to the uni GPU server the page asks.
 Also in the menu (≡): light / dark (sand page with black panels, or the other way round), the older node page, and
 the user at the bottom left.
 
+## Tests
+
+```
+python -W ignore::ResourceWarning -m unittest discover tests      # the back end: uploads, flow files, settings, the edit node, what a POST may do
+```
+They run in a temporary folder with any Python 3 (no GPU, no server, no browser), in about two seconds.
+
 ## Blender
 
 *Open in Blender* on a node's model opens it in a new Blender window (`POST /api/blender`). There the Inpaint add-on
@@ -64,7 +74,7 @@ the user at the bottom left.
 |---|---|
 | `GET /app` | the page |
 | `POST /api/upload?flow=<project>&role=object\|part&name=<file>` | the body is the file; pictures and videos only, at most 2 GB; saved under `pictures/uploads/` |
-| `POST /api/app/create` | `{"flow", "prompt", "items": [{"path", "role", "prompt"}], "settings": {"seed", "steps", "resolution", "where"}}` → the flow file. It never overwrites a flow that was not made on the page |
+| `POST /api/app/create` | `{"flow", "prompt", "items": [{"path", "role", "prompt"}], "part_prompt", "settings": {"seed", "steps", "resolution", "where"}}` → the flow file. `part_prompt` = the part in words (then no item is a part). It never overwrites a flow that was not made on the page |
 | `GET /file/<path>.glb` | a model out of `outputs/`, for the 3D view |
 
 Everything else (`/api/flow`, `/api/run`, `/api/stop`, `/api/settings`, `/api/edit`, `/api/prompt`, `/api/blender`,
@@ -73,8 +83,10 @@ the page itself (the header `X-Flow-Page`, the page's own address).
 
 ## Open
 
-- **The prompts** (per data and for the whole result) are written into the flow file (`"prompt"`, an input's
-  `"prompts"`), but no node reads them yet. The prompt that does work is the one in *Edit by hand*.
+- **The prompts:** a data row's prompt is what that thing is called (the first one of the object, the first one of
+  the part): it becomes the data sheet's `what`, which the judge reads instead of the local AI's guess. A part from
+  words is the edit node's `prompt`. The prompt for the whole result is only kept as the project's description
+  (`"prompt"`): no node reads it yet.
 - **3D models as input** (.glb) are not taken: the flow starts from pictures or a video.
 - **Windows:** the pipeline's environment is a Linux one (`install.sh`). On Windows the page and the back end start
   (with any Python 3), but a run stops at the first node that needs the environment. Results made on Linux are not

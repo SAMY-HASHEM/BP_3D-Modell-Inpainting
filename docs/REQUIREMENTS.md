@@ -43,6 +43,23 @@ Rate = how far it is solved (estimate). Main method: **flow inversion with key-v
 - **Soft border** with Geometry Nodes: blur the inpainting mask (Blur Attribute) and smooth the seam around the new part.
 - Fur / hair (Blender hair curves + Geometry Nodes) on top of a generated model: nice, but outside the topic.
 
+### Looked up on Nov 11 (night): what could make the inpainting itself better
+
+| Idea | From | What it would give here | Effort |
+|---|---|---|---|
+| **No inversion: FlowEdit on the voxels** | [Nano3D](https://arxiv.org/abs/2510.15019) (training-free, TRELLIS), [Easy3E](https://arxiv.org/abs/2602.21499) (Voxel FlowEdit) | Speed (#12). Our rewind (inversion) is what takes ~25 min per change. FlowEdit needs none: per step it takes the difference of two predictions, one with the AFTER picture and one with the BEFORE picture, and moves the model's own voxels by it (25 steps, averaged over 2 to 5 noise samples). Easy3E reports 30 s for the shape of an edit. It uses exactly our inputs: the model, a coarse 3D area, one edited view | middle: a new sampler beside `inversion.py`; first on the shape stage only |
+| **The mask from the difference (Voxel-Merge)** | Nano3D | After the edit, compare the old and new small cubes, keep only the big connected pieces of change (theirs: over 100 cubes) and put only those onto the original. Small changes elsewhere fall away by themselves. It would also remove the leftovers under new parts ("vent under the crown"). The words-only part (#17) already does the same in 2D | small: after the shape step, before decoding |
+| **A click instead of a brush** | [GeoSAM2](https://github.com/VAST-AI-Research/GeoSAM2) (CVPR 2026, Apache 2.0): one click or 2D mask on one view → the same part on 12 views → a label per face. [P3-SAM](https://arxiv.org/abs/2509.06784): a click on the 3D model itself | The masking experience: click the crown, get the crown from all sides, instead of painting four sides. Replaces *Find part* (#5, 70 %) where it is not complete | middle: its own render layout (12 views), a new node or a button in the edit by hand |
+| **SAM 3 is out** | [Meta](https://ai.meta.com/blog/segment-anything-model-3) (weights on Hugging Face, access must be asked for) | *Find part* by a short noun ("the crown") in one model, instead of Grounding DINO + SAM 2.1 | small once access is there: `find_part.py` |
+| **Colours from several made-up views** | Easy3E's texture step (ERA3D: six views from the edited picture, projected onto the mesh) | The colours step: the back of a new part is guessed today from one AFTER picture | large |
+| **Numbers to compare with** | Easy3E: 75 s per edit; Instant3dit 25 s; VoxHammer: our base | For the thesis: where our ~25 min × 3 steps stands | – |
+
+Two things seen while testing that night, not fixed:
+- The data sheet's local AI read the logo on Nefertiti's pictures ("Assassin's Creed Origins character") as what the
+  object is. That text goes to the judge as the object's name. A crop to the object before asking would avoid it.
+- `make_edit.py`'s measured place is still only "on the top of the object". With words (#17) the place comes from the
+  picture AI instead; a part's own picture at another place still needs *Edit by hand*.
+
 ## Rules
 
 - Uni server: one job at a time by day, 3 GPUs only after 24:00.

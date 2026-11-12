@@ -31,8 +31,6 @@ import nvdiffrast.torch as dr
 import torch
 from PIL import Image
 
-from project_texture import to_camera, to_pixels
-from render_views import load, render_view
 
 COMFYUI = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188")
 COMFYUI_DIR = os.environ.get("COMFYUI_DIR", os.path.expanduser("~/ai-models/tools/ComfyUI"))
@@ -58,6 +56,7 @@ def view_from_direction(direction):
 
 def area_mask(points, cam, size, grow=0.02):
     """Picture pixels covered by the points (model coordinates), closed and grown a little."""
+    from project_texture import to_camera, to_pixels  # only here: the ComfyUI part below is used without them
     p = torch.tensor(np.asarray(points), dtype=torch.float32, device=cam["center"].device)
     u, v, depth = to_pixels(to_camera(p, cam), cam, size, size)
     mask = np.zeros((size, size), np.uint8)
@@ -160,14 +159,15 @@ def wait_for_picture(prompt_id):
     return Image.open(io.BytesIO(comfy(f"/view?{query}", timeout=60))).convert("RGB")
 
 
-def comfy_edit(image, prompt, seed, reference=None, report=print):
-    """Runs the Qwen edit in ComfyUI and frees ComfyUI's GPU memory afterwards (TRELLIS.2 needs it)."""
+def comfy_edit(image, prompt, seed, reference=None, report=print, template=PROMPT):
+    """Runs the Qwen edit in ComfyUI and frees ComfyUI's GPU memory afterwards (TRELLIS.2 needs it).
+    template: the sentence around the prompt (PROMPT wants a red rectangle in the picture; make_edit.py has one without)."""
     started = start_comfyui(report)
     try:
         report("Painting the prompt into the picture (Qwen-Image-Edit, first time ~1 min to load)...")
         name = upload(image, "inpaint3d_view.png")
         ref = upload(reference.convert("RGB"), "inpaint3d_reference.png") if reference is not None else None
-        text = PROMPT.format(prompt=prompt, reference=", exactly like the one shown in image 2" if ref else "")
+        text = template.format(prompt=prompt, reference=", exactly like the one shown in image 2" if ref else "")
         job = comfy("/prompt", {"prompt": qwen_edit_workflow(name, text, seed, ref), "client_id": "inpaint3d"})
         if job.get("node_errors"):
             raise RuntimeError(f"ComfyUI: {job['node_errors']}")
@@ -188,6 +188,7 @@ def comfy_edit(image, prompt, seed, reference=None, report=print):
 def make_picture(model_path, points, out, prompt, yaw, pitch, seed=1, reference_path=None, report=print):
     """Writes the edited picture to `out`, a before/after preview, the render before the edit
     (<out>_before.png) and the 2D mask of the edit (<out>_mask.png) next to it; returns `out`."""
+    from render_views import load, render_view  # only here: prompt_picture.py and views_from_picture.py use the ComfyUI part alone
     report("Picturing the model from the Blender view...")
     ctx = dr.RasterizeCudaContext()
     meshes = load(model_path)
