@@ -55,7 +55,7 @@ TYPES = {
     "edit": ("03 Edit", ["model", "part", "object"], "this PC: measured",
              lambda i, s, name: (core.edit(i["model"]["model"], (i.get("part") or {}).get("data"), i["object"]["data"], s.get("replace", False),
                                            s.get("width", 0.75), s.get("sink", 0.15), s.get("head", 0.12), s.get("fit", "between"),
-                                           s.get("place"), s.get("side"), s.get("hand"), s.get("after"), s.get("prompt"), s.get("prompt_seed", 1)), None)),
+                                           s.get("place"), s.get("side"), s.get("hand"), s.get("after"), s.get("prompt"), s.get("prompt_seed", 1), s.get("at")), None)),
     "inpaint": ("04 Inpaint", ["model", "edit"], "TRELLIS.2",
                 lambda i, s, name: (core.inpaint_step(i["model"]["model"], i["edit"]["edit"], s.get("step", "shape"),
                                                       s.get("seeds", [1]), s.get("where", "server")), None)),

@@ -79,7 +79,7 @@ RUNS = {}  # {flow file: {"process", "upto", "log", "started"}}: the flow.py thi
 # what can be set on the page per node type, with the value a node has when the flow file doesn't say (as flow.py's TYPES)
 SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8, "ai": True, "what": ""},
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25}, "pick_seed": {},
-            "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1},
+            "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
 PROMPTS = {}  # {"<flow file>/<node>": {"process", "log", "prompt", "started"}}: the picture AI painting a prompt

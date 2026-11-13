@@ -210,6 +210,16 @@ class TheEditNode(InTemporaryProject):
         self.assertEqual(core.edit(self.model, self.part, self.object)["folder"],
                          core.edit(self.model, self.part, self.object, prompt="a hat")["folder"])
 
+    def test_a_part_picture_placed_by_words(self):
+        job = core.edit(self.model, self.part, self.object, at=" in the  left hand ")
+        command = job["steps"][0][0]
+        self.assertTrue(command[3].endswith("part_sides"))
+        self.assertEqual(command[command.index("--prompt") + 1], "the part in the left hand")
+        self.assertEqual(json.load(open(os.path.join(job["folder"], "settings.json")))["at"], "in the left hand")
+        self.assertNotEqual(job["folder"], core.edit(self.model, self.part, self.object)["folder"])
+        by_hand = core.edit(self.model, self.part, self.object, at="in the left hand", place=[1, 2, 3])["steps"][0][0]
+        self.assertNotIn("--prompt", by_hand)  # a place by hand wins
+
     def test_words_only(self):
         job = core.edit(self.model, None, self.object, prompt=" a wide  hat ", prompt_seed=2)
         command = job["steps"][0][0]

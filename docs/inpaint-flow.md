@@ -70,6 +70,25 @@ picture of a part); the other sides are TRELLIS.2's guess.
 Tried on Nov 11 on the wanderer (512 base): a wizard hat (2.0 % of the picture changed, one piece), a round shield in
 the free hand (3.3 %), wings on the back from behind (3.2 %): the mask was clean each time.
 
+## A part with its own picture, at any place (`at`)
+
+With a picture of the part the measured place is the top of the object. For any other place the edit node has `at`,
+where the part goes, in words:
+
+```
+{"id": "edit", "type": "edit", "at": "in the left hand", "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}}
+```
+
+The picture AI then gets BEFORE and the part's own cut-out picture ("add the <part> <at> to the object, exactly like
+the one shown in image 2") and paints that part there, at the object's scale and angle. The rest is the same as with
+words only: the part and its 2D mask are what differs from BEFORE, the 3D area is put where the model is under it.
+Only the main side gets a picture this way, also when the part has four sides. A place given by hand (*Edit by hand*)
+wins over `at`; a `prompt` beside a part's pictures is still not used.
+
+Tried on Nov 12 on the wanderer with the crown's picture: "on the head" (0.7 % of the picture, seated on the head at
+the head's size, which the measured collage does not do) and "held in the hand" (1.2 %, it was put on top of the staff
+the hand holds).
+
 ## The structure
 
 ```
@@ -98,6 +117,28 @@ The live version of this picture, with every node's state, time and result pictu
 | **03 Edit** | this PC | `inpainting/make_edit.py` | where the part goes, nothing placed by hand (on the middle of the top; *Fit*: **between** things that stand up beside the middle, e.g. hair buns, or **over** them with *Replace*: what the part covers is regenerated too): per side BEFORE (render), AFTER (collage with the part), 2D MASK; the 3D area with a job per small cube: keep / delete / edit | `edit.json`, `three.jpg`, `area_map.jpg`, `area.npy` |
 | **04 Inpaint** | uni server | `inpainting/send_edit.py --wait` | one step: **shape** → **details** → **colours**, each from the result before; several seeds = several candidates in one server job | the candidates `.glb` |
 | **05 Judge** | this PC | `pipeline/edit_judge.py` | measured: is the rest kept, is the part there, the colours; the local AI lists defects; the best candidate goes on, with pass / redo | `judge.json`, `compare.jpg` |
+
+### The edit's plan: a job for every small cube (changed Nov 12)
+The 3D area is a set of small cubes, each with one job. `area_map.jpg` shows them: green KEEP, red DELETE, blue EDIT.
+
+| Job | Which cubes | What happens |
+|---|---|---|
+| **KEEP** | a voxel the model's surface runs through, and the inside of the model | stays the model's own, exactly |
+| **DELETE** | with *Replace*: KEEP cubes that lie under the part's 2D mask from every side that has a picture, but not under its rim (1.5 voxels) | regenerated with the part |
+| **EDIT** | the empty room of the area | the part grows here |
+
+- The jobs are decided on **TRELLIS.2's own 64³ voxels**, placed exactly as the inpainting places the model (with the
+  room above it). Before, everything within 1.5 voxels of the surface was KEEP, also the empty room there, measured in
+  the model's own units: the part could not reach the model everywhere.
+- **Inside** is a voxel with the model's surface on at least five of its six sides (five, because a bust is open at
+  the bottom). Before it was "under the model's highest surface", which also closed the room under an arm or a chin:
+  right for a crown, wrong for a part at the side.
+- **The rim is not deleted.** On the girl (Nov 10) the lowest layer of the area lost 130 of the hair's 308 voxels and
+  got nothing back: a hole between hair and crown, seen as the crown "floating". What is deleted must be covered by
+  the part again, so the model's surface under the part's edge stays.
+- **The main side** is the side whose outline fits the object's own picture (how much the two shapes cover each
+  other); the colours only decide between sides with the same outline (front and back). Colours alone took
+  Nefertiti's profile for her front, and a sun disc painted onto a profile faces sideways.
 
 ### The data sheet's lists (what TRELLIS.2 gets)
 - `base`: the views a model is generated from. Main view = the most symmetric of the views the AI calls *front*; then
@@ -150,7 +191,12 @@ preference, as a possible second local judge.
 ## Open (to decide together)
 - **The loop:** a `redo` verdict does nothing yet. Next: redo with other seeds / a wider or lower area / `--replace`,
   at most N rounds, keeping only what scores better (as the grid loop does).
-- **Placement:** with a picture of the part the Edit node puts it on the top of the object; other places need *Edit by
-  hand*. A part from words (above) is placed by the picture AI, anywhere on the side that is seen.
+- **Placement:** with a picture of the part the Edit node measures only one place, the top of the object. Any other
+  place: `at` (in words, the picture AI places the part's own picture), or *Edit by hand*. A part from words is placed
+  by the picture AI, anywhere on the side that is seen.
+- **Only one side has a picture** when the picture AI places the part (words, or `at`): the depth is TRELLIS.2's
+  guess. Tried on Nov 12: asking the picture AI for the same part on the side and back views, with the front AFTER
+  picture as its second picture. It painted the whole front view again instead. The angle LoRA of
+  `views_from_picture.py` on the AFTER picture is the next thing to try.
 - **The judge's limits and weights**, and whether the AI's score should be able to veto.
 - **ComfyUI:** the nodes are only in the flow runner and in Blender so far.

@@ -313,18 +313,25 @@ def pick_seed(data, candidates):
 
 
 def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit="between", place=None, side=None, hand=None,
-         after=None, prompt=None, prompt_seed=1):
+         after=None, prompt=None, prompt_seed=1, at=None):
     """03: where the part goes. The three pictures per side (before, after = a collage, 2D mask) and the 3D area with
     a job for every small cube (keep / delete / edit). The place is measured (make_edit.py), or given by hand (the web
     page): place = the part's left, top, width in the picture of `side`, hand = a folder with the painted corrections
     of the 2D mask (add_<view>.png, erase_<view>.png), after = a ready AFTER picture of `side` (made from a prompt).
     No picture of the part (part = None): prompt = what should be added; the local picture AI paints it onto the
-    model's picture and what differs is the part (make_edit.py --prompt)."""
+    model's picture and what differs is the part (make_edit.py --prompt).
+    at: for a part with pictures, where it goes in words ("in the left hand", "on the back"): the picture AI paints
+    the part's own picture there, instead of the measured place on the top. A prompt beside a part's pictures is not used."""
     prompt = " ".join(str(prompt or "").split())
     if not part and not prompt:
         raise ValueError("the edit needs a part: its pictures (the input `part`), or a prompt that says what to add")
     sides, reference = sheet_views(part, "sides") if part else [], sheet_views(obj, "base")[0]
     words = {"prompt": prompt, "prompt_seed": int(prompt_seed)} if prompt and not part else {}
+    at = " ".join(str(at or "").split())
+    if part and at and not place:  # the part's own picture, placed by the picture AI
+        called = json.load(open(part["path"])).get("what") or "new part"
+        called = called if called.lower().startswith(("the ", "a ", "an ")) else f"the {called}"
+        words = {"at": at, "prompt": f"{called} {at}", "prompt_seed": int(prompt_seed)}
     hand = project_path(hand) if hand else None
     painted = sorted(os.path.join(hand, f) for f in os.listdir(hand) if f.endswith(".png")) if hand and os.path.isdir(hand) else []
     by_hand = {**({"place": [int(v) for v in place]} if place else {}), **({"side": int(side)} if side is not None else {}),
@@ -332,7 +339,7 @@ def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit=
                **({"after": stamp(project_path(after))} if after else {})}  # nothing by hand: the folder's name stays as it was
     folder = node_folder(model["name"], "03_edit", {"model": stamp(model["glb"]), "sides": [stamp(s) for s in sides],
                                                     "reference": stamp(reference), "replace": replace, "width": width, "sink": sink,
-                                                    **({"head": head} if head != 0.12 else {}), "fit": fit, **by_hand, **words})
+                                                    **({"head": head} if head != 0.12 else {}), "fit": fit, **by_hand, **{k: v for k, v in words.items() if k != "prompt" or "at" not in words}})
     turning = os.path.join(folder, "part_sides")  # the part's sides in turning order, as make_edit.py wants a folder
     os.makedirs(turning, exist_ok=True)
     for k, side in enumerate(sides[:4]):
@@ -340,7 +347,7 @@ def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit=
         if not os.path.lexists(link):
             os.symlink(os.path.realpath(side), link)
     out = os.path.join(folder, "edit.json")
-    command = py("inpainting/make_edit.py", model["glb"], *([turning] if part else ["--prompt", prompt, "--prompt-seed", words["prompt_seed"]]),
+    command = py("inpainting/make_edit.py", model["glb"], *([turning] if part else []), *(["--prompt", words["prompt"], "--prompt-seed", words["prompt_seed"]] if words else []),
                  "--reference", reference, "--out", folder,
                  "--width", width, "--sink", sink, "--head", head, "--fit", fit, *(["--replace"] if replace else []),
                  *(["--place", *by_hand["place"]] if place else []), *(["--side", by_hand["side"]] if "side" in by_hand else []),

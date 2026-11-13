@@ -275,7 +275,7 @@ def mixed_cond(cond, source_cond, picture_mask, resolution, patch=16):
 def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, steps=generate.DEFAULT_STEPS, report=print,
             method="repaint", source_path=None, start="inverted", soft=0, picture_mask_path=None, swap=True,
             solver="midpoint", inject=1.0, room=0.0, more_pictures=(), main_role="both", mode="stochastic", texture_guidance=None, faces=1_000_000, keep_shape=False, keep_structure=False,
-            split_sheet=True, more_edits=()):
+            split_sheet=True, more_edits=(), loose=1.0):
     """Regenerates the area around `points` (model coordinates; none = only rebuild) and writes `out`.
     `report` gets a short text for every stage and step.
     method: "repaint" keeps the rest with fresh noise at every step (KeepKnown); "inversion" keeps it on
@@ -300,6 +300,9 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     keep_structure: the details step between shape and colours: the voxels stay where they are, only their fine shape
     (and colours) in the area are regenerated from the picture, so the part gets sharper without moving. The idea of a
     separate refinement on fixed voxels is from UltraShape (arXiv 2512.21185); this is our own code for TRELLIS.2.
+    loose: new voxels of the area that hang together with nothing form loose pieces; a piece smaller than this share
+    of the biggest one is left out before the shape is made (0.1: under a tenth of it; 1 = off). They became the
+    small leftovers near new parts (the vent under the crown, horn tips beside Nefertiti's head).
     keep_shape: only the colours are regenerated; the structure and shape stay exactly the model's own
     (for parts whose shape is already right but whose colours are not, e.g. clothes)."""
     assert method in METHODS and start in ("inverted", "random") and solver in ("midpoint", "euler")
@@ -413,6 +416,8 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
         else:
             with OnGpu(pipeline.models["sparse_structure_decoder"]) as decoder:
                 new_occupied = decoder(z)[0, 0] > 0
+            if loose < 1:
+                new_occupied = without_loose_pieces(new_occupied, mask, loose, report)
             occupied = torch.where(mask, new_occupied, occupied[0, 0] > 0)
         coords = torch.argwhere(occupied).int()
         coords = torch.cat([torch.zeros_like(coords[:, :1]), coords], 1)
@@ -544,6 +549,23 @@ def save_colours_on_mesh(result, mesh, cube_vertices, out, mask, chunk=8_000_000
                                   visual=trimesh.visual.TextureVisuals(uv=mesh.visual.uv, material=new))
     trimesh.Scene(result_mesh).export(out, extension_webp=True)
     print(f"    {found.sum():,} texels repainted on the same mesh", flush=True)
+
+
+def without_loose_pieces(new_occupied, mask, share, report=print):
+    """The new voxels of the area without its small loose pieces: of the pieces that hang together (also over a
+    corner), only those with at least `share` of the biggest one's voxels stay."""
+    from scipy import ndimage
+    new = (new_occupied & mask).cpu().numpy()
+    labels, count = ndimage.label(new, structure=np.ones((3, 3, 3)))
+    if count < 2:
+        return new_occupied
+    sizes = ndimage.sum(new, labels, range(1, count + 1))
+    small = [k + 1 for k, size in enumerate(sizes) if size < share * sizes.max()]
+    if not small:
+        return new_occupied
+    gone = np.isin(labels, small)
+    report(f"    {len(small)} loose piece(s) of the new part left out ({int(gone.sum())} voxels; the biggest piece has {int(sizes.max())})")
+    return new_occupied & ~torch.from_numpy(gone).to(new_occupied.device)
 
 
 def kept_tokens(coords, inside, distance, soft, known_coords, known_feats, whole=False):

@@ -52,6 +52,7 @@ VARIANT_CHECKS = {
     "texture_guidance": lambda v: float(v) if 1 <= float(v) <= 10 else None,
     "keep_shape": lambda v: bool(v),
     "keep_structure": lambda v: bool(v),
+    "loose": lambda v: float(v) if 0 <= float(v) <= 1 else None,
 }
 
 
@@ -88,6 +89,8 @@ def name(version):
         parts.append(f"inject{version['inject']:g}")
     if version.get("texture_guidance") is not None:
         parts.append(f"tg{version['texture_guidance']:g}")
+    if version.get("loose", 1.0) != 1.0:
+        parts.append(f"loose{version['loose']:g}")
     if version.get("keep_shape"):
         parts.append("colours")
     if version.get("keep_structure"):
