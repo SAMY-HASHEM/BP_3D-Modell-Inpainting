@@ -13,6 +13,8 @@ Usage (TRELLIS.2 environment; ComfyUI is started if it isn't running):
     source activate.sh
     python scripts/inpainting/picture_from_prompt.py outputs/tavern_1536_seed42.glb points.npy out.png \\
         --prompt "a stone statue of a dancing woman" --yaw 30 --pitch 15 [--reference statue.jpg]
+    # or from a ready BEFORE picture and a picture of the area (the web page's edit by hand; see paint_into_picture):
+    python scripts/inpainting/picture_from_prompt.py before.png area.png out.png --prompt "a golden crown with pink gems"
 """
 import _paths  # noqa: F401  (the scripts of the other folders)
 import argparse
@@ -188,7 +190,7 @@ def comfy_edit(image, prompt, seed, reference=None, report=print, template=PROMP
 def make_picture(model_path, points, out, prompt, yaw, pitch, seed=1, reference_path=None, report=print):
     """Writes the edited picture to `out`, a before/after preview, the render before the edit
     (<out>_before.png) and the 2D mask of the edit (<out>_mask.png) next to it; returns `out`."""
-    from render_views import load, render_view  # only here: prompt_picture.py and views_from_picture.py use the ComfyUI part alone
+    from render_views import load, render_view  # only here: paint_into_picture and views_from_picture.py use the ComfyUI part alone
     report("Picturing the model from the Blender view...")
     ctx = dr.RasterizeCudaContext()
     meshes = load(model_path)
@@ -223,10 +225,36 @@ def make_picture(model_path, points, out, prompt, yaw, pitch, seed=1, reference_
     return out
 
 
+def paint_into_picture(before_path, area_path, out, prompt, seed=1, reference_path=None, report=print):
+    """The AFTER picture of an edit from a ready BEFORE picture (make_edit.py's: the model from one side, on grey) and
+    a picture of the area (white or painted = may change): the prompt is painted into that area, outside it the
+    picture stays the exact BEFORE. For the web page's edit by hand (flow_page.py); make_edit.py --after takes it."""
+    before = np.asarray(Image.open(before_path).convert("RGB"))
+    size = before.shape[0]
+    painted = Image.open(area_path)
+    painted = painted.getchannel("A") if painted.mode == "RGBA" else painted.convert("L")  # the page's layers are see-through
+    area = np.asarray(painted.resize((size, size), Image.NEAREST)) > 127
+    if not area.any():
+        raise SystemExit("nothing is painted: paint the area where the change should be first")
+    ys, xs = np.nonzero(area)
+    pad = int(0.02 * size)
+    x0, y0, x1, y1 = max(0, xs.min() - pad), max(0, ys.min() - pad), min(size - 1, xs.max() + pad), min(size - 1, ys.max() + pad)
+    marked = before.copy()
+    cv2.rectangle(marked, (int(x0), int(y0)), (int(x1), int(y1)), FRAME, max(3, size // 200))
+    reference = Image.open(reference_path) if reference_path else None
+    edited = np.asarray(comfy_edit(Image.fromarray(marked), prompt, seed, reference, report).resize((size, size), Image.LANCZOS))
+    grow = max(4, size // 100)  # only the painted area changes (soft edge)
+    region = cv2.dilate(area.astype(np.float32), np.ones((2 * grow + 1, 2 * grow + 1), np.uint8))
+    region = cv2.GaussianBlur(region, (0, 0), grow / 2)[..., None]
+    Image.fromarray((edited * region + before * (1 - region)).astype(np.uint8)).save(out)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description="Paint a prompt into a picture of the model, for inpainting")
-    parser.add_argument("model")
-    parser.add_argument("points", help=".npy with points of the area (model coordinates, N x 3)")
+    parser.add_argument("model", help="the model (.glb), or a ready BEFORE picture of it (.png)")
+    parser.add_argument("points", help=".npy with points of the area (model coordinates, N x 3); with a BEFORE picture: "
+                                       "a picture of the area (white or painted = may change)")
     parser.add_argument("out", help="picture to write (.png)")
     parser.add_argument("--prompt", required=True, help="what the area should show, e.g. 'a stone statue'")
     parser.add_argument("--yaw", type=float, default=30)
@@ -234,6 +262,11 @@ def main():
     parser.add_argument("--reference", help="optional picture of the thing to add")
     parser.add_argument("--seed", type=int, default=1)
     args = parser.parse_args()
+    if args.model.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):  # a BEFORE picture and a picture of the area
+        paint_into_picture(args.model, args.points, args.out, args.prompt, args.seed, args.reference,
+                           report=lambda text: print(text, flush=True))
+        print(f"Result: {args.out}", flush=True)
+        return
     make_picture(args.model, np.load(args.points), args.out, args.prompt, args.yaw, args.pitch, args.seed, args.reference)
 
 

@@ -2,10 +2,10 @@
 
 Rows are resolutions, columns are step counts (or seeds, if all models have the same steps).
 
-Usage (runs Blender for you, see compare_in_blender.sh):
-    ./scripts/tools/compare_in_blender.sh outputs/<picture>
-    ./scripts/tools/compare_in_blender.sh outputs/<picture> --render
-    ./scripts/tools/compare_in_blender.sh outputs/<picture> --render --back   # the backs of the models
+Usage (absolute paths: a Flatpak Blender starts in another folder; there: flatpak run org.blender.Blender -b ...):
+    blender -b --python scripts/tools/compare_in_blender.py -- "$PWD/outputs/<picture>"            # saves comparison.blend
+    blender -b --python scripts/tools/compare_in_blender.py -- "$PWD/outputs/<picture>" --render   # also comparison.png
+    blender -b --python scripts/tools/compare_in_blender.py -- "$PWD/outputs/<picture>" --render --back   # the backs
 
 Saves outputs/<picture>/comparison.blend (open it in Blender) and, with --render, comparison.png
 (comparison_back.* with --back).

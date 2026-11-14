@@ -17,6 +17,7 @@ contact.jpg (all views with the AI's tags, to check it at a glance).
 
 Usage (TRELLIS.2 environment):
     python scripts/pipeline/sort_pictures.py "pictures/local model" --out outputs/pipeline/morrigan/01_sort
+    python scripts/pipeline/sort_pictures.py turntable.mp4 --frames 12 --out outputs/pipeline/x/00_video   # only a video's frames
 """
 import _paths  # noqa: F401  (the scripts of the other folders)
 
@@ -289,13 +290,22 @@ def contact_sheet(views, out, cell=360):
 
 def main():
     parser = argparse.ArgumentParser(description="Node 01: the vision AI sorts a character's pictures into lists")
-    parser.add_argument("folder", help="all pictures of one character")
+    parser.add_argument("folder", help="all pictures of one character; or one video: only its frames are written")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--frames", type=int, default=12, help="a video: this many frames, evenly spaced over it")
     parser.add_argument("--model", default=ai.MODELS[0], choices=ai.MODELS)
     parser.add_argument("--size", type=int, default=1024, help="longest side of the pictures the AI sees")
     parser.add_argument("--rules-only", action="store_true", help="keep the AI's answers in sorted.json, only apply the rules again")
     parser.add_argument("--check-again", action="store_true", help="keep steps 1-3 in sorted.json, run the check (step 4) again")
     args = parser.parse_args()
+    if args.folder.lower().endswith((".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")):
+        # a video: its frames as pictures into --out/frames (no choice made here: which frames are useful views the
+        # vision AI decides when the folder with them is sorted)
+        os.makedirs(os.path.join(args.out, "frames"), exist_ok=True)
+        name = os.path.splitext(os.path.basename(args.folder))[0].replace(" ", "_")
+        print(f"{len(ai.sample_frames(args.folder, args.frames, args.out, name))} frames")
+        print(f"Result: {os.path.join(args.out, 'frames')}")
+        return
     os.makedirs(os.path.join(args.out, "views"), exist_ok=True)
     start = time.time()
     result_path = os.path.join(args.out, "sorted.json")

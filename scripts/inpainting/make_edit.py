@@ -15,11 +15,11 @@ rest stays exact.
 By hand (the web page's "Edit by hand", scripts/pipeline/flow_page.py): --place X Y WIDTH puts the part there instead
 of the measured place (pixels of the main side's picture), and --hand FOLDER has the painted corrections of the 2D
 mask, per side: add_<view>.png (white = this changes too) and erase_<view>.png (white = this stays).
---after PICTURE is a ready AFTER picture of the main side (prompt_picture.py: a prompt painted into the painted area):
+--after PICTURE is a ready AFTER picture of the main side (picture_from_prompt.py: a prompt painted into the painted area):
 what differs from BEFORE inside add_<side>.png is the new part, no part picture is used.
 
 No picture of the part at all: --prompt "a wide pointed wizard hat on the head" instead of the part. The local picture
-AI (Qwen-Image-Edit, as prompt_picture.py) paints the words onto BEFORE of the main side; what differs from BEFORE is
+AI (Qwen-Image-Edit, as picture_from_prompt.py) paints the words onto BEFORE of the main side; what differs from BEFORE is
 the new part and its 2D mask. Such a part can be anywhere on the model, so the 3D area is put where the model's
 surface is under the part (tried on the wanderer, Nov 11: a hat, a shield in the hand, wings on the back).
 

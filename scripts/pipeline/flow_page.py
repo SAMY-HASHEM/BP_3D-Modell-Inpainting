@@ -34,7 +34,7 @@ The page gets everything from here:
     POST /api/settings          {"flow", "node", "settings"}: a node's settings, written into the flow file
     POST /api/blender           {"model"}: opens a model of outputs/ in a new Blender window
     POST /api/prompt            {"flow", "node", "prompt", "seed", "reference", "area"}: the local picture AI paints the
-                                prompt into the painted area of the main side (prompt_picture.py), into flows/hand/
+                                prompt into the painted area of the main side (picture_from_prompt.py), into flows/hand/
 
 The main page (web/app.html: add data, a prompt per data, the total workflow) makes its own flow files with these:
     POST /api/upload?flow=<name>&role=object|part&name=<file>   the request's body is the picture or video itself; it is
@@ -634,7 +634,7 @@ def start_prompt(file, wanted):
     area = os.path.join(folder, f"prompt_{number}_area.png")  # its own copy: the flow's painted mask (add_<view>.png) only
     save_picture(area, wanted["area"])                        # changes with Apply, or the edit node would count as not made
     python, env = project_python()
-    command = [python, os.path.join(core.SCRIPTS, "inpainting", "prompt_picture.py"), os.path.join(edit, "before.png"), area, out,
+    command = [python, os.path.join(core.SCRIPTS, "inpainting", "picture_from_prompt.py"), os.path.join(edit, "before.png"), area, out,
                "--prompt", prompt, "--seed", str(int(wanted.get("seed") or 1))]
     sides = os.path.join(edit, "part_sides")
     pictures = sorted(os.listdir(sides)) if os.path.isdir(sides) else []

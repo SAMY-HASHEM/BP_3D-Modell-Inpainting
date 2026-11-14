@@ -14,6 +14,9 @@ Usage:
     python3 scripts/server/cloud.py generate front.png --shape-only side.png back.png   # colours from the front only
     python3 scripts/server/cloud.py inpaint outputs/robot.glb pictures/robot.png --box -0.4 -0.5 -0.4 -0.1 0 0 \
         --seed 2 --steps 25                                 # regenerate an area, without Blender
+    python3 scripts/server/cloud.py edit outputs/edits/robot_crown model.glb --seeds 1 2   # what make_edit.py made: 1 the shape
+    python3 scripts/server/cloud.py edit outputs/edits/robot_crown shape.glb --details     #   2 sharper details
+    python3 scripts/server/cloud.py edit outputs/edits/robot_crown details.glb --colours   #   3 the colours, last
     python3 scripts/server/cloud.py generate front.png --code voxhammer   # with the newest code of a branch (GitHub)
     python3 scripts/server/cloud.py status                         # all jobs and how far they are
     python3 scripts/server/cloud.py fetch                          # download finished results to outputs/cloud/
@@ -350,6 +353,44 @@ def inpaint(args):
         wait_for(cloud, sent, args.wait)
 
 
+EDIT_SETTINGS = "inversion,start=random,soft=2,texture_guidance=3"  # what worked best (Nov 5, crown and helmet)
+
+
+def edit(args):
+    """Sends what make_edit.py made, with the settings that worked best: new noise in the area, soft edge 2, colour
+    guidance 3, every side with its own before, after and mask. The three steps, always in this order: the shape (no
+    flag), --details (the voxels of the given model stay, their fine shape in the area is regenerated), --colours (the
+    whole shape stays, only the colours, on the same mesh). The last two first render the model's before pictures, in
+    the same frame as the edit's. Needs the TRELLIS.2 environment."""
+    import subprocess
+    import _paths  # noqa: F401  (the scripts of the other folders)
+    from PIL import Image
+    from make_edit import BLENDER, PROJECT, on_grey
+    made = json.load(open(os.path.join(args.edit, "edit.json")))
+    afters = [os.path.join(args.edit, "after.png")] + made["more_edit"][1::4]
+    befores = [os.path.join(args.edit, "before.png")] + made["more_edit"][2::4]
+    masks = [os.path.join(args.edit, "mask.png")] + made["more_edit"][3::4]
+    variant = f"{EDIT_SETTINGS},room={made['room']}"
+    if args.details or args.colours:
+        folder = os.path.join(args.edit, "colours" if args.colours else "details")
+        os.makedirs(folder, exist_ok=True)
+        subprocess.run([BLENDER, "-b", "--python", os.path.join(PROJECT, "scripts/tools/render_views.py"), "--",
+                        os.path.abspath(args.model), os.path.abspath(folder), "--frame",
+                        os.path.abspath(os.path.join(args.edit, "views.json"))], check=True, stdout=subprocess.DEVNULL)
+        befores = []
+        for k in range(len(afters)):
+            view = Image.open(os.path.join(folder, f"view_{(made['side'] + k) % 4}.png")).convert("RGBA")
+            befores.append(os.path.join(folder, f"before_{k}.png"))
+            on_grey(view).save(befores[-1])
+        variant = f"{EDIT_SETTINGS},{'keep_shape' if args.colours else 'keep_structure'}=1"
+    command = ["inpaint", args.model, afters[0], "--area", os.path.join(args.edit, "area.npy"), "--source", befores[0],
+               "--picture-mask", masks[0], "--grow", "0", "--steps", "25", "--variant", variant, "--seeds", *map(str, args.seeds)]
+    for side in zip(afters[1:], befores[1:], masks[1:]):
+        command += ["--more-edit", *side]
+    command += (["--code", args.code] if args.code else []) + (["--wait", args.wait] if args.wait else [])
+    main(command)
+
+
 def status(args):
     cloud = Cloud()
     names = cloud.list()
@@ -474,7 +515,7 @@ def device(args):
     print("Ready. Next: python3 scripts/server/cloud.py watch", flush=True)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Uni GPU server jobs through the Sciebo cloud")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("setup", help="save the cloud login (once per computer): asks only login name and app password")
@@ -538,6 +579,15 @@ def main():
     p.set_defaults(run=inpaint)
     p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
+    p = sub.add_parser("edit", help="send what make_edit.py made, with the settings that worked best (TRELLIS.2 environment)")
+    p.add_argument("edit", help="the folder make_edit.py wrote")
+    p.add_argument("model")
+    p.add_argument("--seeds", type=int, nargs="+", default=[1])
+    p.add_argument("--details", action="store_true", help="model is the shape step's result: only its fine shape")
+    p.add_argument("--colours", action="store_true", help="the last step: only the colours of the model")
+    p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch")
+    p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")
+    p.set_defaults(run=edit)
     p = sub.add_parser("wait", help="wait for a job that was sent before and download its results")
     p.add_argument("job")
     p.add_argument("folder")
@@ -548,7 +598,7 @@ def main():
     p = sub.add_parser("fetch", help="download finished results to outputs/cloud/")
     p.add_argument("job", nargs="?", help="only this job (default: all)")
     p.set_defaults(run=fetch)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     args.run(args)
 
 

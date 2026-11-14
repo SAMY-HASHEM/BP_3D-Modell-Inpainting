@@ -11,7 +11,7 @@ Usage:
         pictures/yeonhee/front.png pictures/yeonhee/front-left.png pictures/yeonhee/side-right.png
     python scripts/tools/project_texture.py outputs/full_1536_seed42.glb pictures/4/full.jpg \\
         --closeups pictures/4/closeup-upper.jpg
-    # a model from insert_part.py (body + separately generated parts) works the same way:
+    # a model with several textured meshes (a body + separately generated parts) works the same way:
     python scripts/tools/project_texture.py outputs/head_1536_seed42_parts.glb pictures/head/head.png
 
 All pictures must show the object in the same pose. Where several pictures see the same spot,
@@ -368,7 +368,7 @@ class Mesh:
 
 
 def load_meshes(path):
-    """The scene and all its textured meshes (a TRELLIS.2 model has one; insert_part.py adds more)."""
+    """The scene and all its textured meshes (a TRELLIS.2 model has one; combined models have more)."""
     scene = trimesh.load(path)
     meshes = []
     for node in scene.graph.nodes_geometry:
@@ -379,7 +379,7 @@ def load_meshes(path):
 
 def main():
     parser = argparse.ArgumentParser(description="Project the original picture(s) onto a TRELLIS.2 model")
-    parser.add_argument("model", help="the .glb from generate.py, multi_image.py or insert_part.py")
+    parser.add_argument("model", help="the .glb from generate.py or multi_image.py")
     parser.add_argument("pictures", nargs="+", help="full-size pictures of the object, all in the same pose")
     parser.add_argument("--closeups", nargs="*", default=[], help="close-ups of the first picture, for more detail")
     parser.add_argument("--check-colors", action="store_true",

@@ -63,7 +63,7 @@ def pictures(name, folder):
 def video(pics, path, frames):
     folder = node_folder(pics["name"], "00_video", {"video": stamp(path), "frames": frames})
     frames_dir = os.path.join(folder, "frames")
-    return {"folder": folder, "steps": [(py("pipeline/video_frames.py", path, "--frames", frames, "--out", folder),
+    return {"folder": folder, "steps": [(py("pipeline/sort_pictures.py", path, "--frames", frames, "--out", folder),
                                          "video frames", frames_dir)],
             "outputs": {"frames": frames_dir}}
 
@@ -262,15 +262,18 @@ def inputs(name, files):
     return {"name": name.strip().replace(" ", "_"), "files": found}
 
 
-def data_sheet(pics, role="object", frames=8, ai=True, what=""):
+def data_sheet(pics, role="object", frames=8, ai=True, what="", sides=""):
     """01: the local AI's data sheet of one input: its single views, what each is, and the lists for TRELLIS.2.
-    what = the user's own words for what the input shows: the judge gets them instead of the local AI's guess."""
+    what = the user's own words for what the input shows: the judge gets them instead of the local AI's guess.
+    sides = the user's own words for the sides of a sheet's views, left to right ("front, side, back")."""
     what = " ".join(str(what or "").split())
+    sides = ", ".join(s.strip() for s in str(sides or "").split(",") if s.strip())
     folder = node_folder(pics["name"], f"01_sheet_{role}", {"files": [stamp(f) for f in pics["files"]], "role": role,
-                                                             "frames": frames, "ai": ai, **({"what": what} if what else {})})
+                                                             "frames": frames, "ai": ai, **({"what": what} if what else {}),
+                                                             **({"sides": sides} if sides else {})})
     out = os.path.join(folder, "sheet.json")
     command = py("pipeline/data_sheet.py", *pics["files"], "--role", role, "--frames", frames, "--out", folder,
-                 *(["--what", what] if what else []))
+                 *(["--what", what] if what else []), *(["--sides", sides] if sides else []))
     return {"folder": folder, "steps": [(command + ([] if ai else ["--no-ai"]), f"01 data sheet ({role})", out)],
             "outputs": {"data": {"path": out, "name": pics["name"], "role": role}, "sheet": os.path.join(folder, "contact.jpg")}}
 
@@ -368,7 +371,7 @@ def inpaint_step(model, edit_, step="shape", seeds=(1,), where="server"):
     folder = node_folder(edit_["name"], f"04_inpaint_{step}", {"model": stamp(model["glb"]), "seeds": seeds,
                                                                 "edit": stamp(os.path.join(edit_["folder"], "edit.json"))})
     done = os.path.join(folder, "server_job.json")
-    command = py("inpainting/send_edit.py", edit_["folder"], model["glb"], "--seeds", *seeds, "--wait", folder,
+    command = py("server/cloud.py", "edit", edit_["folder"], model["glb"], "--seeds", *seeds, "--wait", folder,
                  *({"shape": [], "details": ["--details"], "colours": ["--colours"]}[step]))
     return {"folder": folder, "steps": [(command, f"04 inpaint: {step} (uni server)", done)],
             "outputs": {"models_from": done, "model_like": {"name": edit_["name"], "kind": step, "label": step}}}

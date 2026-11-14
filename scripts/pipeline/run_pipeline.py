@@ -42,7 +42,7 @@ NODES = {
     "01_sort": {"model": "Qwen/Qwen3-VL-8B-Instruct"},
     # night tests: stochastic best and 2x faster; 1024 (1536 makes holes in hair); 12 steps = 25; 4M faces keep detail
     "02_base": {"mode": "stochastic", "resolution": "1024", "steps": 12, "faces": 4_000_000, "seed": 42},
-    # every part, with the lessons of rounds 1-9 (see LESSONS and docs/pipeline-nodes.md):
+    # every part, with the lessons of rounds 1-9 (see LESSONS and docs/FLOWS.md):
     #   colours only (keep_shape): the base shape from the grey views is already good (legs r6 got lumpy)
     #   one sharp colour picture (best_colour 1): mixing pictures smeared the face (r4 -> r8)
     #   margin as a share of the model (0.1): big parts still get zoomed (chest r5 was the whole model)

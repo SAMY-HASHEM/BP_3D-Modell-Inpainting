@@ -100,7 +100,7 @@ def main():
             os.symlink(path, os.path.join(inbox, f))
         elif f.lower().endswith(VIDEO_TYPES):
             frames = os.path.join(out, "00_video", os.path.splitext(f)[0])
-            run([script("pipeline/video_frames.py"), path, "--frames", args.frames, "--out", frames],
+            run([script("pipeline/sort_pictures.py"), path, "--frames", args.frames, "--out", frames],
                 os.path.join(frames, "log.txt"), os.path.join(frames, "frames"))
             for frame in sorted(os.listdir(os.path.join(frames, "frames"))):
                 if not os.path.lexists(os.path.join(inbox, frame)):
