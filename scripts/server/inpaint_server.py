@@ -42,7 +42,7 @@ import numpy as np
 
 from picture_from_prompt import make_picture, view_from_direction
 from inpaint import inpaint
-from run_job import freest_gpu
+from run_job import freest_gpu, variants
 
 PORT = int(os.environ.get("INPAINT_PORT", 8765))
 TOKEN_FILE = os.path.expanduser("~/.config/inpainting3d/server_token")
@@ -95,20 +95,20 @@ def run_package(pipeline, folder):
     seed, grow, steps = int(job.get("seed", 42)), int(job.get("grow", 2)), int(job.get("steps", generate.DEFAULT_STEPS))
     if not (0 <= grow <= 8 and 1 <= steps <= 100):
         raise ValueError("grow or steps out of range")
-    method = job.get("method", "repaint")
-    if method not in ("repaint", "inversion"):
-        raise ValueError(f"unknown method: {method}")
-    room = float(job.get("room", 0))
-    if not 0 <= room <= 0.5:
-        raise ValueError("room out of range")
+    # the job's version (its method, start, soft edge, colours only ...), checked as the uni server's run_job.py checks it.
+    # Until Nov 14 only the method and the room were read here: the add-on's settings (new noise in the area, soft edge
+    # 2, texture guidance 3, the Step menu) and the pictures of the other sides were left out on this PC.
+    version = variants(job)[0]
     extra = {k: os.path.join(folder, os.path.basename(job[k])) for k in ("source", "picture_mask") if job.get(k)}
-    for p in extra.values():
+    more_edits = [[os.path.join(folder, os.path.basename(name)) for name in side] for side in job.get("more_edits", [])]
+    for p in list(extra.values()) + [p for side in more_edits for p in side]:
         if not os.path.isfile(p):
             raise ValueError(f"the job has no {os.path.basename(p)}")
+    report(f"Version: {version}, {1 + len(more_edits)} side(s) of the change")
     out = os.path.join(folder, f"{os.path.basename(folder)}_seed{seed}.glb")
     return inpaint(pipeline, paths["model"], paths["picture"], np.load(paths["points"]), out,
-                   grow=grow, seed=seed, steps=steps, report=report, method=method, room=room,
-                   source_path=extra.get("source"), picture_mask_path=extra.get("picture_mask"))
+                   grow=grow, seed=seed, steps=steps, report=report, source_path=extra.get("source"),
+                   picture_mask_path=extra.get("picture_mask"), more_edits=more_edits, **version)
 
 
 LOCAL_JOBS = {"/inpaint": run_inpaint, "/picture": run_picture}
