@@ -6,7 +6,9 @@ selected one has an arrow on each side (drag it to move that side) and a dot on 
 to pull that corner anywhere, so a box can take any shape). "Find part in box" selects only one part
 inside the box (e.g. the helmet, by its name and/or a click on it) with a mask AI on this computer
 (scripts/inpainting/find_part.py, installed by install_mask.sh); Box = "Selected faces + empty space" then regenerates
-that part and the empty space in the box and keeps every other surface exactly. Optionally a prompt (and a reference picture)
+that part and the empty space in the box and keeps every other surface exactly. Every face has one of three colours or none:
+red goes completely, yellow may be changed by the AI, green is never touched; Q starts the brush that paints them (E yellow,
+R green, W erase, Shift + click the whole piece under the mouse, Ctrl + Z undo). Optionally a prompt (and a reference picture)
 says what should be there: the server then first paints it into a picture of the model, seen from the
 current view, and TRELLIS.2 builds that picture's change in 3D.
 
@@ -39,7 +41,7 @@ from mathutils import Matrix, Vector
 bl_info = {
     "name": "TRELLIS.2 Inpainting",
     "author": "Samy Hashem",
-    "version": (1, 18, 0),
+    "version": (1, 20, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Inpaint",
     "description": "Regenerate an area of a model with TRELLIS.2, optionally guided by a prompt",
@@ -63,7 +65,8 @@ local_server = {"process": None, "log": None}  # the inpaint server this add-on 
 draw_handler = None
 
 
-LOCAL_ADDRESS = "127.0.0.1:8765"
+LOCAL_PORT = 8766  # not the server's usual 8765: another program on this PC had that port (a subtitle tool, Nov 14)
+LOCAL_ADDRESS = f"127.0.0.1:{LOCAL_PORT}"
 
 
 def server():
@@ -93,8 +96,11 @@ def ask(path, data=None, timeout=1.0):
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as e:
-        return json.loads(e.read())
-    except OSError:
+        try:
+            return json.loads(e.read())
+        except ValueError:  # another program answers on this port, not the inpaint server
+            return None
+    except (OSError, ValueError):
         return None
 
 
@@ -245,22 +251,40 @@ def only_empty_space(model, points):
 
 def area_points(operator, context):
     """The model, the marked area (glTF coordinates), how many faces are selected, whether boxes count, and
-    the grow the job must use; or None after reporting what's missing."""
+    the grow the job must use; or None after reporting what's missing. Green faces are taken out of the area."""
+    area = marked_area(operator, context)
+    if area is None:
+        return None
+    model, points, count, boxes, grow = area
+    if (zones_of(model) == GREEN).any():
+        points, both = protect_green(model, points, grow, context.scene.inpaint.room)
+        if not len(points):
+            operator.report({"ERROR"}, "Everything marked is green (never touched): paint the part red (Q) first")
+            return None
+        if both:
+            operator.report({"WARNING"}, f"{both} small cube(s) hold red and green faces: green wins, they stay")
+        grow = 0  # grown here already, around the green
+    return model, points, count, boxes, grow
+
+
+def marked_area(operator, context):
+    """As area_points, before the green faces are taken out. Red and yellow are the selected faces."""
     model = target_model(context)
     if model is None:
         operator.report({"ERROR"}, "Click the model first")
         return None
     if context.mode != "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")  # also writes the Edit Mode selection into the mesh
+    zones_to_selection(model)
     settings = context.scene.inpaint
     faces, count = selected_points(model)
     boxes = np.zeros((0, 3)) if settings.box_use == "part" else box_points(model)
     if settings.box_use not in ("all", "space", "replace") and count == 0:
-        operator.report({"ERROR"}, "No faces selected: find the part first (or select faces), "
+        operator.report({"ERROR"}, "Nothing is red or yellow: find the part or paint it (Q), "
                                    "or set Box to 'Everything in the box'")
         return None
     if count == 0 and len(boxes) == 0:
-        operator.report({"ERROR"}, "Mark an area: select faces (Edit Mode) or add a space box")
+        operator.report({"ERROR"}, "Mark an area: paint the part red (Q) or add a space box")
         return None
     if settings.step != "shape" and settings.box_use in ("space", "replace"):  # the part is there now: the new part in the box gets its colours
         return model, to_gltf(boxes), count, True, 0
@@ -317,10 +341,13 @@ class InpaintSettings(bpy.types.PropertyGroup):
     prompt: bpy.props.StringProperty(name="Prompt", description="What the marked area should show, "
                                                                 "e.g. 'a stone statue of a kneeling woman'")
     reference: bpy.props.StringProperty(name="Reference", subtype="FILE_PATH",
-                                        description="A picture of the new part, as seen from this view")
+                                        description="A picture of the new part, as seen from this view, or a video of it "
+                                                    "turning once (its four sides are taken from the video). The "
+                                                    "background is cut away on this PC")
     sides: bpy.props.StringProperty(name="More sides", subtype="DIR_PATH",
                                     description="Optional: a folder with up to 3 pictures of the new part, in turning "
-                                                "order (right, back, left). All sides together give the best colours")
+                                                "order (right, back, left). All sides together give the best colours. "
+                                                "Not needed with a video as the Reference")
     step: bpy.props.EnumProperty(
         name="Step",
         items=[("shape", "1 Shape", "The new part grows in the marked area"),
@@ -368,6 +395,13 @@ class InpaintSettings(bpy.types.PropertyGroup):
                 "The selected faces and the empty space in the box are regenerated; every other surface in the "
                 "box stays exactly as it is (no colour bleeding onto it). For replacing a part with something new")],
         default="space")
+    improve: bpy.props.StringProperty(name="Make it better", description="How the picture of the change should be better, in "
+                                      "your words, e.g. 'make the head smaller and join it to the neck with a metal collar'. "
+                                      "The local picture AI reworks the AFTER pictures so")
+    piece_angle: bpy.props.FloatProperty(name="Piece ends at edges over", default=40.0, min=5.0, max=180.0,
+                                         description="Shift + click takes the whole piece under the mouse: it ends at edges "
+                                                     "sharper than this many degrees (smaller: smaller pieces; 180: only a "
+                                                     "green line or the box's wall ends it)")
     folder: bpy.props.StringProperty(name="Work folder", subtype="DIR_PATH",
                                      default=os.path.expanduser("~/inpainting-3D/outputs/blender"),
                                      description="Where the model, the area, the pictures and the results are saved")
@@ -434,20 +468,13 @@ def draw_boxes():
     the user clicked on for "Find part", as red dots."""
     settings = bpy.context.scene.inpaint
     boxes = [o for o in bpy.context.view_layer.objects if is_box(o) and o.visible_get()]
-    model = bpy.data.objects.get(finder["part_model"] or "")
-    part = model is not None and bpy.context.mode == "OBJECT" and model.visible_get() and len(finder["part"]) > 0
-    if not boxes and not settings.clicks and not part:
+    if not boxes and not settings.clicks and settings.model is None and painter["tool"] is None:
         return
     before = gpu.state.blend_get(), gpu.state.depth_test_get(), gpu.state.depth_mask_get()
     gpu.state.blend_set("ALPHA")
     gpu.state.depth_mask_set(False)
     fill = gpu.shader.from_builtin("UNIFORM_COLOR")
-    if part:  # the found part, red on the model
-        if finder["part_batch"] is None:
-            finder["part_batch"] = batch_for_shader(fill, "TRIS", {"pos": finder["part"]})
-        gpu.state.depth_test_set("LESS_EQUAL")
-        fill.uniform_float("color", (1.0, 0.15, 0.1, 0.6))
-        finder["part_batch"].draw(fill)
+    draw_zones(fill)  # red, yellow and green on the model
     edge = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
     edge.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
     edge.uniform_float("lineWidth", 2.0)
@@ -874,7 +901,7 @@ def follow_find():
             bpy.ops.object.mode_set(mode="OBJECT")
     found = vote(model, np.load(masks_file))
     bpy.context.scene.inpaint.box_use = "part_space"
-    finder["message"] = f"found {found:,} faces: red (Tab to fix them by hand)"
+    finder["message"] = f"found {found:,} faces: red (fix them with the brush: Q)"
     for o in bpy.context.view_layer.objects:  # the model active, so Tab opens it (not the box)
         o.select_set(False)
     model.select_set(True)
@@ -885,34 +912,18 @@ def follow_find():
 
 
 def show_part(model):
-    """Remembers the model's selected faces as red triangles, drawn by draw_boxes() in Object Mode (in Edit
-    Mode, a model with millions of faces is all black edges). Slightly lifted off the surface, so they
-    don't flicker with it."""
-    mesh = model.data
-    mesh.calc_loop_triangles()
-    selected = np.zeros(len(mesh.polygons), bool)
-    mesh.polygons.foreach_get("select", selected)
-    owner = np.zeros(len(mesh.loop_triangles), np.int32)
-    mesh.loop_triangles.foreach_get("polygon_index", owner)
-    corners = np.zeros(len(mesh.loop_triangles) * 3, np.int32)
-    mesh.loop_triangles.foreach_get("vertices", corners)
-    corners = corners.reshape(-1, 3)[selected[owner]]
-    co = np.zeros(len(mesh.vertices) * 3, np.float32)
-    mesh.vertices.foreach_get("co", co)
-    m = np.array(model.matrix_world, np.float32)
-    triangles = (co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3])[corners]  # (n, 3 corners, xyz)
-    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
-    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-12)
-    triangles += normals[:, None] * (2e-4 * max(model.dimensions))
-    finder.update(part_model=model.name, part=triangles.reshape(-1, 3), part_batch=None)
+    """The model's selected faces become red (drawn by draw_zones() in Object Mode: in Edit Mode, a model with
+    millions of faces is all black edges). Yellow and green stay as painted."""
+    selection_to_zones(model)
+    finder.update(part_model=model.name)
 
 
 @bpy.app.handlers.persistent
 def after_change(scene, depsgraph):
     """Back in Object Mode after fixing the found part by hand: show the new selection in red."""
-    model = bpy.data.objects.get(finder["part_model"] or "")
+    model = bpy.data.objects.get(finder["part_model"] or "") or scene.inpaint.model
     mode = bpy.context.mode
-    if model is not None and mode == "OBJECT" and finder["mode_before"] == "EDIT_MESH":
+    if model is not None and model.type == "MESH" and mode == "OBJECT" and finder["mode_before"] == "EDIT_MESH":
         show_part(model)
     finder["mode_before"] = mode
 
@@ -1019,7 +1030,7 @@ def write_image(pixels, path):
     image.colorspace_settings.name = "sRGB"
     image.pixels.foreach_set(pixels[::-1].astype(np.float32).ravel())
     image.filepath_raw = path
-    image.file_format = "PNG"
+    image.file_format = "JPEG" if path.lower().endswith((".jpg", ".jpeg")) else "PNG"
     image.save()
     bpy.data.images.remove(image)
 
@@ -1049,11 +1060,48 @@ def resized(pixels, width, height):
     return top * (1 - fy) + (pixels[y1][:, x0] * (1 - fx) + pixels[y1][:, x1] * fx) * fy
 
 
-def render_view(model, rotation, path, size=1024):
+WITHOUT = "Inpaint without red"
+
+
+def without_group():
+    """The Geometry Nodes graph that takes the red faces (the part that goes) off a model, for the picture of what is
+    behind and under it:   Named Attribute (inpaint_zone) == red -> Delete Geometry (faces)."""
+    if WITHOUT in bpy.data.node_groups:
+        return bpy.data.node_groups[WITHOUT]
+    tree = bpy.data.node_groups.new(WITHOUT, "GeometryNodeTree")
+    tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    tree.is_modifier = True
+    nodes, link = tree.nodes, tree.links.new
+    inp, out = nodes.new("NodeGroupInput"), nodes.new("NodeGroupOutput")
+    zone = nodes.new("GeometryNodeInputNamedAttribute")
+    zone.data_type = "INT"
+    zone.inputs["Name"].default_value = ZONE
+    red = nodes.new("FunctionNodeCompare")
+    red.data_type, red.operation = "INT", "EQUAL"
+    delete = nodes.new("GeometryNodeDeleteGeometry")
+    delete.domain = "FACE"
+    for node, x in ((inp, -600), (zone, -600), (red, -350), (delete, -100), (out, 150)):
+        node.location = (x, -200 if node in (zone, red) else 0)
+    whole = [s for s in red.inputs if s.enabled and s.type == "INT"]  # the node's two whole-number inputs
+    link(next(s for s in zone.outputs if s.enabled and s.type == "INT"), whole[0])
+    whole[1].default_value = RED
+    link(red.outputs["Result"], delete.inputs["Selection"])
+    link(inp.outputs["Geometry"], delete.inputs["Geometry"])
+    link(delete.outputs["Geometry"], out.inputs["Geometry"])
+    return tree
+
+
+def render_view(model, rotation, path, size=1024, without_red=False):
     """The model alone from the view's direction, without perspective, so every pixel is a known place.
-    Returns (centre, right, up, span) of the camera."""
+    Returns (centre, right, up, span) of the camera. without_red: the model without the part that goes (the camera
+    stays where it is for the whole model)."""
     scene = bpy.data.scenes.new("InpaintView")
-    scene.collection.objects.link(model)
+    shown = model
+    if without_red:  # a stand-in that shares the model's mesh, with the red faces taken off by Geometry Nodes
+        shown = model.copy()
+        shown.modifiers.new(WITHOUT, "NODES").node_group = without_group()
+    scene.collection.objects.link(shown)
     corners = [model.matrix_world @ Vector(c) for c in model.bound_box]
     center = sum(corners, Vector()) / 8
     span = max((a - b).length for a in corners for b in corners) * 1.3  # room for a new part
@@ -1087,24 +1135,81 @@ def render_view(model, rotation, path, size=1024):
     right, up = rotation @ Vector((1, 0, 0)), rotation @ Vector((0, 1, 0))
     for thing, where in ((camera.data, bpy.data.cameras), (sun.data, bpy.data.lights)):
         where.remove(thing)
-    scene.collection.objects.unlink(model)
+    scene.collection.objects.unlink(shown)
+    if shown is not model:
+        bpy.data.objects.remove(shown)
     bpy.data.scenes.remove(scene)
     bpy.data.worlds.remove(world)
     return center, right, up, span
 
 
+def nearest_faces(model, center, right, up, span, size, faces=None):
+    """For every pixel of a side's picture: the colour (0 none, red, yellow, green; -1 = no surface) and the depth (in the
+    scene's units, smaller = nearer the viewer) of the nearest face there. Per 2 x 2 pixels the nearest face centre
+    counts; small gaps between the centres are closed from their neighbours. faces: only these (a yes/no per face)."""
+    cache, zones = mesh_cache(model), zones_of(model)
+    use = np.arange(len(zones)) if faces is None else np.flatnonzero(faces)
+    away = cache["centers"][use] - np.array(center, np.float32)
+    right, up = np.array(right, np.float32), np.array(up, np.float32)
+    cell = 2
+    side = size // cell
+    x = ((away @ right / span + 0.5) * side).astype(np.int64)
+    y = ((0.5 - away @ up / span) * side).astype(np.int64)
+    depth = -(away @ np.cross(right, up))
+    inside = np.flatnonzero((x >= 0) & (x < side) & (y >= 0) & (y < side))
+    index = y[inside] * side + x[inside]
+    order = np.lexsort((depth[inside], index))  # per cell the nearest face first
+    first = order[np.flatnonzero(np.diff(index[order], prepend=-1))]
+    zone = np.full(side * side, -1, np.int8)
+    near = np.full(side * side, np.inf, np.float32)
+    zone[index[first]] = zones[use[inside[first]]]
+    near[index[first]] = depth[inside[first]]
+    zone, near = zone.reshape(side, side), near.reshape(side, side)
+    for _ in range(2):  # empty cells between face centres take the nearest of their neighbours
+        empty = zone < 0
+        padded_zone, padded_near = np.pad(zone, 1, constant_values=-1), np.pad(near, 1, constant_values=np.inf)
+        best_zone, best_near = zone.copy(), near.copy()
+        for dy in range(3):
+            for dx in range(3):
+                other_zone, other_near = padded_zone[dy:dy + side, dx:dx + side], padded_near[dy:dy + side, dx:dx + side]
+                better = empty & (other_near < best_near)
+                best_zone[better], best_near[better] = other_zone[better], other_near[better]
+        zone, near = best_zone, best_near
+    grow = lambda a: np.repeat(np.repeat(a, cell, 0), cell, 1)
+    return grow(zone), grow(near)
+
+
 def picture_of_side(model, rotation, points, part, stem):
-    """One side: BEFORE, AFTER and the 2D MASK of the whole model from this direction; the part is put into the
-    marked area. Writes <stem>_before.png, <stem>.png, <stem>_mask.png. Returns which of `points` the mask covers,
-    or the text of what went wrong."""
+    """One side: BEFORE, AFTER and the 2D MASK of the whole model from this direction. AFTER is the model without the
+    part that goes (the red faces: what is behind and under them shows), with the new part put into the marked area by
+    depth: the new part is taken as round (as wide front to back as it is from side to side, row by row), and surface
+    that stays and is nearer than it stays in front. So a neck goes into a collar instead of lying on it. The 2D mask
+    is everything that changed: where the old part showed and where the new one shows. Writes <stem>_before.png,
+    <stem>.png, <stem>_mask.png and <stem>_old.png (where the old part showed, for the judge). Returns which of
+    `points` the new part covers, or the text of what went wrong."""
     render = stem + "_render.png"
     center, right, up, span = render_view(model, rotation, render)
     view = read_image(render)
-    os.remove(render)
     size = view.shape[0]
-    alpha = view[..., 3:4]
     grey = np.array(GREY, np.float32)
-    before = view[..., :3] * alpha + grey * (1 - alpha)
+    before = view[..., :3] * view[..., 3:4] + grey * (1 - view[..., 3:4])
+    zones = zones_of(model)
+    goes = zones == RED
+    old = np.zeros((size, size), bool)
+    base, stays_depth = before, None
+    if goes.any():
+        old = (nearest_faces(model, center, right, up, span, size)[0] == RED) & (view[..., 3] > 0.5)
+        render_view(model, rotation, render, without_red=True)
+        rest = read_image(render)
+        base = rest[..., :3] * rest[..., 3:4] + grey * (1 - rest[..., 3:4])
+        stays_depth = nearest_faces(model, center, right, up, span, size, ~goes)[1]
+        stays_depth[rest[..., 3] < 0.5] = np.inf  # no surface there
+    os.remove(render)
+    if os.path.isfile(stem + "_old.png"):
+        os.remove(stem + "_old.png")
+    opaque = np.ones((size, size, 1), np.float32)
+    if old.any():
+        write_image(np.dstack([np.repeat(old[..., None], 3, 2).astype(np.float32), opaque]), stem + "_old.png")
     world = np.stack([points[:, 0], -points[:, 2], points[:, 1]], 1) - np.array(center)  # glTF back to Blender's axes
     xs = (world @ np.array(right) / span + 0.5) * size
     ys = (0.5 - world @ np.array(up) / span) * size
@@ -1115,28 +1220,88 @@ def picture_of_side(model, rotation, points, part, stem):
     if x < 0 or y < 0 or x + width > size or y + height > size:
         return "The marked area is outside the view"
     part = resized(part, width, height)
-    after, mask = before.copy(), np.zeros((size, size), bool)
-    share = part[..., 3:4]
+    share = part[..., 3:4].copy()
+    if stays_depth is not None:  # what stays and is nearer than the new part stays in front of it
+        solid = part[..., 3] > 0.5
+        columns = np.arange(width)[None]
+        first = np.where(solid.any(1), solid.argmax(1), 0)[:, None]
+        last = np.where(solid.any(1), width - 1 - solid[:, ::-1].argmax(1), 0)[:, None]
+        radius = (last - first + 1) / 2
+        bulge = np.sqrt(np.maximum(radius ** 2 - (columns - (first + last) / 2) ** 2, 0)) * span / size
+        middle = float(np.mean(-(world @ np.cross(np.array(right), np.array(up)))))  # the marked area's middle, front to back
+        share[stays_depth[y:y + height, x:x + width] < middle - bulge] = 0
+    after = base.copy()
     after[y:y + height, x:x + width] = part[..., :3] * share + after[y:y + height, x:x + width] * (1 - share)
-    mask[y:y + height, x:x + width] = part[..., 3] > 0.1
+    covers = np.zeros((size, size), bool)
+    covers[y:y + height, x:x + width] = share[..., 0] > 0.1
+    mask = covers | old
     for _ in range(4):  # a little wider, as an outline
         mask = mask | np.roll(mask, 1, 0) | np.roll(mask, -1, 0) | np.roll(mask, 1, 1) | np.roll(mask, -1, 1)
-    opaque = np.ones((size, size, 1), np.float32)
+        covers = covers | np.roll(covers, 1, 0) | np.roll(covers, -1, 0) | np.roll(covers, 1, 1) | np.roll(covers, -1, 1)
     write_image(np.dstack([before, opaque]), stem + "_before.png")
     write_image(np.dstack([after, opaque]), stem + ".png")
     write_image(np.dstack([np.repeat(mask[..., None], 3, 2).astype(np.float32), opaque]), stem + "_mask.png")
-    return mask[np.clip(ys.astype(int), 0, size - 1), np.clip(xs.astype(int), 0, size - 1)]
+    return covers[np.clip(ys.astype(int), 0, size - 1), np.clip(xs.astype(int), 0, size - 1)]
+
+
+def change_preview(stem, cell=512):
+    """The pictures of the change side by side, to check before regenerating: the top row before, the bottom row after,
+    a column per side (as seen now, then a quarter turn further each). Writes <stem>_preview.jpg, shown in the panel."""
+    stems = [stem] + [f"{stem}_side{k}" for k in range(1, 4) if os.path.isfile(f"{stem}_side{k}.png")]
+    sheet = np.ones((2 * cell, len(stems) * cell, 4), np.float32)
+    for column, one in enumerate(stems):
+        for row, end in enumerate(("_before.png", ".png")):
+            sheet[row * cell:(row + 1) * cell, column * cell:(column + 1) * cell] = resized(read_image(one + end), cell, cell)
+    sheet[..., 3] = 1
+    sheet[cell - 1:cell + 1] = (0.2, 0.2, 0.2, 1)  # a line between before and after
+    write_image(sheet, stem + "_preview.jpg")
+    return stem + "_preview.jpg"
 
 
 PICTURE_ENDS = (".png", ".jpg", ".jpeg", ".webp")
+VIDEO_ENDS = (".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")
 
 
-def picture_of_change(model, rotation, points, reference, stem, sides=""):
+def project_command(script, *arguments):
+    """The command that runs a script of scripts/inpainting with the project's own Python (outside Blender, also from a
+    Flatpak Blender); None without the project on this PC."""
+    project = project_folder()
+    path = os.path.join(project, "scripts", "inpainting", script)
+    if not os.path.isfile(path) or not os.path.isfile(os.path.join(project, "activate.sh")):
+        return None
+    command = ["bash", "-c", 'source activate.sh >/dev/null && exec python -u "$@"', "project", path, *map(str, arguments)]
+    if os.path.exists("/.flatpak-info"):  # Blender as a Flatpak: the project's Python is outside its sandbox
+        command = ["flatpak-spawn", "--host", f"--directory={project}"] + command
+    return command
+
+
+def part_pictures(reference, sides, folder):
+    """The new part's pictures cut out on transparent by the project's background AI (scripts/inpainting/picture_check.py parts,
+    outside Blender): a video gives its four sides, a picture with a background loses it. Returns (the pictures, "")
+    or (None, why not): without the project on this PC the pictures are taken as they are."""
+    project = project_folder()
+    command = project_command("picture_check.py", "parts", reference, "--out", folder, *(["--sides", sides] if sides else []))
+    if command is None:
+        return None, "no project folder on this PC (add-on preferences)"
+    try:
+        done = subprocess.run(command, cwd=project, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, str(e)
+    record = os.path.join(folder, "part.json")
+    if done.returncode != 0 or not os.path.isfile(record):
+        return None, (done.stdout + done.stderr).strip().splitlines()[-1][:200] if (done.stdout + done.stderr).strip() else "it gave nothing"
+    with open(record) as f:
+        return json.load(f)["pictures"], ""
+
+
+def picture_of_change(model, rotation, points, reference, stem, sides="", pictures=None):
     """The change from this view and, with a folder of `sides`, from the sides a quarter turn further each (as the crown
-    on the simple robot: every side its own before, after and mask). The sides are <stem>_side1.png and so on."""
-    pictures = [reference]
-    if sides:
-        pictures += [os.path.join(sides, n) for n in sorted(os.listdir(sides)) if n.lower().endswith(PICTURE_ENDS)][:3]
+    on the simple robot: every side its own before, after and mask). The sides are <stem>_side1.png and so on.
+    pictures = the part's sides ready cut out (part_pictures), instead of the reference and the folder as they are."""
+    if pictures is None:
+        pictures = [reference]
+        if sides:
+            pictures += [os.path.join(sides, n) for n in sorted(os.listdir(sides)) if n.lower().endswith(PICTURE_ENDS)][:3]
     for k in range(1, 4):  # nothing left of an earlier picture with more sides
         for end in (".png", "_before.png", "_mask.png"):
             if os.path.isfile(f"{stem}_side{k}{end}"):
@@ -1159,7 +1324,8 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
     bl_idname = "inpaint.make_picture"
     bl_label = "1. Make picture"
     bl_description = ("Picture the whole model from the current view, with the Reference put into the marked area: "
-                      "the picture before, after and the 2D mask (no AI, on every PC). Without a Reference: "
+                      "the picture before, after and the 2D mask. The Reference is a picture or a video of the part "
+                      "turning once; its background is cut away first (this PC's project folder). Without a Reference: "
                       "the prompt is painted in by Qwen-Image-Edit in ComfyUI (only on This PC)")
 
     @classmethod
@@ -1185,13 +1351,23 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
                 self.report({"ERROR"}, "The folder of More sides doesn't exist")
                 return {"CANCELLED"}
             whole_box = to_gltf(box_points(model))  # also the old surface in it: the part may cover it
+            context.window.cursor_set("WAIT")
+            pictures, why = part_pictures(reference, sides, stem + "_part")  # cut out, a video's four sides
+            context.window.cursor_set("DEFAULT")
+            if pictures is None and reference.lower().endswith(VIDEO_ENDS):
+                self.report({"ERROR"}, f"The video's sides couldn't be taken: {why}")
+                return {"CANCELLED"}
             problem = picture_of_change(model, context.space_data.region_3d.view_rotation.copy(),
-                                        whole_box if len(whole_box) else points, reference, stem, sides)
+                                        whole_box if len(whole_box) else points, reference, stem, sides, pictures)
             if problem:
                 self.report({"ERROR"}, problem)
                 return {"CANCELLED"}
-            settings.picture = stem + ".png"
-            self.report({"INFO"}, "Picture ready (before, after, 2D mask). Press 2. Regenerate area")
+            preview = change_preview(stem)
+            show_picture(stem + ".png")  # it is the Picture now, its before / after sheet shows in the panel
+            open_image_window(preview)  # and big in its own window: top row before, bottom row after
+            self.report({"INFO"} if pictures else {"WARNING"},
+                        f"Picture ready (before, after, 2D mask) from {len(pictures)} side(s) of the part. Press 2. Regenerate area"
+                        if pictures else f"Picture ready, but the part's pictures were taken as they are ({why})")
             return {"FINISHED"}
         if not is_local():  # the picture AI (ComfyUI) runs only on this PC
             self.report({"ERROR"}, "Uni server: choose a Reference picture of the new part")
@@ -1216,6 +1392,223 @@ class INPAINT_OT_make_picture(bpy.types.Operator):
                                         "direction": to_gltf(direction)[0].tolist(), "prompt": settings.prompt,
                                         "reference": reference or None, "seed": settings.seed},
                      {"kind": "picture"})
+
+
+# ---------------------------------------------------------------- the picture judged and made better, before regenerating
+# scripts/inpainting/picture_check.py (outside Blender): "judge" measures every side's pictures and asks the local vision
+# AI, "improve" lets the local picture AI rework the AFTER pictures as the user's words say, "restore" brings the first
+# pictures back. One of them at a time, in the background; the panel shows its last line.
+
+checker = {"process": None, "kind": None, "stem": None, "message": "", "log": None, "read": None}
+
+
+def picture_stem(context):
+    """The Picture's path without .png, when it is a picture of a change (it has its BEFORE and 2D mask); else None."""
+    path = bpy.path.abspath(context.scene.inpaint.picture) if context.scene.inpaint.picture else ""
+    stem = os.path.splitext(path)[0]
+    return stem if path.lower().endswith(".png") and all(os.path.isfile(stem + end) for end in (".png", "_before.png", "_mask.png")) else None
+
+
+def judgement(stem):
+    """What the judge wrote about this picture (read again when its file changed); None before the first judging."""
+    path = stem + "_judge.json"
+    if not os.path.isfile(path):
+        return None
+    changed = os.path.getmtime(path)
+    if checker["read"] is None or checker["read"][:2] != (path, changed):
+        try:
+            with open(path) as f:
+                checker["read"] = (path, changed, json.load(f))
+        except ValueError:  # being written this moment
+            return checker["read"][2] if checker["read"] and checker["read"][0] == path else None
+    return checker["read"][2]
+
+
+def start_check(operator, kind, stem, *arguments):
+    command = project_command("picture_check.py", kind, stem, *arguments)
+    if command is None:
+        operator.report({"ERROR"}, "This needs the project on this PC: set the Project folder in the add-on preferences")
+        return {"CANCELLED"}
+    log = stem + f"_{kind}.log"
+    with open(log, "w") as f:
+        process = subprocess.Popen(command, cwd=project_folder(), stdout=f, stderr=subprocess.STDOUT)
+    starting = {"judge": "judging: measuring the pictures...", "improve": "the picture AI starts (first time about a minute)...",
+                "enhance": "enhancing: judging first...",
+                "restore": "bringing the first pictures back..."}[kind]
+    checker.update(process=process, kind=kind, stem=stem, log=log, message=starting)
+    bpy.app.timers.register(follow_check, first_interval=1.0)
+    return {"FINISHED"}
+
+
+def follow_check():
+    """Timer: the last line of the script's log as the message; when it is done, the new pictures are shown."""
+    process, kind, stem = checker["process"], checker["kind"], checker["stem"]
+    try:
+        with open(checker["log"], errors="replace") as f:
+            lines = [line.strip() for line in f.read().replace("\r", "\n").splitlines() if line.strip()]
+    except OSError:
+        lines = []
+    if process.poll() is None:
+        if lines:
+            checker["message"] = f"{kind}: {lines[-1][:90]}"
+        redraw()
+        return 1.0
+    checker["process"] = None
+    if process.returncode != 0:
+        checker["message"] = f"{kind} failed: {lines[-1][:140] if lines else 'no answer'}"
+    elif kind == "judge":
+        checker["message"] = "judged: see below"
+    else:
+        change_preview(stem)
+        show_picture(stem + ".png")
+        checker["message"] = {"improve": "the pictures are reworked: look, judge again, or go back",
+                              "enhance": f"enhanced: {lines[-1][lines[-1].rfind('(') + 1:].rstrip(')') if lines else ''}",
+                              "restore": "the first pictures are back"}[kind]
+    redraw()
+    return None
+
+
+class INPAINT_OT_judge_picture(bpy.types.Operator):
+    bl_idname = "inpaint.judge_picture"
+    bl_label = "Judge the picture"
+    bl_description = ("Before regenerating: measure the pictures of the change (is the old part covered, does the new part "
+                      "lie on things that stay, does it float, how big is it) and let the local vision AI look at them. "
+                      "Says what is wrong and what to do about it")
+
+    @classmethod
+    def poll(cls, context):
+        return checker["process"] is None and picture_stem(context) is not None
+
+    def execute(self, context):
+        settings = context.scene.inpaint
+        busy = status["job"] is not None or remote["job"] is not None  # the GPU is taken: only what is measured
+        return start_check(self, "judge", picture_stem(context), "--what", settings.prompt.strip() or "a new part",
+                           *(["--no-ai"] if busy else []))
+
+
+class INPAINT_OT_improve_picture(bpy.types.Operator):
+    bl_idname = "inpaint.improve_picture"
+    bl_label = "Improve the picture (AI)"
+    bl_description = ("The local picture AI (Qwen-Image-Edit) reworks the AFTER picture of every side as your words say; "
+                      "outside the change the picture stays exactly. 'Back to the first picture' undoes it")
+
+    @classmethod
+    def poll(cls, context):
+        return (checker["process"] is None and picture_stem(context) is not None and status["job"] is None
+                and remote["job"] is None and bool(context.scene.inpaint.improve.strip()))
+
+    def execute(self, context):
+        settings = context.scene.inpaint
+        return start_check(self, "improve", picture_stem(context), "--prompt", settings.improve.strip(), "--seed", settings.seed)
+
+
+class INPAINT_OT_enhance_picture(bpy.types.Operator):
+    bl_idname = "inpaint.enhance_picture"
+    bl_label = "Enhance by itself (AI)"
+    bl_description = ("The local AIs work on the picture by themselves: judge it, rework it with the judge's own sentence "
+                      "(and your words in 'Make it better', if any), judge again. A round stays only if the picture got "
+                      "better; at most two rounds, a few minutes each. 'Back to the first picture' undoes it")
+
+    @classmethod
+    def poll(cls, context):
+        return (checker["process"] is None and picture_stem(context) is not None and status["job"] is None
+                and remote["job"] is None)
+
+    def execute(self, context):
+        settings = context.scene.inpaint
+        return start_check(self, "enhance", picture_stem(context), "--what", settings.prompt.strip() or "a new part",
+                           "--seed", settings.seed, *(["--prompt", settings.improve.strip()] if settings.improve.strip() else []))
+
+
+class INPAINT_OT_restore_picture(bpy.types.Operator):
+    bl_idname = "inpaint.restore_picture"
+    bl_label = "Back to the first picture"
+    bl_description = "Bring back the pictures as 1. Make picture made them, before the picture AI reworked them"
+
+    @classmethod
+    def poll(cls, context):
+        stem = picture_stem(context)
+        return checker["process"] is None and stem is not None and os.path.isfile(stem + "_first.png")
+
+    def execute(self, context):
+        return start_check(self, "restore", picture_stem(context))
+
+
+class INPAINT_OT_use_idea(bpy.types.Operator):
+    bl_idname = "inpaint.use_idea"
+    bl_label = "Use the AI's idea"
+    bl_description = "Put the local AI's own sentence for a better picture into 'Make it better' (change it as you like)"
+
+    @classmethod
+    def poll(cls, context):
+        stem = picture_stem(context)
+        found = judgement(stem) if stem else None
+        return bool(found and found.get("ai") and found["ai"].get("prompt"))
+
+    def execute(self, context):
+        context.scene.inpaint.improve = judgement(picture_stem(context))["ai"]["prompt"]
+        return {"FINISHED"}
+
+
+def draw_judgement(box, context):
+    """Section B's lower half: the picture, its judge and the words that make it better."""
+    settings = context.scene.inpaint
+    stem = picture_stem(context)
+    if stem is None:
+        return
+    preview = bpy.data.images.get(os.path.basename(stem) + "_preview.jpg")
+    if preview is not None and preview.preview is not None:
+        box.label(text="Top: before.  Bottom: after.", icon="IMAGE_DATA")
+        box.template_icon(icon_value=preview.preview.icon_id, scale=10)
+        big(box, 1.3).operator(INPAINT_OT_show_picture.bl_idname, text="Show the picture big", icon="WINDOW")
+    check = box.box()
+    check.label(text="Is the picture good? Ask before regenerating", icon="VIEWZOOM")
+    big(check).operator(INPAINT_OT_judge_picture.bl_idname, icon="VIEWZOOM")
+    if checker["message"]:
+        row = check.row()
+        row.alert = "failed" in checker["message"]
+        row.label(text=checker["message"], icon="ERROR" if row.alert else "INFO")
+    found = judgement(stem)
+    if found is not None:
+        ai = found.get("ai")
+        row = check.row()
+        row.scale_y = 1.3
+        row.label(text=f"Measured: {found['score_measured']} / 10" + (f"      Local AI: {ai['score']} / 10" if ai else ""),
+                  icon="CHECKMARK" if found["score_measured"] >= 8 and (not ai or ai["score"] >= 7) else "ERROR")
+        if not found["findings"]:
+            check.label(text="Nothing wrong was measured", icon="CHECKMARK")
+        for finding in found["findings"]:
+            lines = check.column(align=True)
+            lines.alert = finding["bad"] >= 2
+            for k, line in enumerate(wrapped(finding["what"], context)):
+                lines.label(text=line, icon="ERROR" if k == 0 else "BLANK1")
+            lines = check.column(align=True)
+            for k, line in enumerate(wrapped(finding["do"], context)):
+                lines.label(text=line, icon="FORWARD" if k == 0 else "BLANK1")
+        if ai:
+            check.label(text="The local AI says:", icon="INFO")
+            for key, icon in (("good", "CHECKMARK"), ("problems", "ERROR"), ("better", "FORWARD")):
+                for text in ai.get(key, []):
+                    lines = check.column(align=True)
+                    for k, line in enumerate(wrapped(text, context)):
+                        lines.label(text=line, icon=icon if k == 0 else "BLANK1")
+        for one in found.get("rounds") or []:
+            check.label(text=f"Round {one['round']}: {one['before']} to {one['after']} of 20, " + ("kept" if one["kept"] else "taken back"),
+                        icon="CHECKMARK" if one["kept"] else "LOOP_BACK")
+        if ai:
+            pass
+        elif found.get("ai_error"):
+            for k, line in enumerate(wrapped("The local AI didn't answer (is Ollama running, is the GPU free?): only what was measured", context)):
+                check.label(text=line, icon="INFO" if k == 0 else "BLANK1")
+    better = box.box()
+    better.label(text="Make it better: say how", icon="BRUSH_DATA")
+    better.prop(settings, "improve", text="")
+    better.operator(INPAINT_OT_use_idea.bl_idname, icon="FORWARD")
+    big(better).operator(INPAINT_OT_improve_picture.bl_idname, icon="BRUSH_DATA")
+    big(better).operator(INPAINT_OT_enhance_picture.bl_idname, icon="SHADERFX")
+    if status["job"] is not None or remote["job"] is not None:
+        better.label(text="Waits until the regenerating is done", icon="INFO")
+    better.operator(INPAINT_OT_restore_picture.bl_idname, icon="LOOP_BACK")
 
 
 class INPAINT_OT_regenerate(bpy.types.Operator):
@@ -2030,7 +2423,7 @@ class INPAINT_OT_start_local(bpy.types.Operator):
         log = os.path.join(project, "outputs", "local_server.log")
         os.makedirs(os.path.dirname(log), exist_ok=True)
         local_server["log"] = log
-        command = ["bash", "-c", "source activate.sh && exec python -u scripts/server/inpaint_server.py"]
+        command = ["bash", "-c", f"source activate.sh && INPAINT_PORT={LOCAL_PORT} exec python -u scripts/server/inpaint_server.py"]
         if os.path.exists("/.flatpak-info"):  # Blender as a Flatpak: its sandbox can't see the NVIDIA GPU
             command = ["flatpak-spawn", "--host", f"--directory={project}"] + command
         with open(log, "w") as f:
@@ -2046,7 +2439,7 @@ def follow_local_start():
     if not local_running():
         with open(local_server["log"]) as f:
             text = f.read()
-        status["server"] = ("Blender may not start it (Flatpak): see docs/how-to-this-pc.md"
+        status["server"] = ("Blender may not start it (Flatpak): see docs/HOW-TO.md"
                             if "org.freedesktop.Flatpak" in text or "Portal" in text else
                             f"didn't start: see {local_server['log']}")
     elif ask("/status") is not None:
@@ -2186,6 +2579,628 @@ class INPAINT_OT_check(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# ---------------------------------------------------------------- the three colours (what may happen to every face)
+# Every face of the model has one of three colours, or none. They are kept in the mesh (a number per face), so they are
+# saved with the .blend file and Blender's own undo knows them.
+#   red     goes completely: regenerated from nothing (the old head)
+#   yellow  may be changed, removed or kept: the AI decides (the neck under it)
+#   green   GREEN     is never touched: its small cubes are taken out of the area, whatever else is in them
+# Red and yellow are the "selected faces" of the Box menu. The paint tool (Q) paints them with a brush.
+
+ZONE = "inpaint_zone"  # the mesh attribute: a whole number per face
+NO_COLOUR, RED, YELLOW, GREEN = 0, 1, 2, 3
+
+def colour_icon(number):
+    """Blender's small colour square (1 red, 3 yellow, 4 green); its name changed between versions."""
+    icons = bpy.types.UILayout.bl_rna.functions["label"].parameters["icon"].enum_items.keys()
+    return next((name for name in (f"STRIP_COLOR_0{number}", f"SEQUENCE_COLOR_0{number}") if name in icons), "DOT")
+
+
+ZONES = {  # name, colour word, colour, key, icon, what happens to it
+    RED: ("Replace", "red", (1.0, 0.13, 0.1), "Q", colour_icon(1), "goes completely, made new"),
+    YELLOW: ("Maybe", "yellow", (1.0, 0.82, 0.1), "E", colour_icon(3), "the AI may change, remove or keep it"),
+    GREEN: ("Keep", "green", (0.2, 0.85, 0.3), "R", colour_icon(4), "never touched"),
+}
+ERASER = ("Erase", "no colour", (0.85, 0.85, 0.85), "W", "X", "takes the colour off")
+painter = {"cache": None, "batches": None, "counts": None, "show": True, "tool": None, "undo": [], "redo": []}
+UNDO_STEPS = 40
+
+
+def zones_of(model):
+    """The colour of every face (0 = none). Only in Object Mode: in Edit Mode the mesh's own data is empty."""
+    mesh = model.data
+    values = np.zeros(len(mesh.polygons), np.int32)
+    attribute = mesh.attributes.get(ZONE)
+    if attribute is not None and len(attribute.data) == len(values):
+        attribute.data.foreach_get("value", values)
+    return values
+
+
+def set_zones(model, values):
+    mesh = model.data
+    attribute = mesh.attributes.get(ZONE)
+    if attribute is None or attribute.domain != "FACE" or attribute.data_type != "INT":
+        if attribute is not None:
+            mesh.attributes.remove(attribute)
+        attribute = mesh.attributes.new(ZONE, "INT", "FACE")
+    if len(attribute.data) != len(values):
+        return False  # Edit Mode: nothing can be written
+    attribute.data.foreach_set("value", np.ascontiguousarray(values, np.int32))
+    forget_colours()
+    return True
+
+
+def forget_colours(*_):
+    """The colours changed (painted, undone, another file): what is drawn and counted is made again."""
+    painter["batches"] = painter["counts"] = None
+    redraw()
+
+
+def zone_counts(model):
+    """How many faces have each colour, counted once per change (the panel asks at every redraw)."""
+    if model is None or model.type != "MESH" or bpy.context.mode != "OBJECT":
+        return painter["counts"] or (model.name if model else "", [0, 0, 0, 0])
+    if painter["counts"] is None or painter["counts"][0] != model.name:
+        painter["counts"] = (model.name, np.bincount(np.clip(zones_of(model), 0, 3), minlength=4).tolist())
+    return painter["counts"]
+
+
+def mesh_cache(model):
+    """The model's triangles, face centres and face normals in world space, read once per model and place."""
+    mesh = model.data
+    key = (model.name, len(mesh.polygons), len(mesh.vertices), tuple(round(v, 6) for row in model.matrix_world for v in row))
+    if painter["cache"] is not None and painter["cache"]["key"] == key:
+        return painter["cache"]
+    mesh.calc_loop_triangles()
+    m = np.array(model.matrix_world, np.float32)
+    co = np.zeros(len(mesh.vertices) * 3, np.float32)
+    mesh.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+    owner = np.zeros(len(mesh.loop_triangles), np.int32)
+    mesh.loop_triangles.foreach_get("polygon_index", owner)
+    corners = np.zeros(len(mesh.loop_triangles) * 3, np.int32)
+    mesh.loop_triangles.foreach_get("vertices", corners)
+    corners = corners.reshape(-1, 3)
+    centers = np.zeros(len(mesh.polygons) * 3, np.float32)
+    mesh.polygons.foreach_get("center", centers)
+    centers = centers.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+    normals = np.zeros(len(mesh.polygons) * 3, np.float32)
+    mesh.polygons.foreach_get("normal", normals)
+    normals = normals.reshape(-1, 3) @ np.linalg.inv(m[:3, :3])  # as normals turn: with the inverse, transposed
+    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-12)
+    painter["cache"] = {"key": key, "co": co, "owner": owner, "corners": corners, "centers": centers, "normals": normals,
+                        "size": float(np.ptp(co, 0).max()) if len(co) else 1.0, "next": None, "view": None}
+    painter["batches"] = None
+    return painter["cache"]
+
+
+def draw_zones(fill):
+    """The three colours on the model, see-through, a little lifted off the surface so they don't flicker with it."""
+    tool = painter["tool"]
+    model = bpy.data.objects.get(tool["model"]) if tool else bpy.context.scene.inpaint.model
+    if (not painter["show"] or model is None or model.type != "MESH" or bpy.context.mode != "OBJECT"
+            or bpy.context.view_layer.objects.get(model.name) is not model or not model.visible_get()):
+        return
+    if painter["batches"] is None or painter["batches"][0] != model.name:
+        zones = zones_of(model)
+        batches = {}
+        if zones.any():
+            cache = mesh_cache(model)
+            of_triangle = zones[cache["owner"]]
+            for zone in ZONES:
+                corners = cache["corners"][of_triangle == zone]
+                if len(corners):
+                    triangles = cache["co"][corners]
+                    lift = cache["normals"][cache["owner"][of_triangle == zone]] * (2e-4 * cache["size"])
+                    batches[zone] = batch_for_shader(fill, "TRIS", {"pos": (triangles + lift[:, None]).reshape(-1, 3)})
+        painter["batches"] = (model.name, batches)
+    gpu.state.depth_test_set("LESS_EQUAL")
+    for zone, batch in painter["batches"][1].items():
+        fill.uniform_float("color", (*ZONES[zone][2], 0.55))
+        batch.draw(fill)
+
+
+def selection_to_zones(model):
+    """After Find part, or after selecting by hand in Edit Mode: the selected faces without a colour become red, and red
+    faces that are no longer selected lose it. Yellow and green stay as painted."""
+    mesh = model.data
+    selected = np.zeros(len(mesh.polygons), bool)
+    mesh.polygons.foreach_get("select", selected)
+    if selected.all():  # everything selected (as after an import) means nothing was chosen
+        return
+    zones = zones_of(model)
+    new = zones.copy()
+    new[selected & (zones == NO_COLOUR)] = RED
+    new[~selected & (zones == RED)] = NO_COLOUR
+    if (new != zones).any():
+        set_zones(model, new)
+
+
+def zones_to_selection(model):
+    """Red and yellow are the model's selected faces (what the Box menu calls so), if any colour is painted."""
+    zones = zones_of(model)
+    if zones.any():
+        select_faces(model, (zones == RED) | (zones == YELLOW))
+    return zones
+
+
+def protect_green(model, points, grow, room):
+    """The area as the centres of its small cubes (glTF coordinates, to send with grow 0), without the cubes that hold
+    green faces: green is never regenerated, also not by growing the area or by red in the same cube. Returns the
+    centres and how many cubes held both red and green (they stay)."""
+    mesh = model.data
+    m = np.array(model.matrix_world)
+    co = np.zeros(len(mesh.vertices) * 3, np.float32)
+    mesh.vertices.foreach_get("co", co)
+    vertices = to_gltf(co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3])
+    low, high = vertices.min(0), vertices.max(0)
+    centre, scale = (low + high) / 2, 0.99999 * (1 - room) / (high - low).max()  # as keep_the_rest and inpaint.py
+    lift = np.array([0, -room / 2, 0])
+    cubes = lambda p: np.clip((((p - centre) * scale + lift + 0.5) * GRID).astype(int), 0, GRID - 1)
+    mask = np.zeros((GRID,) * 3, bool)
+    mask[tuple(cubes(np.asarray(points, np.float64).reshape(-1, 3)).T)] = True
+    for _ in range(grow):
+        padded = np.pad(mask, 1)
+        mask = np.any([padded[x:x + GRID, y:y + GRID, z:z + GRID] for x in range(3) for y in range(3) for z in range(3)], 0)
+    zones = zones_of(model)
+    centers = to_gltf(mesh_cache(model)["centers"])
+    green, red = np.zeros_like(mask), np.zeros_like(mask)
+    green[tuple(cubes(centers[zones == GREEN]).T)] = True
+    red[tuple(cubes(centers[zones == RED]).T)] = True
+    mask &= ~green
+    return ((np.argwhere(mask) + 0.5) / GRID - 0.5 - lift) / scale + centre, int((green & red).sum())
+
+
+# ---------------------------------------------------------------- the paint tool
+
+def faces_on_screen(cache, region, rv3d):
+    """Where every face's centre is in the 3D view (pixels) and which faces can be seen: not hidden behind others (the
+    nearest surface per 6 x 6 pixels counts, with a little depth to spare). Made again when the view has turned."""
+    stamp = (region.width, region.height, tuple(round(v, 5) for row in rv3d.perspective_matrix for v in row))
+    if cache["view"] is not None and cache["view"]["stamp"] == stamp:
+        return cache["view"]
+    centers = cache["centers"]
+    p = np.array(rv3d.perspective_matrix, np.float32)
+    w = centers @ p[3, :3] + p[3, 3]
+    w = np.where(np.abs(w) < 1e-9, 1e-9, w)
+    x = ((centers @ p[0, :3] + p[0, 3]) / w * 0.5 + 0.5) * region.width
+    y = ((centers @ p[1, :3] + p[1, 3]) / w * 0.5 + 0.5) * region.height
+    v = np.array(rv3d.view_matrix, np.float32)
+    depth = -(centers @ v[2, :3] + v[2, 3])  # distance in front of the viewer, in the scene's units
+    cell = 6
+    columns, rows = region.width // cell + 1, region.height // cell + 1
+    inside = (x >= 0) & (x < region.width) & (y >= 0) & (y < region.height) & (w > 0)
+    index = (y[inside] // cell).astype(np.int64) * columns + (x[inside] // cell).astype(np.int64)
+    nearest = np.full(columns * rows, np.inf, np.float32)
+    order = np.argsort(index, kind="stable")
+    starts = np.flatnonzero(np.diff(index[order], prepend=-1))
+    if len(order):
+        nearest[index[order][starts]] = np.minimum.reduceat(depth[inside][order], starts)
+    seen = np.zeros(len(centers), bool)
+    seen[inside] = depth[inside] <= nearest[index] + 0.012 * cache["size"]
+    cache["view"] = {"stamp": stamp, "x": x, "y": y, "seen": seen}
+    return cache["view"]
+
+
+def faces_next_to(model, cache):
+    """For every face up to four faces that share an edge with it (-1 = none), and the angle between them as the cosine.
+    An edge is shared when its two ends are at the same places: a generated model's mesh is cut into thousands of
+    small patches (one per piece of its texture), which share no edge in the mesh itself."""
+    if cache["next"] is not None:
+        return cache["next"]
+    mesh = model.data
+    count = len(mesh.polygons)
+    totals = np.zeros(count, np.int32)
+    mesh.polygons.foreach_get("loop_total", totals)
+    starts = np.zeros(count, np.int32)
+    mesh.polygons.foreach_get("loop_start", starts)
+    corner = np.zeros(len(mesh.loops), np.int32)
+    mesh.loops.foreach_get("vertex_index", corner)
+    co = cache["co"].astype(np.float64)
+    steps = np.round((co - co.min(0)) / max(cache["size"], 1e-12) * (2 ** 20 - 1)).astype(np.int64)  # a millionth of the model
+    place = np.unique(steps[:, 0] << 40 | steps[:, 1] << 20 | steps[:, 2], return_inverse=True)[1].astype(np.int64)
+    face = np.repeat(np.arange(count, dtype=np.int32), totals)
+    after = np.arange(len(corner)) + 1  # the next corner of the same face
+    last = starts + totals - 1
+    after[last] = starts
+    a, b = place[corner], place[corner[after]]
+    edges = np.minimum(a, b) << 32 | np.maximum(a, b)
+    order = np.argsort(edges, kind="stable")
+    edges, face = edges[order], face[order]
+    same = np.flatnonzero(edges[1:] == edges[:-1])
+    a, b = face[same], face[same + 1]
+    source, target = np.concatenate([a, b]), np.concatenate([b, a])
+    order = np.argsort(source, kind="stable")
+    source, target = source[order], target[order]
+    place = np.arange(len(source)) - np.searchsorted(source, source)  # the how-manieth neighbour of its face
+    table = np.full((count, 4), -1, np.int32)
+    fits = place < 4
+    table[source[fits], place[fits]] = target[fits]
+    cosine = np.ones((count, 4), np.float32)
+    has = table >= 0
+    cosine[has] = np.einsum("ij,ij->i", np.repeat(cache["normals"], 4, 0).reshape(count, 4, 3)[has], cache["normals"][table[has]])
+    cache["next"] = (table, cosine)
+    return cache["next"]
+
+
+def whole_piece(model, cache, seed, zones, angle):
+    """The piece of surface around one face: everything reached from it without crossing an edge sharper than `angle`
+    (degrees), a green face (a green line is a fence), or the wall of a space box the face is in."""
+    table, cosine = faces_next_to(model, cache)
+    allowed = zones != GREEN if zones[seed] != GREEN else np.ones(len(zones), bool)
+    boxes = [np.array([tuple(c) for c in box_corners(o)]) for o in bpy.context.view_layer.objects if is_box(o) and o.visible_get()]
+    around = [c for c in boxes if inside_box(cache["centers"][seed:seed + 1], c)[0]]
+    if around:
+        within = np.zeros(len(zones), bool)
+        for corners in around:
+            within |= inside_box(cache["centers"], corners)
+        allowed &= within
+    limit = float(np.cos(np.radians(angle)))
+    reached = np.zeros(len(zones), bool)
+    reached[seed] = True
+    front = np.array([seed])
+    while len(front):
+        near, smooth = table[front].ravel(), cosine[front].ravel() >= limit
+        near = near[smooth & (near >= 0)]
+        near = np.unique(near[allowed[near] & ~reached[near]])
+        reached[near] = True
+        front = near
+    return reached
+
+
+def view_under(context, event):
+    """The 3D view's main region under the mouse and the mouse's place in it; None over the sidebar, a header or
+    another editor."""
+    for area in context.window.screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        over = lambda r: r.x <= event.mouse_x < r.x + r.width and r.y <= event.mouse_y < r.y + r.height
+        if any(over(r) for r in area.regions if r.type != "WINDOW" and r.width > 1 and r.height > 1):
+            return None
+        for region in area.regions:
+            if region.type == "WINDOW" and over(region):
+                return region, area.spaces.active.region_3d, (event.mouse_x - region.x, event.mouse_y - region.y)
+    return None
+
+
+def draw_brush():
+    """The brush as a circle in its colour at the mouse, and the keys at the top of the view (drawn in pixels)."""
+    import blf
+    tool = painter["tool"]
+    if tool is None or bpy.context.region.as_pointer() != tool.get("region"):
+        return
+    name, word, colour, key = (ZONES.get(tool["zone"]) or ERASER)[:4]
+    gpu.state.blend_set("ALPHA")
+    line = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
+    line.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
+    turn = np.linspace(0, 2 * np.pi, 49)
+    x, y = tool["mouse"]
+    circle = [(x + tool["radius"] * np.cos(t), y + tool["radius"] * np.sin(t), 0) for t in turn]
+    for width, tint in ((4.0, (0, 0, 0, 0.55)), (2.0, (*colour, 1.0))):  # a dark rim, so it shows on every colour
+        line.uniform_float("lineWidth", width)
+        line.uniform_float("color", tint)
+        batch_for_shader(line, "LINE_STRIP", {"pos": circle}).draw(line)
+    gpu.state.blend_set("NONE")
+    scale = bpy.context.preferences.system.ui_scale
+    top = bpy.context.region.height - 34 * scale
+    lines = [(18, (*colour, 1.0), f"PAINTING: {name.upper()} ({word})   {tool['message']}"),
+             (13, (1, 1, 1, 0.95), "Q Replace (red)    E Maybe (yellow)    R Keep (green)    W Erase"),
+             (13, (1, 1, 1, 0.95), "Drag: paint    Shift + click: the whole piece    [ ]: brush size    Tab: hide / show the colours"),
+             (13, (1, 1, 1, 0.95), "Ctrl + Z: undo    Ctrl + Shift + Z: redo    Enter or Esc: done")]
+    for size, tint, text in lines:
+        blf.size(0, size * scale)
+        blf.enable(0, blf.SHADOW)
+        blf.shadow(0, 3, 0, 0, 0, 0.9)
+        blf.color(0, *tint)
+        blf.position(0, 60 * scale, top, 0)
+        blf.draw(0, text)
+        blf.disable(0, blf.SHADOW)
+        top -= (size + 9) * scale
+
+
+class INPAINT_OT_paint(bpy.types.Operator):
+    bl_idname = "inpaint.paint"
+    bl_label = "Paint the area"
+    bl_description = ("Paint on the model what may happen to it. Q red: goes completely. E yellow: the AI may change it. "
+                      "R green: never touched. W: erase. Drag paints, Shift + click takes the whole piece under the mouse, "
+                      "[ and ] change the brush, Ctrl + Z undoes, Enter or Esc ends")
+    bl_options = {"REGISTER", "UNDO"}
+
+    zone: bpy.props.IntProperty(default=RED, min=NO_COLOUR, max=GREEN, options={"SKIP_SAVE"})
+
+    @classmethod
+    def poll(cls, context):
+        return (context.mode == "OBJECT" and painter["tool"] is None and context.area is not None
+                and context.area.type == "VIEW_3D" and paint_model(context) is not None)
+
+    def invoke(self, context, event):
+        model = target_model(context)
+        if model is None:
+            self.report({"ERROR"}, "Click the model first")
+            return {"CANCELLED"}
+        for o in context.view_layer.objects:  # the model active and no box selected: the box's arrows would catch the clicks
+            o.select_set(False)
+        model.select_set(True)
+        context.view_layer.objects.active = model
+        self.model, self.cache = model, mesh_cache(model)
+        self.zones = zones_of(model)
+        self.stroke = None
+        painter.update(show=True, undo=[], redo=[],
+                       tool={"model": model.name, "zone": self.zone, "radius": 28.0, "mouse": (-999, -999), "region": None, "message": ""})
+        global brush_handler
+        brush_handler = bpy.types.SpaceView3D.draw_handler_add(draw_brush, (), "WINDOW", "POST_PIXEL")
+        context.window.cursor_modal_set("PAINT_CROSS")
+        context.workspace.status_text_set("Paint:  Q red (replace)   E yellow (maybe)   R green (keep)   W erase   |   drag: paint   "
+                                          "Shift + click: whole piece   [ ]: brush size   Tab: hide / show   Ctrl + Z: undo   Enter / Esc: done")
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def finish(self, context):
+        global brush_handler
+        if brush_handler is not None:
+            bpy.types.SpaceView3D.draw_handler_remove(brush_handler, "WINDOW")
+            brush_handler = None
+        painter["tool"] = None
+        painter["show"] = True
+        context.window.cursor_modal_restore()
+        context.workspace.status_text_set(None)
+        if context.mode == "OBJECT" and self.zones.any():
+            select_faces(self.model, (self.zones == RED) | (self.zones == YELLOW))  # Tab shows the same faces
+            if context.scene.inpaint.box_use in ("space", "all"):
+                context.scene.inpaint.box_use = "part_space"  # the colours count: the red and yellow faces + the empty space
+        counts = np.bincount(self.zones, minlength=4)
+        self.report({"INFO"}, f"Painted: {counts[1]:,} red, {counts[2]:,} yellow, {counts[3]:,} green faces")
+        redraw()
+        return {"FINISHED"}
+
+    def change(self, faces, zone):
+        """Gives the faces (a yes/no per face) the colour, and shows it."""
+        if not faces.any():
+            return 0
+        self.zones[faces] = zone
+        set_zones(self.model, self.zones)
+        return int(faces.sum())
+
+    def remember(self):
+        painter["undo"].append(self.zones.astype(np.uint8))
+        del painter["undo"][:-UNDO_STEPS]
+        painter["redo"].clear()
+
+    def step_back(self, forward):
+        take, give = (painter["redo"], painter["undo"]) if forward else (painter["undo"], painter["redo"])
+        if not take:
+            return "nothing to redo" if forward else "nothing to undo"
+        give.append(self.zones.astype(np.uint8))
+        self.zones = take.pop().astype(np.int32)
+        set_zones(self.model, self.zones)
+        return "redone" if forward else "undone"
+
+    def dab(self, view, mouse, before):
+        """The faces seen under the brush on its way from `before` to `mouse`."""
+        radius = painter["tool"]["radius"]
+        a, b = np.array(before, np.float32), np.array(mouse, np.float32)
+        low, high = np.minimum(a, b) - radius, np.maximum(a, b) + radius
+        near = np.flatnonzero(view["seen"] & (view["x"] >= low[0]) & (view["x"] <= high[0]) & (view["y"] >= low[1]) & (view["y"] <= high[1]))
+        point = np.stack([view["x"][near], view["y"][near]], 1)
+        along = b - a
+        share = np.clip((point - a) @ along / max(float(along @ along), 1e-9), 0, 1)
+        close = np.linalg.norm(point - (a + share[:, None] * along), axis=1) <= radius
+        faces = np.zeros(len(self.zones), bool)
+        faces[near[close]] = True
+        return faces
+
+    def modal(self, context, event):
+        tool = painter["tool"]
+        if context.mode != "OBJECT" or context.view_layer.objects.get(self.model.name) is not self.model:
+            return self.finish(context)
+        if event.type in {"RET", "NUMPAD_ENTER", "ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+            return self.finish(context)
+        if event.value == "PRESS" and event.type in {"Q", "E", "R", "W"} and not event.ctrl and not event.alt:
+            tool["zone"] = {"Q": RED, "E": YELLOW, "R": GREEN, "W": NO_COLOUR}[event.type]
+            tool["message"] = ""
+            redraw()
+            return {"RUNNING_MODAL"}
+        if event.value == "PRESS" and event.type in {"LEFT_BRACKET", "RIGHT_BRACKET"}:
+            tool["radius"] = float(np.clip(tool["radius"] * (1.25 if event.type == "RIGHT_BRACKET" else 0.8), 4, 400))
+            redraw()
+            return {"RUNNING_MODAL"}
+        if event.value == "PRESS" and event.type == "TAB":
+            painter["show"] = not painter["show"]
+            tool["message"] = "" if painter["show"] else "(colours hidden: Tab shows them)"
+            redraw()
+            return {"RUNNING_MODAL"}
+        if event.value == "PRESS" and event.type == "Z" and event.ctrl:
+            tool["message"] = self.step_back(event.shift)
+            redraw()
+            return {"RUNNING_MODAL"}
+        under = view_under(context, event)
+        if under is None:
+            if self.stroke is not None and event.type == "LEFTMOUSE" and event.value == "RELEASE":
+                self.stroke = None
+            return {"PASS_THROUGH"}  # the sidebar, a header, another editor: they work as always
+        region, rv3d, mouse = under
+        tool["mouse"], tool["region"] = mouse, region.as_pointer()
+        if event.type == "LEFTMOUSE" and event.value == "PRESS" and not event.ctrl and not event.alt:
+            view = faces_on_screen(self.cache, region, rv3d)
+            self.remember()
+            painter["show"] = True
+            if event.shift:  # the whole piece under the mouse
+                seen = np.flatnonzero(view["seen"])
+                away = (view["x"][seen] - mouse[0]) ** 2 + (view["y"][seen] - mouse[1]) ** 2
+                if not len(seen) or away.min() > 20 ** 2:
+                    painter["undo"].pop()
+                    tool["message"] = "that wasn't on the model"
+                else:
+                    piece = whole_piece(self.model, self.cache, int(seen[away.argmin()]), self.zones, context.scene.inpaint.piece_angle)
+                    tool["message"] = f"{self.change(piece, tool['zone']):,} faces: the whole piece (too much? Ctrl + Z, then a green line as a fence)"
+            else:
+                self.stroke = mouse
+                tool["message"] = f"{self.change(self.dab(view, mouse, mouse), tool['zone']):,} faces"
+            redraw()
+            return {"RUNNING_MODAL"}
+        if event.type == "MOUSEMOVE":
+            if self.stroke is not None:
+                self.change(self.dab(faces_on_screen(self.cache, region, rv3d), mouse, self.stroke), tool["zone"])
+                self.stroke = mouse
+            redraw()
+            return {"RUNNING_MODAL"} if self.stroke is not None else {"PASS_THROUGH"}
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE" and self.stroke is not None:
+            self.stroke = None
+            return {"RUNNING_MODAL"}
+        return {"PASS_THROUGH"}  # turning and zooming the view work while painting
+
+
+brush_handler = None
+
+
+def paint_model(context):
+    """The model the paint keys work on, without changing anything (asked while the panel is drawn): only when this
+    add-on is in use in the scene, so Q and W stay Blender's own everywhere else."""
+    settings = context.scene.inpaint
+    model = context.active_object if context.active_object is not None and context.active_object.type == "MESH" \
+        and not is_box(context.active_object) else settings.model
+    if model is None or model.type != "MESH" or context.view_layer.objects.get(model.name) is not model:
+        return None
+    in_use = settings.model is not None or model.data.attributes.get(ZONE) is not None \
+        or any(is_box(o) for o in context.view_layer.objects)
+    return model if in_use else None
+
+
+class INPAINT_OT_clear_zones(bpy.types.Operator):
+    bl_idname = "inpaint.clear_zones"
+    bl_label = "Take all colours off"
+    bl_description = "Remove the red, yellow and green from the whole model (Ctrl + Z brings them back)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == "OBJECT" and painter["tool"] is None
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        model = target_model(context)
+        if model is None:
+            return {"CANCELLED"}
+        set_zones(model, np.zeros(len(model.data.polygons), np.int32))
+        select_faces(model, np.zeros(len(model.data.polygons), bool))
+        self.report({"INFO"}, "All colours taken off (Ctrl + Z brings them back)")
+        return {"FINISHED"}
+
+
+class INPAINT_OT_fill_box(bpy.types.Operator):
+    bl_idname = "inpaint.fill_box"
+    bl_label = "Colour everything in the box"
+    bl_description = "Give every face inside the space box this colour (faces that are green stay green)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    zone: bpy.props.IntProperty(default=RED, min=NO_COLOUR, max=GREEN, options={"SKIP_SAVE"})
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == "OBJECT" and painter["tool"] is None
+
+    def execute(self, context):
+        model = target_model(context)
+        boxes = [o for o in context.view_layer.objects if is_box(o) and o.visible_get()]
+        if model is None or not boxes:
+            self.report({"ERROR"}, "Put a space box around the part first")
+            return {"CANCELLED"}
+        centers = mesh_cache(model)["centers"]
+        within = np.zeros(len(centers), bool)
+        for box in boxes:
+            within |= inside_box(centers, np.array([tuple(c) for c in box_corners(box)]))
+        zones = zones_of(model)
+        within &= (zones != GREEN) | (self.zone == GREEN)
+        zones[within] = self.zone
+        set_zones(model, zones)
+        select_faces(model, (zones == RED) | (zones == YELLOW))
+        self.report({"INFO"}, f"{int(within.sum()):,} faces in the box are {(ZONES.get(self.zone) or ERASER)[1]} now")
+        return {"FINISHED"}
+
+
+class INPAINT_OT_fit_box(bpy.types.Operator):
+    bl_idname = "inpaint.fit_box"
+    bl_label = "Fit box to the colours"
+    bl_description = ("Make the space box exactly as big as the red and yellow faces, one small cube of room around them, "
+                      "its sides on the lines of TRELLIS.2's 64 grid (a new box if there is none)")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == "OBJECT" and painter["tool"] is None
+
+    def execute(self, context):
+        model = target_model(context)
+        if model is None:
+            self.report({"ERROR"}, "Click the model first")
+            return {"CANCELLED"}
+        cache = mesh_cache(model)
+        zones = zones_of(model)
+        marked = (zones == RED) | (zones == YELLOW)
+        if not marked.any():
+            self.report({"ERROR"}, "Nothing is red or yellow yet: paint the part (Q) or find it first")
+            return {"CANCELLED"}
+        points = cache["co"][cache["corners"][marked[cache["owner"]]].ravel()]
+        low, high = cache["co"].min(0), cache["co"].max(0)
+        middle, cell = (low + high) / 2, float((high - low).max()) / GRID
+        first = np.floor((points.min(0) - middle) / cell - 1e-6) - 1  # one cube of room, on the grid's lines
+        last = np.ceil((points.max(0) - middle) / cell + 1e-6) + 1
+        first, last = np.clip(first, -GRID / 2, GRID / 2), np.clip(last, -GRID / 2, GRID / 2)
+        box = context.active_object if is_box(context.active_object) else None
+        boxes = [o for o in context.view_layer.objects if is_box(o) and o.visible_get()]
+        if box is None and len(boxes) == 1:
+            box = boxes[0]
+        if box is None or len(box.data.vertices) != 8:
+            bpy.ops.mesh.primitive_cube_add(size=2)
+            box = context.active_object
+            box.name = BOX
+            box.display_type, box.show_in_front, box.hide_render = "WIRE", True, True
+        for i, signs in zip(CUBE_CORNERS, CORNER_SIGNS):
+            box.data.vertices[i].co = Vector([float(s) for s in signs])
+        box.data.update()
+        box.rotation_euler = (0, 0, 0)
+        box.rotation_quaternion = (1, 0, 0, 0)
+        box.location = Vector((middle + (first + last) / 2 * cell).tolist())
+        box.scale = Vector(((last - first) / 2 * cell).tolist())
+        cubes = (last - first).astype(int)
+        self.report({"INFO"}, f"The box fits the red and yellow faces: {cubes[0]} x {cubes[1]} x {cubes[2]} small cubes of 64")
+        return {"FINISHED"}
+
+
+def checklist(context):
+    """The four steps of a change and whether each is done: (done, name, what to do next). For the panel's top."""
+    settings = context.scene.inpaint
+    model = paint_model(context)
+    counts = zone_counts(model)[1] if model is not None else [0, 0, 0, 0]
+    boxes = any(is_box(o) and o.visible_get() for o in context.view_layer.objects)
+    marked = counts[RED] + counts[YELLOW] > 0 or (boxes and settings.box_use in ("space", "replace", "all"))
+    picture = bool(settings.picture) and os.path.isfile(bpy.path.abspath(settings.picture))
+    ready = status["server"] in ("ready", "already running") or settings.connection == "CLOUD"
+    return [(ready, "AI ready", "Start the server on this PC (top of this panel)"),
+            (marked, "Area marked", "Mark the area: add a space box, then find the part or paint it red (Q)"),
+            (picture, "Picture of the change", "Choose a Reference (picture or video of the new part), then 1. Make picture"),
+            (bool(remote["results"]), "Regenerated", "Press 2. Regenerate area")]
+
+
+def section(layout, title, icon, done=None):
+    """A part of the panel with a bold head; done = True / False shows whether its step is finished."""
+    box = layout.box()
+    row = box.row()
+    row.scale_y = 1.2
+    row.label(text=title, icon=icon)
+    if done is not None:
+        row.label(text="", icon="CHECKMARK" if done else "RADIOBUT_OFF")
+    return box
+
+
+def big(layout, scale=1.5):
+    row = layout.row(align=True)
+    row.scale_y = scale
+    return row
+
+
 class INPAINT_PT_panel(bpy.types.Panel):
     bl_label = "TRELLIS.2 Inpainting"
     bl_space_type = "VIEW_3D"
@@ -2195,12 +3210,27 @@ class INPAINT_PT_panel(bpy.types.Panel):
     def draw(self, context):
         settings = context.scene.inpaint
         layout = self.layout
+        steps = checklist(context)
+        painting = painter["tool"] is not None
+
+        # where things stand: the four steps, and the one to do next
         box = layout.box()
-        box.label(text="Where does the AI run?", icon="NETWORK_DRIVE")
-        box.prop(settings, "connection", expand=True)
+        row = box.row()
+        row.scale_y = 1.2
+        row.label(text="Where you are", icon="INFO")
+        for number, (done, name, _) in enumerate(steps, 1):
+            box.label(text=f"{number}. {name}", icon="CHECKMARK" if done else "RADIOBUT_OFF")
+        todo = next((hint for done, _, hint in steps if not done), "Done. Compare it with the original (E), or change more")
+        hint = box.box()
+        hint.label(text="Painting now: Enter or Esc ends it" if painting else "Next:", icon="BRUSH_DATA" if painting else "FORWARD")
+        if not painting:
+            for line in wrapped(todo, context):
+                hint.label(text=line)
+
+        box = section(layout, "Where does the AI run?", "NETWORK_DRIVE", steps[0][0])
+        big(box, 1.2).prop(settings, "connection", expand=True)
         if settings.connection == "LOCAL":
-            box.label(text="On this PC's own GPU")
-            row = box.row(align=True)
+            row = big(box)
             row.operator(INPAINT_OT_start_local.bl_idname, icon="PLAY")
             row.operator(INPAINT_OT_stop_local.bl_idname, text="", icon="SNAP_FACE")
         else:
@@ -2208,6 +3238,7 @@ class INPAINT_PT_panel(bpy.types.Panel):
             box.label(text="First start the worker on the server (once):")
             draw_steps(box, settings)
         row = box.row()
+        row.alert = status["server"] not in ("ready", "already running", "not checked", "busy")
         row.label(text=f"Status: {status['server']}")
         row.operator(INPAINT_OT_check.bl_idname, text="", icon="FILE_REFRESH")
         row = box.row()
@@ -2215,64 +3246,115 @@ class INPAINT_PT_panel(bpy.types.Panel):
         if settings.connection != "LOCAL":
             row.operator("preferences.addon_show", text="Login", icon="PREFERENCES").module = __name__
         if status["message"]:
-            layout.label(text=status["message"])
+            row = layout.row()
+            row.alert = status["message"].startswith("failed")
+            row.label(text=status["message"], icon="ERROR" if row.alert else "INFO")
 
-        box = layout.box()
-        box.label(text="A. Mark the area", icon="SELECT_SET")
-        box.label(text="Faces: Edit Mode (Tab), select")
-        box.operator(INPAINT_OT_add_box.bl_idname, icon="CUBE")
+        box = section(layout, "A. Mark the area", "SELECT_SET", steps[1][0])
+        if settings.model is not None:
+            box.label(text=f"Model: {settings.model.name}", icon="MESH_DATA")
+        row = big(box)
+        row.operator(INPAINT_OT_add_box.bl_idname, icon="CUBE")
+        row.operator(INPAINT_OT_fit_box.bl_idname, text="Fit to colours", icon="PIVOT_BOUNDBOX")
         if is_box(context.active_object):
             box.label(text="Drag: arrow = a side, dot = a corner")
-        if settings.model is not None:
-            box.label(text=f"Model: {settings.model.name}")
-        box.label(text="Find a part in the box (AI):")
-        box.prop(settings, "part")
-        row = box.row(align=True)
+
+        part = box.box()
+        part.label(text="Find a part in the box (AI)", icon="VIEWZOOM")
+        part.prop(settings, "part")
+        row = part.row(align=True)
         row.operator(INPAINT_OT_pick_point.bl_idname, icon="EYEDROPPER",
                      text=f"Clicked {len(settings.clicks)} spot(s): add more" if settings.clicks else "Click on it")
         if settings.clicks:
             row.operator(INPAINT_OT_clear_click.bl_idname, text="", icon="X")
-        box.operator(INPAINT_OT_find_part.bl_idname, icon="VIEWZOOM")
-        box.prop(settings, "find_cpu")
+        big(part).operator(INPAINT_OT_find_part.bl_idname, icon="VIEWZOOM")
+        part.prop(settings, "find_cpu")
         if finder["message"]:
-            box.label(text=finder["message"])
+            row = part.row()
+            row.alert = finder["message"].startswith("mask AI failed")
+            row.label(text=finder["message"])
         if finder["folder"] and os.path.isfile(os.path.join(finder["folder"], "overview.jpg")):
-            box.operator(INPAINT_OT_show_found.bl_idname, icon="IMAGE_DATA")
+            part.operator(INPAINT_OT_show_found.bl_idname, icon="IMAGE_DATA")
+
+        # the three colours: the same names, colours and keys as in the brush and on the model
+        paint = box.box()
+        paint.label(text="Paint it by hand: three colours", icon="BRUSH_DATA")
+        model = paint_model(context)
+        counts = zone_counts(model)[1] if model is not None else [0, 0, 0, 0]
+        for zone, (name, word, _, key, icon, what) in ZONES.items():
+            row = paint.row(align=True)
+            row.scale_y = 1.4
+            start = row.operator(INPAINT_OT_paint.bl_idname, text=f"{key}    {word.capitalize()}: {name.lower()}", icon=icon,
+                                 depress=painting and painter["tool"]["zone"] == zone)
+            start.zone = zone
+            row = paint.row()
+            row.active = counts[zone] > 0
+            row.label(text=f"        {what}: {counts[zone]:,} faces")
+        row = paint.row(align=True)
+        row.scale_y = 1.4
+        row.operator(INPAINT_OT_paint.bl_idname, text=f"{ERASER[3]}    {ERASER[0]}", icon=ERASER[4],
+                     depress=painting and painter["tool"]["zone"] == NO_COLOUR).zone = NO_COLOUR
+        keys = paint.column(align=True)
+        keys.scale_y = 0.85
+        for line in ("Drag: paint.  [ ]: brush size.", "Shift + click: the whole piece.", "Tab: hide / show.  Enter or Esc: done."):
+            keys.label(text=line)
+        paint.prop(settings, "piece_angle")
+        row = paint.row(align=True)
+        row.operator(INPAINT_OT_fill_box.bl_idname, text="Box red", icon=ZONES[RED][4]).zone = RED
+        row.operator(INPAINT_OT_fill_box.bl_idname, text="Box yellow", icon=ZONES[YELLOW][4]).zone = YELLOW
+        row = paint.row(align=True)
+        row.operator("ed.undo", text="Undo", icon="LOOP_BACK")
+        row.operator("ed.redo", text="Redo", icon="LOOP_FORWARDS")
+        row.operator(INPAINT_OT_clear_zones.bl_idname, text="", icon="TRASH")
+        if counts[GREEN] and not counts[RED] and not counts[YELLOW]:
+            row = paint.row()
+            row.alert = True
+            row.label(text="Only green: nothing would change", icon="ERROR")
         box.prop(settings, "box_use")
 
-        box = layout.box()
-        box.label(text="B. What should be there (optional)", icon="TEXT")
+        box = section(layout, "B. What should be there", "TEXT", steps[2][0])
         box.prop(settings, "prompt", text="")
         box.prop(settings, "reference")
-        box.prop(settings, "sides")
+        if not settings.reference.lower().endswith(VIDEO_ENDS):
+            box.prop(settings, "sides")
+        else:
+            box.label(text="A video: its four sides are taken", icon="CHECKMARK")
         box.label(text="Turn the view to show the area, then:")
-        box.operator(INPAINT_OT_make_picture.bl_idname, icon="IMAGE_DATA")
+        big(box, 1.6).operator(INPAINT_OT_make_picture.bl_idname, icon="IMAGE_DATA")
+        draw_judgement(box, context)
 
-        box = layout.box()
-        box.label(text="C. Regenerate in 3D", icon="MOD_REMESH")
+        box = section(layout, "C. Regenerate in 3D", "MOD_REMESH", steps[3][0])
         box.prop(settings, "picture")
         preview = bpy.data.images.get(os.path.splitext(os.path.basename(bpy.path.abspath(settings.picture)))[0] + "_preview.jpg")
-        if preview is not None and preview.preview is not None:
-            box.template_icon(icon_value=preview.preview.icon_id, scale=8)
-            box.operator(INPAINT_OT_show_picture.bl_idname, icon="WINDOW")
+        if preview is not None and preview.preview is not None and picture_stem(context) is None:  # else it is in B
+            box.template_icon(icon_value=preview.preview.icon_id, scale=10)
+            big(box, 1.3).operator(INPAINT_OT_show_picture.bl_idname, text="Show the picture big", icon="WINDOW")
         row = box.row()
         row.prop(settings, "seed")
         row.prop(settings, "grow")
         box.prop(settings, "room")
         box.prop(settings, "steps")
         box.prop(settings, "step")
-        box.operator(INPAINT_OT_regenerate.bl_idname, text="2. Regenerate area", icon="PLAY")
+        missing = [hint for done, _, hint in steps[1:3] if not done]  # no area or no picture: the button can't work yet
+        row = big(box, 1.9)
+        row.enabled = not missing
+        row.operator(INPAINT_OT_regenerate.bl_idname, text="2. Regenerate area", icon="PLAY")
+        for hint in missing:
+            warn = box.column(align=True)
+            warn.alert = True
+            for k, line in enumerate(wrapped("First: " + hint, context)):
+                warn.label(text=line, icon="ERROR" if k == 0 else "BLANK1")
         if remote["message"]:
-            box.label(text=remote["message"])
+            row = box.row()
+            row.alert = bool(remote["error"])
+            row.label(text=remote["message"], icon="ERROR" if remote["error"] else "INFO")
 
-        box = layout.box()
-        box.label(text="D. Job files", icon="PACKAGE")
+        box = section(layout, "D. Job files", "PACKAGE")
         row = box.row()
         row.operator(INPAINT_OT_save_job.bl_idname, text="Save job only", icon="PACKAGE")
         row.operator(INPAINT_OT_load_result.bl_idname, icon="IMPORT")
 
-        box = layout.box()
-        box.label(text="E. Geometry Nodes", icon="GEOMETRY_NODES")
+        box = section(layout, "E. Geometry Nodes", "GEOMETRY_NODES")
         box.operator(INPAINT_OT_clean_up.bl_idname, icon="BRUSH_DATA")
         row = box.row()
         row.operator(INPAINT_OT_compare.bl_idname, icon="MOD_MASK")
@@ -2290,12 +3372,30 @@ class INPAINT_PT_panel(bpy.types.Panel):
         layout.prop(settings, "folder")
 
 
+def wrapped(text, context):
+    """A sentence as lines that fit the sidebar (labels don't wrap by themselves)."""
+    import textwrap
+    width = context.region.width if context.region is not None else 300
+    return textwrap.wrap(text, max(18, int(width / (7.0 * max(context.preferences.system.ui_scale, 0.5))))) or [""]
+
+
 classes = (InpaintClick, InpaintSettings, INPAINT_OT_add_box, INPAINT_GGT_box_sides, INPAINT_OT_pick_point,
-           INPAINT_OT_clear_click, INPAINT_OT_find_part, INPAINT_OT_show_found, INPAINT_OT_make_picture,
+           INPAINT_OT_clear_click, INPAINT_OT_find_part, INPAINT_OT_paint, INPAINT_OT_clear_zones,
+           INPAINT_OT_fill_box, INPAINT_OT_fit_box, INPAINT_OT_judge_picture, INPAINT_OT_improve_picture,
+           INPAINT_OT_enhance_picture, INPAINT_OT_restore_picture, INPAINT_OT_use_idea, INPAINT_OT_show_found, INPAINT_OT_make_picture,
            INPAINT_OT_regenerate, INPAINT_OT_save_job, INPAINT_OT_send_job, INPAINT_OT_load_result,
            INPAINT_OT_clean_up, INPAINT_OT_compare, INPAINT_OT_keep_original,
            InpaintPreferences, INPAINT_OT_cloud_login,
            INPAINT_OT_show_picture, INPAINT_OT_start_local, INPAINT_OT_stop_local, INPAINT_OT_copy_steps, INPAINT_OT_test_connection, INPAINT_OT_check, INPAINT_PT_panel)
+
+
+paint_keys = []
+
+
+@bpy.app.handlers.persistent
+def colours_changed(*_):
+    """After Blender's undo or redo, or another file: the colours are read from the mesh again."""
+    painter.update(cache=None, batches=None, counts=None)
 
 
 def register():
@@ -2305,11 +3405,30 @@ def register():
     bpy.types.Scene.inpaint = bpy.props.PointerProperty(type=InpaintSettings)
     draw_handler = bpy.types.SpaceView3D.draw_handler_add(draw_boxes, (), "WINDOW", "POST_VIEW")
     bpy.app.handlers.depsgraph_update_post.append(after_change)
+    for handlers in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post, bpy.app.handlers.load_post):
+        handlers.append(colours_changed)
+    config = bpy.context.window_manager.keyconfigs.addon
+    if config is not None:  # none when Blender runs without a window
+        keymap = config.keymaps.new(name="3D View", space_type="VIEW_3D")
+        for key, zone in (("Q", RED), ("W", NO_COLOUR)):  # Q paints red, W erases (E and R: yellow, green, once painting)
+            item = keymap.keymap_items.new(INPAINT_OT_paint.bl_idname, key, "PRESS")
+            item.properties.zone = zone
+            paint_keys.append((keymap, item))
 
 
 def unregister():
-    global draw_handler
+    global draw_handler, brush_handler
     stop_local()
+    for keymap, item in paint_keys:
+        keymap.keymap_items.remove(item)
+    paint_keys.clear()
+    for handlers in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post, bpy.app.handlers.load_post):
+        if colours_changed in handlers:
+            handlers.remove(colours_changed)
+    if brush_handler is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(brush_handler, "WINDOW")
+        brush_handler = None
+    painter.update(cache=None, batches=None, counts=None, tool=None)
     if after_change in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(after_change)
     if draw_handler is not None:
