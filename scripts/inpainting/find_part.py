@@ -36,7 +36,9 @@ DINO = "IDEA-Research/grounding-dino-base"
 SAM = "facebook/sam2.1-hiera-large"
 BOX_THRESHOLD = 0.25   # how sure Grounding DINO must be that a box shows the word
 TEXT_THRESHOLD = 0.25  # ... and that the word (not another one in the sentence) is meant
-WHOLE_PICTURE = 0.5    # a box over more than this share of the picture means "the whole thing": ignored
+WHOLE_PICTURE = 0.8    # a box over more than this share of the picture means "the whole thing": ignored
+                       # (was 0.5: the bee robot's head fills 0.5 to 0.6 of a picture of its box, so its best box fell out)
+NEAR_BEST = 0.75       # only boxes about as sure as the best one count (others were a face plate, a hand, a lamp)
 
 
 def pick_device(cpu_only):
@@ -69,6 +71,7 @@ class PartFinder:
         share = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) / (picture.size[0] * picture.size[1])
         keep = np.flatnonzero(share <= WHOLE_PICTURE)
         keep = keep[np.argsort(-scores[keep])]
+        keep = keep[scores[keep] >= NEAR_BEST * scores[keep[:1]].max(initial=0)]
         return boxes[keep], scores[keep]
 
     @torch.no_grad()
