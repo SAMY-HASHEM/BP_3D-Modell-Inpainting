@@ -5,13 +5,14 @@ later (e.g. the crown). TRELLIS.2 reads one picture as one object, so the sheet 
 single views and says what each one is good for.
 
   1. every picture   a sheet with several views side by side is cut into its views (measured: separate blobs of
-                     object pixels, sheet_views.py); every video gives frames a part of a turn apart
+                     object pixels, split() below); every video gives frames a part of a turn apart
   2. every view      measured: size, sharpness, grey sculpt or colour, cut off at which border, how symmetric
   3. every view      the local vision AI (Qwen3.6-27B, Ollama) says: what it shows, which side (front,
-                     three-quarter, side, back), what is at its very top
+                     three-quarter, side, back), what is at its very top; the views of one sheet are shown to it
+                     together in one picture, so it can tell front from back by comparing them
   4. rules           the lists the next nodes use:
-                       base   the views a model is generated from: the most frontal one first, then one per
-                              other side (three-quarter, side, back), the sharpest of each
+                       base   the views a model is generated from: the most frontal complete one first, then
+                              one per other side (three-quarter, side, back), from the same sheet if it has one
                        sides  a part's four sides in turning order (from a video: a quarter turn apart)
 
 Writes into --out: sheet.json, views/*.png, contact.jpg (all views with their tags, to check at a glance).
@@ -40,6 +41,97 @@ Answer only with JSON, no other text:
  "side": "front" (the object faces the camera) or "three-quarter" (turned about 45 degrees) or "side" (turned
          90 degrees, a profile) or "back" (seen from behind) or "top" or "unknown",
  "top": "what is at the very top of the object, at most 5 words"}"""
+
+
+# ---- a sheet with several views side by side, split into single views (also used by inpaint.py)
+# TRELLIS.2 reads one picture as one object: four helmets in a row gave a mix of all four (Nov 4). The background AI
+# (the same one TRELLIS.2 uses) finds the object pixels; every separate blob of them is one view. Measured, no AI
+# that names anything.
+
+def object_mask(pipeline, image):
+    if pipeline.low_vram:
+        pipeline.rembg_model.to(pipeline.device)
+    rgba = np.asarray(pipeline.rembg_model(image))
+    if pipeline.low_vram:
+        pipeline.rembg_model.cpu()
+    return rgba[..., 3] > 128
+
+
+def boxes(mask, shrink=3, share=0.25):
+    """The views' boxes: separate blobs of object pixels. The mask is first shrunk a little, so that a thin cable or
+    antenna touching the next view doesn't join two views; a blob counts if it has at least `share` of the biggest
+    one's pixels (logos, text and loose small bits drop out)."""
+    from scipy import ndimage
+    core = ndimage.binary_erosion(mask, iterations=shrink)
+    labels, count = ndimage.label(core)
+    if count < 2:
+        return []
+    sizes = ndimage.sum(core, labels, range(1, count + 1))
+    keep = [k for k in np.argsort(-sizes) if sizes[k] >= share * sizes.max()]  # the biggest first
+    found = []
+    for k, (rows, cols) in enumerate(ndimage.find_objects(labels)):
+        if k in keep:
+            found.append((keep.index(k), (cols.start - shrink, rows.start - shrink, cols.stop + shrink, rows.stop + shrink)))
+    return [box for _, box in sorted(found)]
+
+
+def split(pipeline, path, out_dir, name="inpaint_view", left_to_right=False):
+    """The single views of a sheet, saved as <name><k>.png (biggest first, or as they stand on the sheet from left to
+    right); [] when it shows one view."""
+    image = Image.open(path).convert("RGB")
+    scale = min(1.0, 1024 / max(image.size))
+    small = image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
+    found = boxes(object_mask(pipeline, small))
+    if len(found) < 2:
+        return []
+    if left_to_right:
+        found.sort(key=lambda box: box[0])
+    os.makedirs(out_dir, exist_ok=True)
+    paths = []
+    for k, (x0, y0, x1, y1) in enumerate(found):
+        pad = 0.03 * max(x1 - x0, y1 - y0)
+        box = [max(0, round((x0 - pad) / scale)), max(0, round((y0 - pad) / scale)),
+               min(image.width, round((x1 + pad) / scale)), min(image.height, round((y1 + pad) / scale))]
+        paths.append(os.path.join(out_dir, f"{name}{k + 1}.png"))
+        image.crop(box).save(paths[-1])  # small views are upscaled to 1024 later (generate.crop_to_object)
+    return paths
+
+
+TOGETHER = """This picture shows {n} views of the same object next to each other, numbered 1 to {n} from left to right.
+They show it from different sides. Compare them with each other before you answer: only a view where the object faces
+the camera (its face, eyes or chest are seen) is the front; in a view from behind the back of the head and the back are
+seen and no face; a profile is a side.
+Answer only with JSON, no other text:
+{{"what": "what the object is, at most 8 words",
+ "views": [{{"number": 1, "side": "front" or "three-quarter" or "side" or "back" or "top" or "unknown",
+            "top": "what is at the very top of the object, at most 5 words"}}, ...one entry per view...]}}"""
+
+
+def sides_together(group, path, ask, encoded, height=640):
+    """The views of one sheet shown to the local AI in one picture, so it can tell them apart: looked at alone, it
+    called the bee robot's back a front (Nov 14). Returns {view name: (answer, raw)}, or {} when the answer is unusable
+    (the views are then asked one by one)."""
+    pictures = []
+    for view in group:
+        image = Image.open(view["path"]).convert("RGB")
+        pictures.append(image.resize((max(1, round(image.width * height / image.height)), height), Image.LANCZOS))
+    strip = Image.new("RGB", (sum(p.width for p in pictures) + 20 * (len(pictures) + 1), height + 60), (255, 255, 255))
+    draw, x = ImageDraw.Draw(strip), 20
+    for number, picture in enumerate(pictures, 1):
+        draw.text((x + picture.width // 2 - 4, 8), str(number), fill=(0, 0, 0), font_size=36)
+        strip.paste(picture, (x, 54))
+        x += picture.width + 20
+    strip.save(path, quality=92)
+    try:
+        answer, raw = ask([encoded(path, 1536)], TOGETHER.format(n=len(group)))
+        said = {int(one["number"]): one for one in answer["views"]}
+        if sorted(said) != list(range(1, len(group) + 1)):
+            return {}
+        return {view["name"]: ({"what": answer.get("what", ""), "side": said[k]["side"], "top": said[k].get("top", "")},
+                               "together: " + raw) for k, view in enumerate(group, 1)}
+    except Exception as e:  # noqa: BLE001 (a wrong shape of answer, or Ollama not running)
+        print(f"  the views together gave no answer ({type(e).__name__}): asked one by one", flush=True)
+        return {}
 
 
 def frame_count(video):
@@ -94,15 +186,25 @@ def choose_lists(views, role):
     # the main view: the most symmetric of the front views; without a front view the most frontal side there is
     fronts = next((by_side[side] for side in ORDER if by_side.get(side)), stills[:1])
     if fronts:
-        main = max(fronts, key=lambda v: (v["symmetry"], v["sharpness"]))
+        # complete views first (a close-up cut off at a border is no view of the whole object); of those about as
+        # symmetric as the most symmetric one, the one that shows the object biggest
+        whole = [v for v in fronts if not v["cut_off"]] or fronts
+        most = max(v["symmetry"] for v in whole)
+        big = lambda v: (v["object_box"][2] - v["object_box"][0]) * (v["object_box"][3] - v["object_box"][1])
+        main = max([v for v in whole if v["symmetry"] >= most - 0.05], key=lambda v: (big(v), v["sharpness"]))
         lists["base"].append(main["name"])
-        lists["why"].append(f"base main view: {main['name']} ({main['side']}, symmetry {main['symmetry']})")
+        left_out = len(fronts) - len(whole)
+        lists["why"].append(f"base main view: {main['name']} ({main['side']}, symmetry {main['symmetry']}"
+                            + (f"; {left_out} cut-off view(s) left out" if left_out else "") + ")")
         for side in ORDER[1:]:
             others = [v for v in by_side.get(side, []) if v["name"] not in lists["base"]]
             if others and side != main["side"]:
-                best = max(others, key=lambda v: v["sharpness"])
+                # the same sheet as the main view first: another picture can show another version of the object (a
+                # statue with its base, a colour version without it), and mixed they give a mix
+                best = max(others, key=lambda v: (v["from"] == main["from"], not v["cut_off"], v["sharpness"]))
                 lists["base"].append(best["name"])
-                lists["why"].append(f"base {side}: {best['name']} (the sharpest of {len(by_side[side])})")
+                lists["why"].append(f"base {side}: {best['name']} (of {len(by_side[side])}: "
+                                    + ("the main view's own sheet" if best["from"] == main["from"] else "the sharpest complete one") + ")")
     elif turning:  # only a video: the four quarter-turn frames build the model
         lists["base"] = list(lists["sides"])
         lists["why"].append("base: the video's four sides (no single pictures)")
@@ -139,7 +241,12 @@ def main():
     parser.add_argument("--no-ai", action="store_true", help="only the measured facts (every single picture counts as front)")
     parser.add_argument("--what", default="", help="what the input shows, in the user's own words: taken instead of the local "
                         "AI's guess (which reads e.g. a logo on the picture as the object's name)")
+    parser.add_argument("--sides", default="", help="the sides of a sheet's views from left to right, in the user's own words, "
+                        "e.g. \"front, side, back\": taken instead of the local AI's guess (which called a robot's back its front)")
     args = parser.parse_args()
+    said_sides = [s.strip().lower() for s in args.sides.split(",") if s.strip()]
+    if any(s not in SIDES for s in said_sides):
+        raise SystemExit(f"--sides: only {', '.join(SIDES)}")
     views_dir = os.path.join(args.out, "views")
     os.makedirs(views_dir, exist_ok=True)
     files = []
@@ -150,7 +257,6 @@ def main():
         raise SystemExit("no pictures or videos given")
 
     import types
-    import sheet_views
     from make_edit import background_remover
     remover = background_remover()
     pipeline = types.SimpleNamespace(low_vram=False, rembg_model=remover, device="cuda")
@@ -162,7 +268,7 @@ def main():
                 views.append({"name": os.path.basename(frame)[:-4], "path": frame, "from": path, "from_video": path,
                               "turn": k * 360 // args.frames})
             continue
-        cut = sheet_views.split(pipeline, path, views_dir, name=f"{name}_view")
+        cut = split(pipeline, path, views_dir, name=f"{name}_view", left_to_right=bool(said_sides))
         if not cut:  # one view: the picture as it is
             cut = [os.path.join(views_dir, f"{name}_view1.png")]
             Image.open(path).convert("RGB").save(cut[0])
@@ -179,13 +285,18 @@ def main():
             view.update(what="", side="front" if view["from_video"] is None else "unknown", top="")
     else:
         from judge import MODEL, ask, encoded
+        together = {}
+        for number, source in enumerate(dict.fromkeys(v["from"] for v in views if v["from_video"] is None)):
+            group = [v for v in views if v["from"] == source and v["from_video"] is None]
+            if len(group) > 1:  # a sheet: its views in one question
+                together.update(sides_together(group, os.path.join(args.out, f"together_{number}.jpg"), ask, encoded))
         for view in views:
             if view["from_video"] is not None and view["turn"] != 0:  # a video: its turn says the side
                 view.update(what=views_first(views, view)["what"], top="", ai=None,
                             side={90: "side", 180: "back", 270: "side"}.get(view["turn"], "three-quarter"))
                 continue
             try:
-                answer, raw = ask([encoded(view["path"], 768)], QUESTION)
+                answer, raw = together.get(view["name"]) or ask([encoded(view["path"], 768)], QUESTION)
             except Exception as e:  # noqa: BLE001 (Ollama not running: the sheet still has what was measured)
                 answer, raw = {}, f"{type(e).__name__}: {e}"
             side = answer.get("side") if answer.get("side") in SIDES else "unknown"
@@ -193,6 +304,12 @@ def main():
                 side = "front"  # a turning video starts at the front
             view.update(what=str(answer.get("what", ""))[:80], side=side, top=str(answer.get("top", ""))[:60], ai=raw[:400])
             print(f"  {view['name']}: {view['side']}, {view['colour']}, {view['what']}", flush=True)
+    stills = [v for v in views if v["from_video"] is None]
+    if said_sides:  # the user's words win over the AI's guess
+        if len(said_sides) != len(stills):
+            raise SystemExit(f"--sides names {len(said_sides)} views, the pictures show {len(stills)}")
+        for view, side in zip(stills, said_sides):
+            view.update(side=side, **({"side_ai": view["side"]} if view["side"] != side else {}))
     lists = choose_lists(views, args.role)
     what = next((v["what"] for v in views if v["name"] in (lists["base"] + lists["sides"])[:1] and v["what"]), "")
     said = " ".join(args.what.split())

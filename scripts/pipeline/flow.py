@@ -46,7 +46,7 @@ TYPES = {
     "input": ("00 Input", [], "", lambda i, s, name: (None, {"pictures": core.inputs(name, s["files"])})),
     "data_sheet": ("01 Data sheet", ["pictures"], "this PC: local AI",
                    lambda i, s, name: (core.data_sheet(i["pictures"]["pictures"], s.get("role", "object"), s.get("frames", 8),
-                                                       s.get("ai", True), s.get("what", "")), None)),
+                                                       s.get("ai", True), s.get("what", ""), s.get("sides", "")), None)),
     "base": ("02 Base model", ["data"], "TRELLIS.2",
              lambda i, s, name: (core.base_model(i["data"]["data"], s.get("where", "server"), s.get("mode", "multidiffusion"),
                                                  str(s.get("resolution", "1024")), s.get("steps", 25), s.get("seed", 42)), None)),
@@ -125,7 +125,10 @@ class Flow:
                 outputs, state["folder"] = job["outputs"], job["folder"]
                 todo = [step for step in job["steps"] if not (step[2] and os.path.exists(step[2]))]
                 if todo:
-                    with self.gpu if node["type"] in LOCAL_GPU else threading.Lock():
+                    # this PC has one GPU: its own work one after another (also TRELLIS.2 with where = pc, two seeds at once
+                    # would not fit); the server's work side by side
+                    on_this_pc = node["type"] in LOCAL_GPU or self.settings(node).get("where") == "pc"
+                    with self.gpu if on_this_pc else threading.Lock():
                         self.set(key, "running", todo[0][1])
                         start = time.time()
                         for command, label, done in todo:

@@ -1,0 +1,11 @@
+{
+ "name": "super_woman",
+ "about": "The statue of the flying woman over the beaten man (three sheets, each a front and a back view). The data sheet takes the whole statue's sheet (front + back) and leaves the close-up out (cut off at the bottom) and the colour version (no base under her). Two seeds on this PC; the seed judge (outline + local AI) picks.",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the statue", "files": ["pictures/super woman"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "in": {"pictures": "object"}},
+  {"id": "base_42", "type": "base", "seed": 42, "where": "pc", "in": {"data": "object_sheet"}},
+  {"id": "base_1", "type": "base", "seed": 1, "where": "pc", "in": {"data": "object_sheet"}},
+  {"id": "best_base", "type": "pick_seed", "in": {"data": "object_sheet", "candidates": ["base_42", "base_1"]}}
+ ]
+}

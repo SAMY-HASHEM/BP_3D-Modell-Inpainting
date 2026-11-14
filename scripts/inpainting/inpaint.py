@@ -296,7 +296,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     more_edits: more sides of the same change, as (after, before, 2D mask) picture paths; each side has its own
     picture swap, the new area looks at all of them (multidiffusion)
     split_sheet: a picture with several views side by side (a turnaround sheet) is split into single views
-    (sheet_views.py); refine_region.py turns it off, its crops are single views already
+    (data_sheet.py: split); refine_region.py turns it off, its crops are single views already
     keep_structure: the details step between shape and colours: the voxels stay where they are, only their fine shape
     (and colours) in the area are regenerated from the picture, so the part gets sharper without moving. The idea of a
     separate refinement on fixed voxels is from UltraShape (arXiv 2512.21185); this is our own code for TRELLIS.2.
@@ -332,8 +332,8 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     report(f"2/6 Mask: {int(mask.sum()):,} of {GRID ** 3:,} voxels will be regenerated ({method})")
 
     if split_sheet and not picture_mask_path and not more_pictures:  # a sheet of several views: one picture per view
-        import sheet_views
-        views = sheet_views.split(pipeline, picture_path, generate.OUTPUT_DIR)
+        import data_sheet
+        views = data_sheet.split(pipeline, picture_path, generate.OUTPUT_DIR)
         if views:
             picture_path, more_pictures, mode = views[0], [(v, main_role) for v in views[1:]], "multidiffusion"
             report(f"    the picture shows {len(views)} views: all of them are used (multidiffusion)")

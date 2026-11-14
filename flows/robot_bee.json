@@ -1,0 +1,17 @@
+{
+ "name": "robot_bee",
+ "about": "The bee robot, one model per picture (each is a Blender screenshot with three views: front, left, back): 1 = grey with wireframe, 2 = colours with wireframe, 3 = colours only. The sides are said (Blender's own labels on the screenshots), the local AI called the back a front. All on this PC, seed 42. To compare what the wireframe lines do to the result.",
+ "nodes": [
+  {"id": "grey_wire", "type": "input", "label": "00 Input: 1 grey + wireframe", "files": ["pictures/robot/bee-untitled-1.jpg"]},
+  {"id": "grey_wire_sheet", "type": "data_sheet", "role": "object", "sides": "front, side, back", "in": {"pictures": "grey_wire"}},
+  {"id": "grey_wire_base", "type": "base", "seed": 42, "where": "pc", "in": {"data": "grey_wire_sheet"}},
+
+  {"id": "colour_wire", "type": "input", "label": "00 Input: 2 colours + wireframe", "files": ["pictures/robot/bee-untitled-2.jpg"]},
+  {"id": "colour_wire_sheet", "type": "data_sheet", "role": "object", "sides": "front, side, back", "in": {"pictures": "colour_wire"}},
+  {"id": "colour_wire_base", "type": "base", "seed": 42, "where": "pc", "in": {"data": "colour_wire_sheet"}},
+
+  {"id": "colour", "type": "input", "label": "00 Input: 3 colours only", "files": ["pictures/robot/bee-untitled-3.jpg"]},
+  {"id": "colour_sheet", "type": "data_sheet", "role": "object", "sides": "front, side, back", "in": {"pictures": "colour"}},
+  {"id": "colour_base", "type": "base", "seed": 42, "where": "pc", "in": {"data": "colour_sheet"}}
+ ]
+}
