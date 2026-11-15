@@ -38,7 +38,7 @@ The four ideas that make it work (rates in [REQUIREMENTS.md](REQUIREMENTS.md)):
 So an inpainting job is always the same five things: **the model, the area (3D), BEFORE, AFTER and the 2D mask per side.**
 Everything else in the project exists to make those five things well.
 
-## 2. Three ways to make those five things
+## 2. Four ways to make those five things
 
 ```
                       ┌──────────────────────── A. BLENDER ADD-ON (by hand) ───────────────────────┐
@@ -47,6 +47,8 @@ Everything else in the project exists to make those five things well.
                       │ data sheet ─► base model ─► edit (measured) ─► inpaint ─► judge            │    (section 1)
                       ├──────────────────────── C. CHARACTER PIPELINE (grid loop) ─────────────────┤
                       │ sort ─► base ─► judge every block ─► re-inpaint the bad ones ─► combine    │
+                      ├──────────────────────── D. CORRECTION LOOP ────────────────────────────────┤
+                      │ base from one view ─► fit the other views ─► judge ─► correct ─► keep      │
                       └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -93,6 +95,20 @@ sort_pictures.py  multi_image.py  grid_judge.py     refine_region.py            
 The older hand-tuned version of it is `run_pipeline.py` (parts instead of blocks, hair strands). Details:
 [FLOWS.md](FLOWS.md#2-character-pipeline).
 
+### D. The correction loop (`scripts/pipeline/correct.py`): one consistent model, corrected picture by picture
+
+```
+1 BASE ──► 2 FIT ──────────► 3 JUDGE ──────────────────► 4 CORRECT ─────────► 5 KEEP ──► next round
+one view,   every other       per view, per cell:          only that part,       the local AI sees picture,
+alone       view's camera     measured (outline, colour,   from that view's      old render, new render (asked
+(generate   on the model      detail) AND seen (local      crop at full          twice, swapped): stays only
+.py)        (fit_camera)      AI); bad only if both        resolution            if both say the new is closer
+                              say so                       (refine_region.py)    (combine_parts.py)
+```
+
+Why: views mixed into one model doubled parts (the robot arms), and the grid loop's outline-only judge kept a worse
+block. Here the base comes from one view, and the other views only correct what they show.
+
 ## 3. Where the heavy work runs
 
 ```
@@ -125,13 +141,31 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | **Making the five things** | `inpainting/make_edit.py`, `picture_check.py`, `picture_from_prompt.py`, `find_part.py`; `pipeline/data_sheet.py`, `edit_judge.py`, `pick_seed.py`, `judge.py` | ~2,300 |
 | **Running it** | `server/inpaint_server.py`, `run_job.py`, `cloud.py`, `cloud_worker.py`; `pipeline/flow.py`, `nodes_core.py` | ~2,000 |
 | **Front ends** | `blender/inpaint_addon.py`; `web/app.html`, `index.html`, `login.html` + `pipeline/flow_page.py`, `accounts.py`; `blender/pipeline_nodes.py`; `comfyui/` | ~8,700 |
-| **Character pipeline** | `pipeline/auto_pipeline.py`, `run_pipeline.py`, `sort_pictures.py`, `grid_judge.py`, `refine_region.py`, `combine_parts.py`, `hair_strands.py`, `preview.py`; `generation/organise_pictures.py` | ~2,800 |
+| **Character pipeline** | `pipeline/correct.py`, `auto_pipeline.py`, `run_pipeline.py`, `sort_pictures.py`, `grid_judge.py`, `refine_region.py`, `combine_parts.py`, `hair_strands.py`, `preview.py`; `generation/organise_pictures.py` | ~2,800 |
 | **Helpers** | `tools/render_views.py`, `render_preview.py`, `project_texture.py`, `compare_in_blender.py`; `generation/views_from_picture.py`, `views_from_video.py`, `fix_normals.py`, `run_tests.py` | ~1,700 |
 | **Kept for an open task** | `generation/try_settings.py` (requirement 2: the best settings), `tools/compare_models.sh` | ~80 |
 
 Paths are under `scripts/` unless they start with `blender/`, `web/` or `comfyui/`.
 
-## 6. The documents
+## 6. Where the results are
+
+One folder per object, everything of it inside:
+
+```
+outputs/<object>/               e.g. robot_bee, robot_hand_1, super_woman
+    v01_<title>.glb             its models as versions; the title says how each was made (PICKED = the seed judge's pick)
+    versions.md                 every version: title, when, where it came from
+    work/                       what the programs need: the flows' numbered node folders (a finished node is not
+                                made again), the correction loop's steps (work/correct/00_views ... 05_model), the
+                                pictures as TRELLIS.2 saw them (inputs/ next to each model)
+```
+
+A model is put next to `work/` as the next version when it is made (a flow and the correction loop do it themselves;
+for anything else: `python scripts/tools/arrange_outputs.py --do`). Not per object, and only there while they are
+used: `outputs/cloud/` (job packages for the uni server), `blender/` (the add-on's work folder), `server_jobs/`,
+`server_runs/`, `_unnamed/` (results of jobs whose name didn't say the object).
+
+## 7. The documents
 
 | File | What is in it |
 |---|---|

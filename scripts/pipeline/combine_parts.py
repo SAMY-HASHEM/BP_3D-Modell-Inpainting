@@ -30,12 +30,14 @@ def inside(points, box):
 
 
 def part_of(refined):
-    """The new region of a refine_region.py result: (its name, its model, its seam box)."""
+    """The new region of a refine_region.py result: (its name, its model, its seam box, the turn the box is in:
+    refine_region.py --face-camera works in the model turned to the picture's camera)."""
     work = os.path.splitext(refined)[0] + "_work"
     info = json.load(open(os.path.join(work, "refine.json")))
     low, high = (np.array(c) for c in info["inner"])
     name = os.path.basename(os.path.splitext(refined)[0])
-    return name, load_model(os.path.join(work, "zoom_out.glb")), grow_box(low, high, info["margin"] / 2)
+    return (name, load_model(os.path.join(work, "zoom_out.glb")), grow_box(low, high, info["margin"] / 2),
+            np.array(info.get("turn", np.eye(4))))
 
 
 def pack(meshes):
@@ -81,12 +83,13 @@ def main():
     taken = np.zeros(len(base.faces), bool)
     scene, report, seams = trimesh.Scene(), {}, []
     for refined in args.parts:
-        name, mesh, seam = part_of(refined)
+        name, mesh, seam, turn = part_of(refined)
         mine = inside(mesh.triangles_center, seam)
-        for other in seams:  # a part named earlier keeps its region
-            mine &= ~inside(mesh.triangles_center, other)
-        seams.append(seam)
-        taken |= inside(centers, seam)
+        mesh.apply_transform(np.linalg.inv(turn))  # into the model's own position
+        for other, other_turn in seams:  # a part named earlier keeps its region
+            mine &= ~inside(trimesh.transform_points(mesh.triangles_center, other_turn), other)
+        seams.append((seam, turn))
+        taken |= inside(trimesh.transform_points(centers, turn), seam)
         faces = np.nonzero(mine)[0]
         scene.add_geometry(mesh.submesh([faces], append=True), geom_name=name)
         report[name] = int(len(faces))

@@ -61,16 +61,22 @@ def find_in_picture(picture_path, part):
     return box
 
 
-def region_in_model(model_path, picture_path, box):
+def region_in_model(model_path, picture_path, box, camera=None):
     """Model vertices whose spot in the picture lies inside the box (through the whole depth), with the camera
-    that shows the model like the picture. Returns (vertices of the model, which are inside, camera, picture size)."""
+    that shows the model like the picture (`camera`: a fitted one, (file, name) of grid_judge.save_cameras).
+    Returns (vertices of the model, which are inside, camera, picture size)."""
     import nvdiffrast.torch as dr
     from project_texture import fit_camera, load_meshes, object_masks, to_camera, to_pixels
     _, meshes = load_meshes(model_path)
     picture = Image.open(picture_path)
-    mask = object_masks([picture])[0]
-    cam, overlap = fit_camera(dr.RasterizeCudaContext(), meshes, picture, mask)
-    print(f"    camera found (outline overlap {float(overlap):.2f})", flush=True)
+    if camera:
+        cam = {k: torch.tensor(v, device=meshes[0].verts.device, dtype=torch.float32)
+               for k, v in json.load(open(camera[0]))[camera[1]].items()}
+        print(f"    the fitted camera of {camera[1]}", flush=True)
+    else:
+        mask = object_masks([picture])[0]
+        cam, overlap = fit_camera(dr.RasterizeCudaContext(), meshes, picture, mask)
+        print(f"    camera found (outline overlap {float(overlap):.2f})", flush=True)
     verts = load_model(model_path).vertices
     u, v, _ = to_pixels(to_camera(torch.tensor(verts, dtype=torch.float32, device=meshes[0].verts.device), cam),
                         cam, *picture.size)
@@ -78,6 +84,18 @@ def region_in_model(model_path, picture_path, box):
     x0, y0, x1, y1 = box
     inside = (u >= x0) & (u <= x1) & (v >= y0) & (v <= y1)
     return verts, inside, cam, picture.size, (u, v)
+
+
+def turn_to_camera(cam, verts):
+    """The turn around the up axis (glTF +Y, through the model's middle) after which a camera at yaw 0 sees what
+    the fitted camera `cam` saw: the same matrix project_texture.rotation uses for yaw."""
+    yaw = float(cam["yaw"])
+    c, s = np.cos(yaw), np.sin(yaw)
+    middle = (verts.min(0) + verts.max(0)) / 2
+    turn = np.eye(4)
+    turn[:3, :3] = [[c, 0, s], [0, 1, 0], [-s, 0, c]]
+    turn[:3, 3] = middle - turn[:3, :3] @ middle
+    return turn
 
 
 def grow_box(low, high, share):
@@ -122,6 +140,14 @@ def main():
     parser.add_argument("--box3d", type=float, nargs=6, metavar=("X0", "Y0", "Z0", "X1", "Y1", "Z1"),
                         help="block mode (node 04 of the grid loop): the region as a box in the model's coordinates "
                              "(e.g. a bad block of grid_judge.py); `picture` is the view that sees it best")
+    parser.add_argument("--camera", nargs=2, metavar=("FILE", "NAME"),
+                        help="block mode: the picture's camera, fitted before (cameras.json and the picture's name "
+                             "in it), instead of fitting it again")
+    parser.add_argument("--face-camera", action="store_true",
+                        help="with --camera: the model is turned around its up axis so that the picture's camera "
+                             "looks at its front, and turned back at the end. TRELLIS.2 has no camera: it reads every "
+                             "picture as the front view, so a part seen from behind is regenerated as seen from "
+                             "behind only if that side faces the front. --box3d is then given in the turned model")
     parser.add_argument("--role", choices=["both", "shape", "colour"], default="both",
                         help="block mode: what the picture is for (a grey sculpt render: shape)")
     parser.add_argument("--soft", type=int, default=0,
@@ -199,7 +225,12 @@ def main():
         box = args.picture_box or find_in_picture(args.picture, args.part)
 
     print("2. The region in the model", flush=True)
-    verts, inside, cam, (width, height), (u, v) = region_in_model(args.model, args.picture, box)
+    verts, inside, cam, (width, height), (u, v) = region_in_model(args.model, args.picture, box, args.camera)
+    turn = np.eye(4)
+    if args.face_camera and args.camera:
+        turn = turn_to_camera(cam, verts)
+        verts = trimesh.transform_points(verts, turn)
+        print(f"    turned by {np.degrees(float(cam['yaw'])):.0f} degrees: the picture's side faces the front", flush=True)
     if args.box3d:
         low, high = np.array(args.box3d[:3]), np.array(args.box3d[3:])
         inside = np.all((verts >= low) & (verts <= high), axis=1)
@@ -217,6 +248,7 @@ def main():
 
     print("3. Zoom: the model and the picture cut to the region with its margin", flush=True)
     mesh = load_model(args.model)
+    mesh.apply_transform(turn)
     centers = mesh.triangles_center
     in_box = lambda points, b: np.all((points >= b[0]) & (points <= b[1]), axis=1)
     near = np.nonzero(in_box(centers, outer))[0]
@@ -263,11 +295,12 @@ def main():
     new_faces = np.nonzero(in_box(new.triangles_center, seam))[0]
     kept_faces = np.nonzero(~in_box(centers, seam))[0]
     scene = trimesh.Scene()
-    scene.add_geometry(mesh.submesh([kept_faces], append=True), geom_name="kept")
-    scene.add_geometry(new.submesh([new_faces], append=True), geom_name=f"refined_{args.part}")
+    back = np.linalg.inv(turn)  # the result in the model's own position again
+    scene.add_geometry(mesh.submesh([kept_faces], append=True).apply_transform(back), geom_name="kept")
+    scene.add_geometry(new.submesh([new_faces], append=True).apply_transform(back), geom_name=f"refined_{args.part}")
     scene.export(out)
     json.dump({"picture_box": [float(x) for x in box], "crop": crop_box, "inner": np.array(inner).tolist(),
-               "margin": args.margin, "method": args.method, "pictures": [[crop, main_role]] + more_pictures, "mode": args.mode,
+               "turn": turn.tolist(), "margin": args.margin, "method": args.method, "pictures": [[crop, main_role]] + more_pictures, "mode": args.mode,
                "texture_guidance": args.texture_guidance, "faces": args.faces, "keep_shape": args.keep_shape, "seed": args.seed, "start": args.start, "steps": args.steps,
                "faces_kept": len(kept_faces), "faces_new": len(new_faces)},
               open(os.path.join(work, "refine.json"), "w"), indent=1)

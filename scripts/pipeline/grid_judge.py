@@ -110,7 +110,7 @@ def measure(picture, render, mask):
             "cosine": round(cosine, 3), "difference": round(difference, 1), "why": "measured"}
 
 
-def ask(images, question):
+def ask(images, question, size=512):
     if BACKEND.get("kind") == "qwen3vl":
         import organise_pictures as ai
         if "model" not in BACKEND:
@@ -119,7 +119,7 @@ def ask(images, question):
         return answer
     body = {"model": JUDGE, "stream": False, "think": False, "format": "json", "keep_alive": "10m",
             "options": {"temperature": 0}, "messages": [{"role": "user", "content": question,
-                                                         "images": [encoded(i) for i in images]}]}
+                                                         "images": [encoded(i, size) for i in images]}]}
     request = urllib.request.Request(f"{OLLAMA}/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
     text = json.load(urllib.request.urlopen(request, timeout=900))["message"]["content"]

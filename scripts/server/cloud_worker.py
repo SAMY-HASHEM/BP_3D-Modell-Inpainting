@@ -80,6 +80,14 @@ def command_for(job, folder, zip_path, gpu):
         pictures = os.path.join(folder, "pictures")
         if not os.path.isdir(pictures) or not os.listdir(pictures):
             raise ValueError("no pictures in the job")
+        if job.get("loop") == "correct":  # the correction loop (scripts/pipeline/correct.py) instead of the grid loop
+            sides = job.get("sides", "")
+            if not re.fullmatch(r"[a-z, -]{0,80}", sides) or job.get("base_from", "best") not in ("best", "one", "all"):
+                raise ValueError(f"bad correction job: sides {sides!r}, base from {job.get('base_from')!r}")
+            return [sys.executable, "-u", "scripts/pipeline/correct.py", pictures, "--name", name,
+                    "--out", os.path.join(folder, name), "--rounds", str(rounds), "--threshold", str(threshold),
+                    "--base-from", job.get("base_from", "best"), "--zip",
+                    "--live", os.path.basename(os.path.normpath(folder))] + (["--sides", sides] if sides else [])
         return [sys.executable, "-u", "scripts/pipeline/auto_pipeline.py", pictures, "--name", name,
                 "--out", os.path.join(folder, name), "--rounds", str(rounds), "--threshold", str(threshold), "--zip",
                 "--live", os.path.basename(os.path.normpath(folder))]
@@ -177,7 +185,18 @@ def prepare(cloud, job_name):
 def switch_code(cloud, job_name, job):
     """The job's branch, newest commit; restarts this worker when its own file changed (the job then
     waits, queued, and is taken again by the new worker)."""
-    commit, changed = use_code(job["code"])
+    try:
+        commit, changed = use_code(job["code"])
+    except RuntimeError as e:
+        # GitHub not reachable from the server (Nov 15: "Failed to connect to github.com port 443"): a job that wants
+        # the branch the checkout is on runs with the code that is here (pulled by hand), and says so
+        git = lambda *a: subprocess.run(["git", "-C", PROJECT_DIR, *a], capture_output=True, text=True).stdout.strip()
+        if git("rev-parse", "--abbrev-ref", "HEAD") != job["code"]:
+            raise
+        commit = git("log", "-1", "--format=%h %s")
+        print(f"[{time.strftime('%H:%M')}] {e}; running with the code here: {commit}", flush=True)
+        cloud.write_status(job_name, "running", f"GitHub not reachable: the code here, {job['code']} at {commit}")
+        return
     print(f"[{time.strftime('%H:%M')}] code: {job['code']} at {commit}", flush=True)
     if changed:
         cloud.write_status(job_name, "queued", f"the worker restarts with the new code ({commit})")

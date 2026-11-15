@@ -255,9 +255,12 @@ def pipeline(args):
     """Packs all pictures (and videos) of one character into a 'pipeline' job: the whole grid loop on the server
     (scripts/pipeline/auto_pipeline.py: sort, base, judge, re-inpaint bad blocks, ...). Comes back as one zip."""
     folder = os.path.abspath(args.folder)
-    name = args.name or re.sub(r"[^A-Za-z0-9_-]+", "_", os.path.basename(folder.rstrip("/"))).strip("_")[:40]
     types = (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")
-    files = sorted(f for f in os.listdir(folder) if f.lower().endswith(types))
+    only = None
+    if os.path.isfile(folder):  # one picture (e.g. a sheet with front, side, back) instead of a folder
+        folder, only = os.path.dirname(folder), os.path.basename(folder)
+    name = args.name or re.sub(r"[^A-Za-z0-9_-]+", "_", os.path.basename(folder.rstrip("/"))).strip("_")[:40]
+    files = sorted(f for f in os.listdir(folder) if f.lower().endswith(types) and only in (None, f))
     if not files:
         raise SystemExit(f"no pictures or videos in {folder}")
     os.makedirs(os.path.join(PROJECT_DIR, "outputs", "cloud"), exist_ok=True)
@@ -266,7 +269,8 @@ def pipeline(args):
         for k, f in enumerate(files):  # simple names on the server (no spaces)
             z.write(os.path.join(folder, f), f"pictures/{k:02d}{os.path.splitext(f)[1].lower()}")
         z.writestr("job.json", json.dumps({"kind": "pipeline", "name": name, "rounds": args.rounds,
-                                           "threshold": args.threshold, "code": args.code}, indent=2))
+                                           "threshold": args.threshold, "code": args.code, "loop": args.loop,
+                                           "sides": args.sides, "base_from": args.base_from}, indent=2))
     cloud = Cloud()
     job = send_zip(cloud, path)
     print(f"Sent as {job} ({len(files)} files of {name}). Follow it with:  python3 scripts/server/cloud.py status")
@@ -292,7 +296,7 @@ def live(args):
 def inpaint(args):
     """Packs a model, an area (a box in the model's coordinates, or a Blender area .npy) and a picture into
     the same job .zip that Blender's add-on makes, and sends it."""
-    if sent_before(args.wait):
+    if not args.here and sent_before(args.wait):
         return
     import numpy as np  # only this command needs them (TRELLIS.2 environment)
     import trimesh
@@ -344,6 +348,25 @@ def inpaint(args):
             for what, file in zip(("after", "before", "mask"), side):
                 z.write(file, f"side{k + 1}_{what}.png")
         z.writestr("job.json", json.dumps(job, indent=2))
+    if args.here:  # the same job on this PC's GPU (run_job.py, as the server runs it); the results go into --wait
+        import shutil
+        import subprocess
+        if not args.wait:
+            raise SystemExit("--here needs --wait FOLDER: where the results go")
+        os.makedirs(args.wait, exist_ok=True)
+        local = os.path.join(args.wait, "job.zip")
+        shutil.move(path, local)
+        start = time.time()
+        subprocess.run([sys.executable, "-u", os.path.join(PROJECT_DIR, "scripts", "server", "run_job.py"), local], check=True)
+        results = sorted(os.path.join(args.wait, f) for f in os.listdir(args.wait) if f.startswith("job_") and f.endswith(".glb"))
+        if not results:
+            raise SystemExit("the job on this PC gave no model")
+        for result in results:
+            print(f"Result: {result}", flush=True)
+        os.remove(local)
+        json.dump({"job": "this PC", "results": results, "minutes": round((time.time() - start) / 60, 1)},
+                  open(os.path.join(args.wait, "server_job.json"), "w"), indent=1)
+        return
     cloud = Cloud()
     sent = send_zip(cloud, path)
     print(f"Sent as {sent} ({job.get('variants', 'repaint')}, seeds {job.get('seeds', [args.seed])}, grow {args.grow}, "
@@ -388,6 +411,7 @@ def edit(args):
     for side in zip(afters[1:], befores[1:], masks[1:]):
         command += ["--more-edit", *side]
     command += (["--code", args.code] if args.code else []) + (["--wait", args.wait] if args.wait else [])
+    command += ["--here"] if args.here else []
     main(command)
 
 
@@ -546,6 +570,10 @@ def main(argv=None):
     p.add_argument("--name", help="default: the folder's name")
     p.add_argument("--rounds", type=int, default=3)
     p.add_argument("--threshold", type=float, default=85)
+    p.add_argument("--loop", choices=["grid", "correct"], default="grid",
+                   help="grid: auto_pipeline.py; correct: the correction loop (correct.py), threshold 80 fits it")
+    p.add_argument("--sides", default="", help="correct: a sheet's views from left to right, e.g. \"front, side, back\"")
+    p.add_argument("--base-from", choices=["best", "one", "all"], default="best", help="correct: see correct.py")
     p.add_argument("--code", default="main", help="the branch the server runs it with (default: main, newest)")
     p.set_defaults(run=pipeline)
     p = sub.add_parser("pictures", help="the picture folders through Sciebo: up (from here) or down (to here)")
@@ -576,6 +604,7 @@ def main(argv=None):
                    help="one more side of the same change (repeat for more sides)")
     p.add_argument("--picture-mask", dest="picture_mask",
                    help="the 2D mask of the edit (white = changed); --source is then the original's render of that view")
+    p.add_argument("--here", action="store_true", help="run the job on this PC's GPU instead of sending it (needs --wait)")
     p.set_defaults(run=inpaint)
     p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch (from GitHub)")
@@ -586,6 +615,7 @@ def main(argv=None):
     p.add_argument("--details", action="store_true", help="model is the shape step's result: only its fine shape")
     p.add_argument("--colours", action="store_true", help="the last step: only the colours of the model")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch")
+    p.add_argument("--here", action="store_true", help="run it on this PC's GPU instead of the uni server (needs --wait)")
     p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")
     p.set_defaults(run=edit)
     p = sub.add_parser("wait", help="wait for a job that was sent before and download its results")
