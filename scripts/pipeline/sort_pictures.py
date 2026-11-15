@@ -16,8 +16,8 @@ Writes into --out: sorted.json (all answers + the lists), views/*.png (the cut-o
 contact.jpg (all views with the AI's tags, to check it at a glance).
 
 Usage (TRELLIS.2 environment):
-    python scripts/pipeline/sort_pictures.py "pictures/local model" --out outputs/pipeline/morrigan/01_sort
-    python scripts/pipeline/sort_pictures.py turntable.mp4 --frames 12 --out outputs/pipeline/x/00_video   # only a video's frames
+    python scripts/pipeline/sort_pictures.py "pictures/local model" --out outputs/morrigan/work/01_sort
+    python scripts/pipeline/sort_pictures.py turntable.mp4 --frames 12 --out outputs/x/work/00_video   # only a video's frames
 """
 import _paths  # noqa: F401  (the scripts of the other folders)
 

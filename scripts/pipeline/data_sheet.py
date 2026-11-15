@@ -17,8 +17,8 @@ single views and says what each one is good for.
 
 Writes into --out: sheet.json, views/*.png, contact.jpg (all views with their tags, to check at a glance).
 
-    python scripts/pipeline/data_sheet.py pictures/girl.jpg --role object --out outputs/pipeline/girl/01_sheet
-    python scripts/pipeline/data_sheet.py pictures/crown.mp4 --role part --out outputs/pipeline/girl/01_sheet_part
+    python scripts/pipeline/data_sheet.py pictures/girl.jpg --role object --out outputs/girl/work/01_sheet
+    python scripts/pipeline/data_sheet.py pictures/crown.mp4 --role part --out outputs/girl/work/01_sheet_part
 """
 import _paths  # noqa: F401  (the scripts of the other folders)
 
@@ -205,6 +205,24 @@ def choose_lists(views, role):
                 lists["base"].append(best["name"])
                 lists["why"].append(f"base {side}: {best['name']} (of {len(by_side[side])}: "
                                     + ("the main view's own sheet" if best["from"] == main["from"] else "the sharpest complete one") + ")")
+        # free views (renders from any angle, e.g. three whole pictures of a robot arm that are all "three-quarter"):
+        # the other complete views of the same thing count too, up to 4 in all. Only single pictures and the main
+        # view's own sheet (another sheet can be another version), and only views the AI calls by a word of the main
+        # view's name (a picture of a loose part alone is no view of the whole).
+        per_source = {}
+        for view in stills:
+            per_source[view["from"]] = per_source.get(view["from"], 0) + 1
+        words = lambda v: {w for w in v["what"].lower().replace("-", " ").split() if len(w) > 3 and w not in ("model", "with", "rendered")}
+        same = lambda v: not words(main) or not words(v) or bool(words(main) & words(v))
+        if main["what"]:  # the per-side picks must be the same thing as well
+            dropped = [n for n in lists["base"][1:] if not same(next(v for v in stills if v["name"] == n))]
+            lists["base"] = [n for n in lists["base"] if n not in dropped]
+            lists["why"] += [f"base: {n} left out (not called as the main view: another thing)" for n in dropped]
+        more = [v for v in stills if v["name"] not in lists["base"] and not v["cut_off"] and same(v)
+                and (per_source[v["from"]] == 1 or v["from"] == main["from"])]
+        for view in sorted(more, key=lambda v: -v["sharpness"])[:max(0, 4 - len(lists["base"]))]:
+            lists["base"].append(view["name"])
+            lists["why"].append(f"base one more view: {view['name']} ({view['side']}, complete, the same thing)")
     elif turning:  # only a video: the four quarter-turn frames build the model
         lists["base"] = list(lists["sides"])
         lists["why"].append("base: the video's four sides (no single pictures)")

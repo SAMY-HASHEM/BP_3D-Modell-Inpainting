@@ -42,7 +42,10 @@ turned in eight steps all around.
 
 How good is the 3D model? Look for defects first: missing or broken parts (hands, fingers, thin bands, hair), holes,
 melted or doubled shapes, a face that is wrong or flat, a back that doesn't fit the front, parts that float.
-Then give a score: 10 = like the pictures from every side, no defects; 1 = unusable.
+Compare part by part with the pictures: does every part have the shape, the pose and the proportions it has there (a
+gripper that is closed in the pictures and wide open or stretched in the model is a defect)?
+Then give a score: 10 = like the pictures from every side, no defects; 9 and 10 are rare; one clear defect is at most 7,
+several are at most 5; 1 = unusable.
 Answer only with JSON, no other text:
 {"defects": ["at most 4 short points, the worst first"], "score": a number from 1 to 10, "why": "a few words"}"""
 
@@ -50,21 +53,26 @@ Answer only with JSON, no other text:
 def judged_by_ai(pictures, folder):
     """The local AI's answer about one model: its pictures above, its eight renders below (on grey)."""
     from judge import ask, encoded
+    cell = 480
+    sheet = Image.new("RGB", (4 * cell, 520 + 2 * cell), (190, 190, 192))
     top = [Image.open(p).convert("RGB") for p in pictures[:4]]
-    top = [p.resize((max(1, round(p.width * 420 / p.height)), 420), Image.LANCZOS) for p in top]
-    names = sorted(n for n in os.listdir(folder) if n.startswith("view_") and n.endswith(".png"))[:8]
-    cell = 330
-    sheet = Image.new("RGB", (4 * cell, 440 + 2 * cell), (190, 190, 192))
+    height = min(500, int((sheet.width - 10 * (len(top) + 1)) / sum(p.width / p.height for p in top)))  # the row fits the sheet
+    top = [p.resize((max(1, round(p.width * height / p.height)), height), Image.LANCZOS) for p in top]
     x = (sheet.width - sum(p.width + 10 for p in top)) // 2
     for picture in top:
-        sheet.paste(picture, (max(0, x), 10))
+        sheet.paste(picture, (x, 10))
         x += picture.width + 10
-    for k, name in enumerate(names):
-        view = Image.open(os.path.join(folder, name)).convert("RGBA").resize((cell, cell), Image.LANCZOS)
-        sheet.paste(view, ((k % 4) * cell, 440 + (k // 4) * cell), view)
+    names = sorted(n for n in os.listdir(folder) if n.startswith("view_") and n.endswith(".png"))[:8]
+    for k, name in enumerate(names):  # every render cropped to the model, so it is seen as big as the cell allows
+        view = Image.open(os.path.join(folder, name)).convert("RGBA")
+        ys, xs = np.nonzero(np.asarray(view)[..., 3] > 128)
+        if len(xs):
+            view = view.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+        view.thumbnail((cell - 16, cell - 16), Image.LANCZOS)
+        sheet.paste(view, ((k % 4) * cell + (cell - view.width) // 2, 520 + (k // 4) * cell + (cell - view.height) // 2), view)
     path = os.path.join(folder, "judged.jpg")
     sheet.save(path, quality=90)
-    answer, _ = ask([encoded(path, 1536)], QUESTION)
+    answer, _ = ask([encoded(path, 1920)], QUESTION)
     return {"score": max(1, min(10, float(answer["score"]))), "defects": [str(d)[:120] for d in answer.get("defects", [])][:4],
             "why": str(answer.get("why", ""))[:160]}
 

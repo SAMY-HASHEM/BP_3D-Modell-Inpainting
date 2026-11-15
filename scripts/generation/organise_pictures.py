@@ -228,7 +228,13 @@ def object_mask(image):
     prepare = transforms.Compose([transforms.Resize((1024, 1024)), transforms.ToTensor(),
                                   transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
     with torch.no_grad():
-        pred = BACKGROUND["model"](prepare(image).unsqueeze(0).to(BACKGROUND["device"]))[-1].sigmoid()[0, 0].cpu()
+        try:
+            pred = BACKGROUND["model"](prepare(image).unsqueeze(0).to(BACKGROUND["device"]))[-1].sigmoid()[0, 0].cpu()
+        except torch.OutOfMemoryError:  # the vision AI fills a 24 GB GPU when other programs use it too: here on the CPU
+            torch.cuda.empty_cache()
+            BACKGROUND.update(model=BACKGROUND["model"].to("cpu"), device="cpu")
+            print("    no GPU memory left for the background AI: it runs on the CPU from now on", flush=True)
+            pred = BACKGROUND["model"](prepare(image).unsqueeze(0))[-1].sigmoid()[0, 0]
     return np.asarray(transforms.ToPILImage()(pred).resize(image.size)) > 127
 
 
