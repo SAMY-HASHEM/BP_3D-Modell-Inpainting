@@ -15,9 +15,11 @@
     4 CORRECT  only that part is regenerated (refine_region.py --box3d: zoomed in, inversion), from that view's
                crop at the picture's full resolution, with the camera of step 2. The model is turned so that the
                view's camera looks at its front: TRELLIS.2 reads every picture as the front view
-    5 KEEP     the local AI sees the picture's crop, the old render and the new one (asked twice, the order
-               swapped): the correction stays only if both answers say the new one is closer, and the whole
-               outline didn't get worse. The kept ones are put into ONE mesh (combine_parts.py): the next round's model
+    5 KEEP     from EVERY view that sees the corrected region, the local AI sees the picture's crop, the old render
+               and the new one (asked twice, the order swapped): the correction stays only if its own view says
+               the new one is closer both times and no other view says the old one was. The kept ones are put into
+               ONE mesh (combine_parts.py) and the whole model is judged again: if its score dropped, the round is
+               undone. Corrections that looked closer from their own view had torn the model seen from the others
 
 Every heavy step is its own process, so the GPU is free for the next one. Results in --out (default
 outputs/<name>/work/correct): 00_views ... 05_model, final.glb, summary.md.
@@ -31,6 +33,7 @@ import argparse
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -277,8 +280,11 @@ def asked(images, question):
 
 
 def step_keep(task):
-    """5 KEEP: per correction, the picture's crop, the old render and the new one -> keep.json, <part>_compare.jpg.
-    First everything is rendered, then the models leave the GPU, then the local AI is asked: both don't fit at once."""
+    """5 KEEP: per correction, from EVERY view that sees the corrected region: the picture's crop, the old render and
+    the new one -> keep.json, <part>_compare.jpg. A correction regenerates a box through the model, so it also changes
+    what the other cameras see (Nov 15: corrections that looked closer from their own view tore the chest and the
+    legs seen from the others). It stays only if its own view says "new" twice and no other view says "old" twice.
+    First everything is rendered, then the models leave the GPU, then the AI is asked: both don't fit at once."""
     import gc
     import nvdiffrast.torch as dr
     import torch
@@ -288,55 +294,78 @@ def step_keep(task):
     ctx = dr.RasterizeCudaContext()
     cams = grid_judge.load_cameras(task["cameras"])
     _, old_meshes = load_meshes(task["model"])
-    views = {v["name"]: v for v in task["views"]}
-    cache, shown = {}, {}
+    names = [v["name"] for v in task["views"] if v["name"] in cams]
+    pictures = {v["name"]: open_view(v) for v in task["views"] if v["name"] in cams}
+    masks = dict(zip(names, (m > 0.5 for m in object_masks([pictures[n] for n in names]))))
+    old = {n: renders_of(ctx, old_meshes, cams[n], pictures[n].size)[:2] for n in names}
+    iou = lambda mask, c: float((mask & c).sum() / max(1, (mask | c).sum()))
+    shown = {}
     for key, part in task["parts"].items():
         cell = part["cell"]
-        name = cell["view"]
-        if name not in cache:
-            picture = open_view(views[name])
-            cache[name] = (picture, object_masks([picture])[0] > 0.5, *renders_of(ctx, old_meshes, cams[name], picture.size)[:2])
-        picture, mask, old, old_covered = cache[name]
         _, new_meshes = load_meshes(part["model"])
-        new, new_covered, _ = renders_of(ctx, new_meshes, cams[name], picture.size)
+        sides = []
+        for n in names:
+            picture, mask = pictures[n], masks[n]
+            new, new_covered, _ = renders_of(ctx, new_meshes, cams[n], picture.size)
+            if n == cell["view"]:
+                crop = cell["crop"]
+            else:  # where the corrected box lies in this view
+                crop = list(grid_judge.box_in_picture(cell["box_model"], cams[n], *picture.size))
+            area = (slice(crop[1], crop[3]), slice(crop[0], crop[2]))
+            if crop[2] - crop[0] < 40 or crop[3] - crop[1] < 40 or (mask[area] | old[n][1][area]).sum() < MIN_PIXELS:
+                continue
+            ref, a, b = picture.crop(crop), old[n][0].crop(crop), new.crop(crop)
+            sides.append({"view": n, "own": n == cell["view"], "pictures": (ref, a, b),
+                          "before": measured(ref, a, mask[area], old[n][1][area]),
+                          "after": measured(ref, b, mask[area], new_covered[area]),
+                          "whole": [round(iou(mask, old[n][1]), 4), round(iou(mask, new_covered), 4)]})
         del new_meshes
-        crop = cell["crop"]
-        area = (slice(crop[1], crop[3]), slice(crop[0], crop[2]))
-        ref, a, b = picture.crop(crop), old.crop(crop), new.crop(crop)
-        iou = lambda c: float((mask & c).sum() / max(1, (mask | c).sum()))
-        shown[key] = {"pictures": (ref, a, b), "before": measured(ref, a, mask[area], old_covered[area]),
-                      "after": measured(ref, b, mask[area], new_covered[area]),
-                      "whole": [round(iou(old_covered), 4), round(iou(new_covered), 4)]}
+        shown[key] = sides
     del old_meshes, ctx
     gc.collect()
     torch.cuda.empty_cache()
 
     results = {}
     rng = random.Random(0)
-    for key, one in shown.items():
-        ref, a, b = one["pictures"]
-        before, after, whole = one["before"], one["after"], one["whole"]
-        answers, why = [], []
-        if task["ai"]:
-            for new_is in rng.sample(["A", "B"], 2):  # asked twice, the new one once as A and once as B
-                answer = asked([ref, b, a] if new_is == "A" else [ref, a, b], CLOSER)
-                said = str(answer.get("closer", "")).strip().upper()[:1]
-                answers.append("new" if said == new_is else "old" if said in ("A", "B") else "same")
-                why.append(str(answer.get("why", "")))
-            keep = answers == ["new", "new"]
-        else:  # no AI wanted: the lowest measured number clearly better
-            keep = (lowest(after) or 0) >= (lowest(before) or 0) + 3
-        if whole[1] < whole[0] - 0.01:  # the whole outline got worse: something outside the cell broke
-            keep = False
-        results[key] = {"keep": bool(keep), "answers": answers, "why": why, "before": before, "after": after, "outline_whole": whole}
-        print(f"  {key}: AI {answers or 'not asked'}, measured {before} -> {after}, whole outline {whole[0]} -> {whole[1]}"
-              + ("  KEPT" if keep else "  undone"), flush=True)
-        tiles = []
-        for image, label in ((ref, "picture"), (a, "before"), (b, "after: " + ("KEPT" if keep else "undone"))):
-            image = image.resize((512, round(512 * image.height / image.width)), Image.LANCZOS)
-            ImageDraw.Draw(image).text((8, 8), label, fill=(255, 255, 0))
-            tiles.append(image)
-        row(tiles).save(os.path.join(task["out"], f"{key}_compare.jpg"), quality=92)
+    for key, sides in shown.items():
+        keep, report, rows = True, [], []
+        for side in sorted(sides, key=lambda x: not x["own"]):
+            ref, a, b = side["pictures"]
+            answers, why = [], []
+            if task["ai"]:
+                for new_is in rng.sample(["A", "B"], 2):  # asked twice, the new one once as A and once as B
+                    answer = asked([ref, b, a] if new_is == "A" else [ref, a, b], CLOSER)
+                    said = str(answer.get("closer", "")).strip().upper()[:1]
+                    answers.append("new" if said == new_is else "old" if said in ("A", "B") else "same")
+                    why.append(str(answer.get("why", "")))
+                ok = answers == ["new", "new"] if side["own"] else answers != ["old", "old"]
+            else:  # no AI wanted: the lowest measured number clearly better (own view), not clearly worse (others)
+                low = lambda numbers: lowest(numbers) or 0
+                ok = low(side["after"]) >= low(side["before"]) + (3 if side["own"] else -3)
+            if side["whole"][1] < side["whole"][0] - 0.01:  # this view's whole outline got worse
+                ok = False
+            keep = keep and ok
+            report.append({"view": side["view"], "own": side["own"], "ok": bool(ok), "answers": answers, "why": why,
+                           "before": side["before"], "after": side["after"], "outline_whole": side["whole"]})
+            print(f"  {key} seen from {side['view']}{' (its own view)' if side['own'] else ''}: AI {answers or 'not asked'}, "
+                  f"measured {side['before']} -> {side['after']}, whole outline {side['whole'][0]} -> {side['whole'][1]}"
+                  + ("" if ok else "  AGAINST"), flush=True)
+            tiles = []
+            for image, label in ((ref, f"picture ({side['view']})"), (a, "before"), (b, "after: " + ("ok" if ok else "AGAINST"))):
+                image = image.resize((384, round(384 * image.height / image.width)), Image.LANCZOS)
+                ImageDraw.Draw(image).text((8, 8), label, fill=(255, 255, 0))
+                tiles.append(image)
+            rows.append(row(tiles))
+        keep = keep and any(side["own"] for side in sides)
+        results[key] = {"keep": bool(keep), "views": report}
+        print(f"  {key}: " + ("KEPT" if keep else "undone"), flush=True)
+        if rows:
+            sheet = Image.new("RGB", (max(r.width for r in rows), sum(r.height for r in rows)), (40, 40, 44))
+            y = 0
+            for r in rows:
+                sheet.paste(r, (0, y))
+                y += r.height
+            sheet.save(os.path.join(task["out"], f"{key}_compare.jpg"), quality=90)
     grid_judge.unload()
     json.dump(results, open(os.path.join(task["out"], "keep.json"), "w"), indent=1)
 
@@ -387,13 +416,14 @@ def main():
     parser.add_argument("--out", help="default: outputs/<name>/work/correct")
     parser.add_argument("--sides", default="", help="a sheet's views from left to right, e.g. \"front, side, back\"")
     parser.add_argument("--main", help="the view the base is made from (default: the data sheet's main view)")
-    parser.add_argument("--base", help="a base model that is there already (.glb): step 1 is left out")
+    parser.add_argument("--base", nargs="+", help="base models that are there already (.glb), e.g. made on the uni "
+                        "server: step 1 is left out, each one is a candidate, the best judged one is the base")
     parser.add_argument("--base-from", choices=["best", "one", "all"], default="best",
                         help="the base model: from the main view alone, from all sides mixed (multidiffusion), or "
                              "(default) both are made and judged and the better one is taken")
     parser.add_argument("--resolution", default="1536", help="the base model's resolution (default 1536)")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument("--rounds", type=int, default=3, help="rounds of corrections (0: only choose the base)")
     parser.add_argument("--cells", type=int, default=3, help="cells along a view's longer side (default 3)")
     parser.add_argument("--threshold", type=float, default=80)
     parser.add_argument("--max-parts", type=int, default=4, help="parts corrected per round, the worst first")
@@ -466,21 +496,28 @@ def main():
     path_of = lambda name: os.path.join(PROJECT, next(v["path"] for v in views if v["name"] == name))
     sides = [n for n in sheet["lists"]["base"] if n != main_view]
     candidates = {"": ("one_view_" + main_view, [script("generation/generate.py"), path_of(main_view)])}
-    if sides and not args.base and args.base_from != "one":
+    if sides and args.base_from != "one":
         candidates["_all"] = (f"{len(sides) + 1}_views_mixed", [script("generation/multi_image.py"), path_of(main_view),
                                                                *map(path_of, sides), "--mode", "multidiffusion"])
     if args.base_from == "all" and "_all" in candidates:
         del candidates[""]
+    given = {}
+    if args.base:  # base models that are there already (e.g. made on the uni server): each one is a candidate
+        candidates = {}
+        for k, path in enumerate(args.base):
+            suffix = "" if k == 0 else f"_{k + 1}"
+            title = re.sub(r"[^A-Za-z0-9+.-]+", "_", os.path.splitext(os.path.basename(path))[0]).strip("_")
+            candidates[suffix], given[suffix] = (f"given_{title}", []), path
     judged = {}
     for suffix, (title, command) in candidates.items():
         model = os.path.join(out, "01_base" + suffix, "base.glb")
-        if args.base and not os.path.isfile(model):
+        if suffix in given and not os.path.isfile(model):
             os.makedirs(os.path.dirname(model), exist_ok=True)
-            shutil.copy(args.base, model)
+            shutil.copy(given[suffix], model)
         if not run([*command, "--resolution", args.resolution, "--seed", args.seed, "--faces", "4000000", "--out", model],
                    os.path.join(out, "01_base" + suffix, "log.txt"), model):
             continue
-        show(model, "base_given" if args.base else f"base_{title}_{args.resolution}_seed{args.seed}")
+        show(model, f"base_{title}" if args.base else f"base_{title}_{args.resolution}_seed{args.seed}")
         print(f"2 FIT, the base from {title}", flush=True)
         fit = os.path.join(out, "02_fit" + suffix)
         if not step("fit", {"model": model, "views": views, "out": fit}, os.path.join(fit, "cameras.json")):
@@ -488,12 +525,12 @@ def main():
         print(f"3 JUDGE, the base from {title}", flush=True)
         result = judge(model, "r1", suffix, os.path.join(fit, "cameras.json"))
         if result:
-            judged[suffix] = (mean(result), title, model)
+            judged[suffix] = (mean(result), title, model, result)
             summary.append(f"- base from {title}: mean {mean(result):.1f}, {sum(c['bad'] for c in result['cells'] if not c.get('whole'))} bad cells")
     if not judged:
         return 1
     suffix = max(judged, key=lambda k: judged[k][0])
-    _, title, model = judged[suffix]
+    _, title, model, _ = judged[suffix]
     base = model
     if len(judged) > 1:
         print(f"  the base is the one from {title}", flush=True)
@@ -508,38 +545,40 @@ def main():
         return (f"- {label}: {len(cells)} cells, mean {np.mean(scores):.1f}, lowest {min(scores)}, "
                 f"{sum(c['bad'] for c in cells)} bad")
 
+    result = judged[suffix][3]  # the chosen base's judging: round 1 starts from it
+    tried = set()  # parts that were corrected once and not kept: not tried again the same way
     for r in range(1, args.rounds + 1):
-        print(f"3 JUDGE, round {r}", flush=True)
-        result = judge(model, f"r{r}", suffix, cameras)
-        if result is None:
-            return 1
         summary.append(line(result, f"round {r}, before"))
         chosen = []  # whole sides first, then the worst cells that don't lie in a region chosen before
+        key_of = lambda c: f"{c['view']}_side" if c.get("whole") else f"{c['view']}_c{c['cell'][0]}{c['cell'][1]}"
         for cell in sorted((c for c in result["cells"] if c["bad"]), key=lambda c: (not c.get("whole"), c["score"])):
-            if len(chosen) < args.max_parts and all(overlap_3d(cell["box_model"], other["box_model"]) < 0.3 for other in chosen):
+            if (key_of(cell) not in tried and len(chosen) < args.max_parts
+                    and all(overlap_3d(cell["box_model"], other["box_model"]) < 0.3 for other in chosen)):
                 chosen.append(cell)
-        print(f"  {sum(c['bad'] for c in result['cells'])} bad cells, {len(chosen)} are corrected", flush=True)
+        print(f"round {r}: {sum(c['bad'] for c in result['cells'] if not c.get('whole'))} bad cells, {len(chosen)} are corrected", flush=True)
         if not chosen:
             break
 
         print(f"4 CORRECT, round {r}", flush=True)
         parts = {}
         for cell in chosen:
-            key = f"{cell['view']}_side" if cell.get("whole") else f"{cell['view']}_c{cell['cell'][0]}{cell['cell'][1]}"
+            key = key_of(cell)
+            tried.add(key)
             folder = os.path.join(out, "04_parts" + suffix, f"r{r}", key)
             part = os.path.join(folder, "part.glb")
             view = next(v for v in views if v["name"] == cell["view"])
             print(f"  {key} (seen {cell['seen']}, measured {cell['measured']})", flush=True)
             command = [script("inpainting/refine_region.py"), model, os.path.join(PROJECT, view["path"]), "--box3d",
                        *[f"{x:.5f}" for x in cell["box"][0] + cell["box"][1]], "--camera", cameras, cell["view"],
-                       "--face-camera", "--margin", "0.1" if cell.get("whole") else "0.35", "--method", "inversion", "--start", "random", "--soft", "2", "--steps", "25", "--seed", args.seed,
+                       "--face-camera", "--margin", "0.1" if cell.get("whole") else "0.35", "--method", "inversion",
+                       "--start", "random", "--soft", "2", "--steps", "25", "--seed", args.seed,
                        "--texture-guidance", "3", "--faces", "1500000", "--grow", "1", "--out", part]
             if run(command, os.path.join(folder, "log.txt"), part):
                 parts[key] = {"model": part, "cell": cell}
         if not parts:
             continue
 
-        print(f"5 KEEP, round {r}", flush=True)
+        print(f"5 KEEP, round {r}: seen from every view", flush=True)
         keep_dir = os.path.join(out, "05_keep" + suffix, f"r{r}")
         if not step("keep", {"model": model, "views": views, "cameras": cameras, "parts": parts, "out": keep_dir,
                              "ai": ai}, os.path.join(keep_dir, "keep.json")):
@@ -549,20 +588,26 @@ def main():
             live(os.path.join(keep_dir, f"{k}_compare.jpg"), f"r{r}_{k}_compare.jpg")
         summary.append(f"  corrected {', '.join(parts)}; kept: {', '.join(kept) or 'none'}")
         if not kept:
-            print("  no correction was closer to its picture: the model stays", flush=True)
+            print("  no correction was closer to its picture from every view: the model stays", flush=True)
             continue
         new_model = os.path.join(out, "05_model" + suffix, f"r{r}.glb")
         if not run([script("pipeline/combine_parts.py"), model, *[parts[k]["model"] for k in kept], "--out", new_model,
                     "--single"], os.path.join(out, "05_model" + suffix, f"r{r}_log.txt"), new_model):
             return 1
-        model = new_model
-        show(model, f"corrected_round{r}_kept_{len(kept)}_of_{len(parts)}_parts")
+        # the whole model judged again: the round stays only if the whole did not get worse
+        print(f"3 JUDGE, the model after round {r}", flush=True)
+        after = judge(new_model, f"r{r}_after", suffix, cameras)
+        if after is None:
+            return 1
+        if mean(after) < mean(result) - 0.5:
+            print(f"  the whole model got worse ({mean(result):.1f} -> {mean(after):.1f}): round {r} is undone", flush=True)
+            summary.append(f"  the whole model got worse ({mean(result):.1f} -> {mean(after):.1f}): the round is undone")
+            continue
+        print(f"  the whole model: {mean(result):.1f} -> {mean(after):.1f}: kept", flush=True)
+        model, result = new_model, after
+        show(model, f"corrected_round{r}_kept_{len(kept)}_of_{len(parts)}_parts_score_{mean(after):.0f}")
 
-    if model != base:
-        print("3 JUDGE, the final model", flush=True)
-        result = judge(model, "final", suffix, cameras)
-        if result:
-            summary.append(line(result, "final"))
+    summary.append(line(result, "final"))
     shutil.copy(model, os.path.join(out, "final.glb"))
     summary.append(f"\nfinal: {os.path.relpath(model, out)}, {time.time() - start:.0f} s")
     open(os.path.join(out, "summary.md"), "w").write("\n".join(summary) + "\n")

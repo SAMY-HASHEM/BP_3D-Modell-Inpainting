@@ -95,19 +95,25 @@ sort_pictures.py  multi_image.py  grid_judge.py     refine_region.py            
 The older hand-tuned version of it is `run_pipeline.py` (parts instead of blocks, hair strands). Details:
 [FLOWS.md](FLOWS.md#2-character-pipeline).
 
-### D. The correction loop (`scripts/pipeline/correct.py`): one consistent model, corrected picture by picture
+### D. The correction loop (`scripts/pipeline/correct.py`): the best base, then corrected picture by picture
 
 ```
-1 BASE ──► 2 FIT ──────────► 3 JUDGE ──────────────────► 4 CORRECT ─────────► 5 KEEP ──► next round
-one view,   every other       per view, per cell:          only that part,       the local AI sees picture,
-alone       view's camera     measured (outline, colour,   from that view's      old render, new render (asked
-(generate   on the model      detail) AND seen (local      crop at full          twice, swapped): stays only
-.py)        (fit_camera)      AI); bad only if both        resolution            if both say the new is closer
-                              say so                       (refine_region.py)    (combine_parts.py)
+1 BASE ───────► 2 FIT ────────► 3 JUDGE ─────────────► 4 CORRECT ────────► 5 KEEP ──────────────────► next round
+two candidates:  every view's    per view, per cell:     only that part,     seen from EVERY view: stays only
+one view alone,  camera on the   measured (outline,      from that view's    if its own view says "closer" and no
+all sides mixed  model           colour, detail) AND     crop, the model     other view says "worse"; then the
+(or given ones)  (fit_camera)    seen (local AI); bad    turned to that      whole model is judged again: a round
+the better one                   only if both say so     camera              that lowers its score is undone
 ```
 
-Why: views mixed into one model doubled parts (the robot arms), and the grid loop's outline-only judge kept a worse
-block. Here the base comes from one view, and the other views only correct what they show.
+What it showed so far (bee robot, Nov 15): a real turnaround (front, side, back of one pose) mixed with multidiffusion
+gives the best base (68.7 against 52.3 from the front alone); free renders that don't fit together doubled parts
+when mixed (the robot arms), so both candidates are made and judged. Corrections judged from their own view only
+tore the model seen from the others (68.7 down to 56.0); judged from every view, the damaging ones are refused.
+Replacing a part on purpose (a new head) works; polishing a model that is roughly right is still an open experiment.
+
+On the uni server: `cloud.py pipeline <pictures> --loop correct --sides "front, side, back" --threshold 80`. Without
+Ollama there the judge is Qwen3-VL-8B (weaker). Base models made on the server can be given: `--base a.glb b.glb`.
 
 ## 3. Where the heavy work runs
 
