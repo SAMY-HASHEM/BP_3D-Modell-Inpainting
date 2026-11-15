@@ -254,7 +254,7 @@ def picture_pair(pipeline, picture_path, source_path, mask_path):
     for image, name in zip(rgba, ("inpaint", "inpaint_source")):
         crop = np.asarray(Image.fromarray(image).crop(box)).astype(np.float32) / 255
         picture = Image.fromarray((crop[..., :3] * crop[..., 3:4] * 255).astype(np.uint8))
-        picture.save(os.path.join(generate.OUTPUT_DIR, f"{name}_input.png"))
+        picture.save(os.path.join(generate.inputs_folder(), f"{name}_input.png"))
         pictures.append(picture)
     return pictures[0], pictures[1], mask.crop(box)
 
@@ -305,6 +305,7 @@ def inpaint(pipeline, model_path, picture_path, points, out, grow=2, seed=42, st
     small leftovers near new parts (the vent under the crown, horn tips beside Nefertiti's head).
     keep_shape: only the colours are regenerated; the structure and shape stay exactly the model's own
     (for parts whose shape is already right but whose colours are not, e.g. clothes)."""
+    generate.inputs_folder(out)  # what TRELLIS.2 saw of the pictures: inputs/ next to the result
     assert method in METHODS and start in ("inverted", "random") and solver in ("midpoint", "euler")
     step = getattr(inversion, solver)
     start_time = time.time()

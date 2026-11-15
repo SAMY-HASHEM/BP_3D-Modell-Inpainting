@@ -32,7 +32,7 @@ works on the same flow files and result folders as `flow.py`:
 | a click on a node | its pictures, settings, folder and model; *Open in Blender* opens the model in a new Blender window |
 | **before / after slider** | the edit node: before against the plan; a judge: the original (or the plan) against every candidate, from the same four sides, with the edit's area in red and the judge's numbers |
 | the settings of a node | changed in place and saved into the flow file (*Save settings*) |
-| **Run up to here**, *Run the whole flow*, *Stop the run* | starts `flow.py` for this flow (its output: `outputs/pipeline/<name>/run.log`); before it uses the uni server it asks |
+| **Run up to here**, *Run the whole flow*, *Stop the run* | starts `flow.py` for this flow (its output: `outputs/<name>/work/run.log`); before it uses the uni server it asks |
 | *Uni server* | the server jobs of this flow's nodes and how far they are (`cloud.py status <job> ...`); *All jobs* reads every job in the cloud, which takes over a minute |
 | **Edit by hand** (edit node) | see below |
 
@@ -114,7 +114,7 @@ the hand holds).
 ```
 
 The live version of this picture, with every node's state, time and result pictures, is written while a flow runs:
-`outputs/pipeline/<name>/flow.html` (open it in a browser; it refreshes by itself).
+`outputs/<name>/work/flow.html` (open it in a browser; it refreshes by itself).
 
 ### The nodes
 
@@ -178,7 +178,7 @@ python scripts/pipeline/flow.py flows/girl_crown.json --structure      # only re
 The server needs no new code for this: the nodes send the same jobs as before (`generate`, inpainting job zips) and
 wait for them (`cloud.py ... --wait <folder>`, `cloud.py wait <job> <folder>`).
 
-A new flow = a copy of `flows/girl_crown.json` with other files. Results: `outputs/pipeline/<name>/<node>/<hash of the
+A new flow = a copy of `flows/girl_crown.json` with other files. Results: `outputs/<name>/work/<node>/<hash of the
 settings>/`; the same settings are never computed twice.
 
 ### What published work measures (Nov 10)
@@ -270,7 +270,7 @@ build on (`0` = leave it out).
                        lower legs, thighs, feet, belly, back, butt, bust, head)
 ```
 
-| Node | Script | What it does | Output (`outputs/pipeline/<name>/<node>/r<round>/`) |
+| Node | Script | What it does | Output (`outputs/<name>/work/<node>/r<round>/`) |
 |---|---|---|---|
 | 01_sort | `scripts/pipeline/sort_pictures.py` | the vision AI (Qwen3-VL-8B) cuts sheets into views, tags side / whole / parts / back wings, boxes every part, checks every box; grey vs colour and the hair colour are **measured** | `sorted.json`, `views/`, `contact.jpg` |
 | 02_base | `scripts/generation/multi_image.py` | the whole figure: shape from the views of one version (grey turnaround), colours from the whole colour view (colour only) | `base_seed42.glb` |
@@ -396,7 +396,7 @@ the page (app.html)                         the back end (flow_page.py)         
 Add data, prompts, Run
   ├─ POST /api/upload?flow&role&name  ───►  pictures/uploads/<project>/<object|part>/
   ├─ POST /api/app/create             ───►  flows/<project>.json  (made_by: "app")
-  ├─ POST /api/run                    ───►  starts  flow.py flows/<project>.json  ───►  outputs/pipeline/<project>/...
+  ├─ POST /api/run                    ───►  starts  flow.py flows/<project>.json  ───►  outputs/<project>/work/...
   └─ GET  /api/flow?name= (every 3 s) ◄───  every node's state, pictures, model
         the steps tick off, the newest model shows in 3D
 ```

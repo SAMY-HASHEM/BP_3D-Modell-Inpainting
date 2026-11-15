@@ -3,7 +3,7 @@ the edit by hand (place the part, paint the 2D mask) and the Run buttons.
 
 A small server on this PC only (127.0.0.1). It reads what the flows in flows/ have made so far (the same nodes and
 folders as flow.py, nodes_core.py) and shows it. "Run" starts flow.py for that flow (as in a terminal, its output
-goes to outputs/pipeline/<name>/run.log); a flow.py started in a terminal is followed the same way.
+goes to outputs/<name>/work/run.log); a flow.py started in a terminal is followed the same way.
 
     python scripts/pipeline/flow_page.py            # then open http://127.0.0.1:8777
     python scripts/pipeline/flow_page.py --open     # opens the browser by itself
@@ -353,7 +353,7 @@ def start_run(file, upto=None):
     if upto is not None and upto not in nodes:
         raise ValueError(f"no node {upto}")
     python, env = project_python()
-    folder = os.path.join(core.OUTPUTS, json.load(open(path))["name"])
+    folder = core.flow_folder(json.load(open(path))["name"])
     os.makedirs(folder, exist_ok=True)
     log = os.path.join(folder, "run.log")
     command = [python, os.path.join(core.SCRIPTS, "pipeline", "flow.py"), path] + (["--upto", upto] if upto else [])

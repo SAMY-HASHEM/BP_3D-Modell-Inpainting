@@ -156,7 +156,7 @@ def settings(node, round_):
 class Pipeline:
     def __init__(self, pictures, name, round_):
         self.pictures, self.round = pictures, round_
-        self.root = os.path.join(PROJECT, "outputs", "pipeline", name)
+        self.root = os.path.join(PROJECT, "outputs", name, "work")
 
     def folder(self, node, round_=None):
         path = os.path.join(self.root, node, f"r{round_ or self.round}")
@@ -412,7 +412,7 @@ def node_99_compare(p):
 def main():
     parser = argparse.ArgumentParser(description="Many pictures of one character -> one detailed model (node pipeline)")
     parser.add_argument("pictures", help="the folder with all pictures of the character")
-    parser.add_argument("--name", required=True, help="name of the character (outputs/pipeline/<name>)")
+    parser.add_argument("--name", required=True, help="name of the character (outputs/<name>/work)")
     parser.add_argument("--round", type=int, default=max(ROUNDS))
     parser.add_argument("--only", nargs="+", help="run only these nodes (e.g. 04_refine_head 05_combine)")
     parser.add_argument("--compare-only", action="store_true", help="only build the comparison pictures")

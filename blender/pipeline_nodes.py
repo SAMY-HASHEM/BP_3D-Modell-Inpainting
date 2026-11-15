@@ -308,7 +308,7 @@ class InputNode(BPNode, bpy.types.Node):
     """00: pictures (1..n), videos, or both, of one thing: the object, or the part that is put onto it"""
     bl_idname, bl_label, bl_width_default = "BPInput", "00 Input (pictures / videos)", 280
     settings = ("flow", "path", "more")
-    flow: StringProperty(name="Name", default="girl_crown", description="the flow's name: its results are in outputs/pipeline/<name>")
+    flow: StringProperty(name="Name", default="girl_crown", description="the flow's name: its results are in outputs/<name>/work")
     path: StringProperty(name="File or folder", default="", subtype="FILE_PATH")
     more: StringProperty(name="More", default="", description="more files or folders, separated by ;")
 

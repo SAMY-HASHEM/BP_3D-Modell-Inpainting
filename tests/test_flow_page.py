@@ -31,7 +31,7 @@ class InTemporaryProject(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         root = os.path.realpath(self.temporary.name)
         self.root = root
-        patches = [mock.patch.object(core, "PROJECT", root), mock.patch.object(core, "OUTPUTS", os.path.join(root, "outputs", "pipeline")),
+        patches = [mock.patch.object(core, "PROJECT", root), mock.patch.object(core, "OUTPUTS", os.path.join(root, "outputs")),
                    mock.patch.object(page, "FLOWS", os.path.join(root, "flows")),
                    mock.patch.object(page, "HAND", os.path.join(root, "flows", "hand")),
                    mock.patch.object(page, "UPLOADS", os.path.join(root, "pictures", "uploads"))]

@@ -76,7 +76,9 @@ def main():
     parser = argparse.ArgumentParser(description="The whole grid-loop pipeline for one character")
     parser.add_argument("pictures", help="the folder with the character's pictures (and/or a video)")
     parser.add_argument("--name", required=True)
-    parser.add_argument("--out", help="default: outputs/pipeline/<name>/auto")
+    parser.add_argument("--out", help="default: outputs/<name>/work/auto")
+    parser.add_argument("--base", help="a base model that is there already (.glb): step 02 is left out. E.g. the seed "
+                        "judge's pick from one view, when the pictures are free renders that don't fit together")
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--threshold", type=float, default=85)
     parser.add_argument("--blocks", type=int, default=4, help="blocks per side of the cube (4 = 256 of 1024)")
@@ -85,7 +87,7 @@ def main():
     parser.add_argument("--zip", action="store_true", help="also a small zip of the results (for the cloud worker)")
     parser.add_argument("--live", help="the cloud job's name: send every in-between result at once")
     args = parser.parse_args()
-    out = os.path.abspath(args.out or os.path.join(PROJECT, "outputs", "pipeline", args.name, "auto"))
+    out = os.path.abspath(args.out or os.path.join(PROJECT, "outputs", args.name, "work", "auto"))
     os.makedirs(out, exist_ok=True)
     start = time.time()
     summary = {"name": args.name, "threshold": args.threshold, "rounds": []}
@@ -132,9 +134,14 @@ def main():
         only = (base["both"] + base["colour_only"] + base["shape_only"])[0]
         command = [script("generation/generate.py"), view_path(only), "--resolution", "1024", "--seed", "42",
                    "--faces", "4000000"]
-    if not run(command, os.path.join(base_dir, "log.txt"), model if "multi_image" in command[0] else None):
+    if args.base:  # the given base model instead of making one
+        os.makedirs(base_dir, exist_ok=True)
+        if not os.path.isfile(model):
+            shutil.copy(args.base, model)
+        print(f"  the given base model: {args.base}", flush=True)
+    elif not run(command, os.path.join(base_dir, "log.txt"), model if "multi_image" in command[0] else None):
         return 1
-    if "generate.py" in command[0]:  # generate.py names its result itself
+    if not args.base and "generate.py" in command[0]:  # generate.py names its result itself
         made = sorted((os.path.join(PROJECT, "outputs", f) for f in os.listdir(os.path.join(PROJECT, "outputs"))
                        if f.endswith(".glb")), key=os.path.getmtime)[-1]
         shutil.move(made, model)

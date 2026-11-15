@@ -16,7 +16,7 @@ A node whose result is already there (the same settings and inputs) is done at o
 started again. Nodes that don't depend on each other run at the same time: the server's work side by side, this
 PC's GPU work (data sheet, edit, judge) one after another.
 
-Writes outputs/pipeline/<name>/flow.html (the structure with every node's state and picture, refreshed while it
+Writes outputs/<name>/work/flow.html (the structure with every node's state and picture, refreshed while it
 runs) and flow_state.json (every node's result).
 """
 import argparse
@@ -49,7 +49,7 @@ TYPES = {
                                                        s.get("ai", True), s.get("what", ""), s.get("sides", "")), None)),
     "base": ("02 Base model", ["data"], "TRELLIS.2",
              lambda i, s, name: (core.base_model(i["data"]["data"], s.get("where", "server"), s.get("mode", "multidiffusion"),
-                                                 str(s.get("resolution", "1024")), s.get("steps", 25), s.get("seed", 42)), None)),
+                                                 str(s.get("resolution", "1024")), s.get("steps", 25), s.get("seed", 42), s.get("colours", "all"), s.get("view")), None)),
     "pick_seed": ("02b Pick seed", ["data", "candidates"], "this PC: measured",
                   lambda i, s, name: (core.pick_seed(i["data"]["data"], models_of(i["candidates"])), None)),
     "edit": ("03 Edit", ["model", "part", "object"], "this PC: measured",
@@ -102,7 +102,7 @@ class Flow:
         self.file = json.load(open(path))
         self.name = self.file["name"]
         self.nodes = {n["id"]: n for n in self.file["nodes"]}
-        self.folder = os.path.join(core.OUTPUTS, self.name)
+        self.folder = core.flow_folder(self.name)
         os.makedirs(self.folder, exist_ok=True)
         self.state = {key: {"status": "waiting", "outputs": None, "folder": None, "note": ""} for key in self.nodes}
         self.lock, self.gpu = threading.Lock(), threading.Lock()
@@ -210,6 +210,9 @@ class Flow:
         print(f"flow {self.name}: {sum(self.state[k]['status'] == 'done' for k in keys)} of {len(keys)} nodes done"
               + (f", failed: {failed}" if failed else "") + (f", not reached: {left}" if left else ""), flush=True)
         print(f"Result: {os.path.join(self.folder, 'flow.html')}", flush=True)
+        # the flow's models as versions with a title in outputs/<object>, next to its work folder
+        subprocess.run([sys.executable, os.path.join(core.SCRIPTS, "tools", "arrange_outputs.py"), "--do"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return not failed
 
     # ---------------------------------------------------------------- the structure picture

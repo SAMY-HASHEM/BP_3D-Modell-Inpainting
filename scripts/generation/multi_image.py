@@ -28,7 +28,7 @@ import torch
 from PIL import Image, ImageOps
 from torch import nn
 
-from generate import DEFAULT_STEPS, OUTPUT_DIR, PIPELINE_TYPES, crop_to_object, load_pipeline, picture_name, save_glb
+from generate import DEFAULT_STEPS, OUTPUT_DIR, PIPELINE_TYPES, crop_to_object, inputs_folder, load_pipeline, picture_name, save_glb
 
 MODES = ["multidiffusion", "stochastic"]
 
@@ -191,7 +191,7 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     for i, path in enumerate(args.images, start=1):
         image = pipeline.preprocess_image(crop_to_object(pipeline, Image.open(path)))
-        image.save(os.path.join(OUTPUT_DIR, f"{name}_input{i}.png"))
+        image.save(os.path.join(inputs_folder(args.out), f"{name}_input{i}.png"))
         images.append(image)
     if args.mirror:
         # every picture also flipped: TRELLIS.2 places a flipped picture's object flipped too, so averaging

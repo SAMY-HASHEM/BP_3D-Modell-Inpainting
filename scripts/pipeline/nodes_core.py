@@ -14,7 +14,7 @@ import os
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 SCRIPTS = os.path.join(PROJECT, "scripts")
-OUTPUTS = os.path.join(PROJECT, "outputs", "pipeline")
+OUTPUTS = os.path.join(PROJECT, "outputs")  # outputs/<object>/: its models as versions, and work/ (what the programs need)
 PICTURE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
 VIDEO_TYPES = (".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")
 # the same parts as scripts/pipeline/sort_pictures.py (PARTS)
@@ -34,9 +34,14 @@ def stamp(path):
         return [path, None]
 
 
+def flow_folder(name):
+    """Where a flow works: outputs/<name>/work (its models are put next to it as versions, arrange_outputs.py)."""
+    return os.path.join(OUTPUTS, name, "work")
+
+
 def node_folder(name, node, settings):
     digest = hashlib.sha1(json.dumps(settings, sort_keys=True, default=str).encode()).hexdigest()[:8]
-    folder = os.path.join(OUTPUTS, name, node, digest)
+    folder = os.path.join(flow_folder(name), node, digest)
     os.makedirs(folder, exist_ok=True)
     json.dump(settings, open(os.path.join(folder, "settings.json"), "w"), indent=1, default=str)
     return folder
@@ -284,21 +289,31 @@ def sheet_views(data, which):
     return [project_path(paths[name]) for name in sheet["lists"][which]]
 
 
-def base_model(data, where="server", mode="multidiffusion", resolution="1024", steps=25, seed=42):
-    """02: the object's model from the views its data sheet chose (the main view first)."""
+def base_model(data, where="server", mode="multidiffusion", resolution="1024", steps=25, seed=42, colours="all", view=None):
+    """02: the object's model from the views its data sheet chose (the main view first).
+    colours = "main": only the main view gives the colours, the other views the shape only (every extra view makes
+    the colours softer, multidiffusion averages them); "all": every view gives both."""
     views = sheet_views(data, "base")
+    if view is not None:  # only this one of the sheet's views (1 = the main view): free renders from any angle don't
+        views = views[int(view) - 1:int(view)]  # fit together, mixed they doubled a robot arm's tool head (Nov 15)
+        if not views:
+            raise ValueError(f"the data sheet has no view {view}")
+    main_only = colours == "main" and len(views) > 1
     folder = node_folder(data["name"], "02_base", {"views": [stamp(v) for v in views], "where": where, "mode": mode,
-                                                   "resolution": resolution, "steps": steps, "seed": seed})
+                                                   "resolution": resolution, "steps": steps, "seed": seed,
+                                                   **({"colours": "main"} if main_only else {})})
     like = {"name": data["name"], "kind": "base", "label": f"base seed {seed}"}
     if where == "server":
         done = os.path.join(folder, "server_job.json")
-        command = py("server/cloud.py", "generate", *views, "--resolution", resolution, "--steps", steps, "--seed", seed,
+        command = py("server/cloud.py", "generate", *(views[:1] + ["--shape-only", *views[1:]] if main_only else views),
+                     "--resolution", resolution, "--steps", steps, "--seed", seed,
                      *(["--mode", mode] if len(views) > 1 else []), "--wait", folder)
         return {"folder": folder, "steps": [(command, "02 base (uni server)", done)],
                 "outputs": {"models_from": done, "model_like": like}}
     out = os.path.join(folder, "base.glb")
     script = "generation/multi_image.py" if len(views) > 1 else "generation/generate.py"
-    command = py(script, *views, "--resolution", resolution, "--steps", steps, "--seed", seed, "--out", out,
+    command = py(script, *(views[:1] + ["--shape-only", *views[1:]] if main_only else views),
+                 "--resolution", resolution, "--steps", steps, "--seed", seed, "--out", out,
                  *(["--mode", mode] if len(views) > 1 else []))
     return {"folder": folder, "steps": [(command, "02 base (this PC)", out)], "outputs": {"model": {**like, "glb": out}}}
 
@@ -365,15 +380,15 @@ def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit=
 def inpaint_step(model, edit_, step="shape", seeds=(1,), where="server"):
     """04: one step of the inpainting, always in the order shape -> details -> colours, each from the result of the
     one before. Several seeds give several candidates in one server job (TRELLIS.2 is loaded once)."""
-    if where != "server":
-        raise ValueError("the inpainting steps run on the uni server for now (where = server)")
+    here = where == "pc"  # the same job on this PC's GPU (cloud.py edit --here)
     seeds = [int(s) for s in seeds]
     folder = node_folder(edit_["name"], f"04_inpaint_{step}", {"model": stamp(model["glb"]), "seeds": seeds,
-                                                                "edit": stamp(os.path.join(edit_["folder"], "edit.json"))})
+                                                                "edit": stamp(os.path.join(edit_["folder"], "edit.json")),
+                                                                **({"where": "pc"} if here else {})})
     done = os.path.join(folder, "server_job.json")
     command = py("server/cloud.py", "edit", edit_["folder"], model["glb"], "--seeds", *seeds, "--wait", folder,
-                 *({"shape": [], "details": ["--details"], "colours": ["--colours"]}[step]))
-    return {"folder": folder, "steps": [(command, f"04 inpaint: {step} (uni server)", done)],
+                 *({"shape": [], "details": ["--details"], "colours": ["--colours"]}[step]), *(["--here"] if here else []))
+    return {"folder": folder, "steps": [(command, f"04 inpaint: {step} ({'this PC' if here else 'uni server'})", done)],
             "outputs": {"models_from": done, "model_like": {"name": edit_["name"], "kind": step, "label": step}}}
 
 

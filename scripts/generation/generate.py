@@ -128,11 +128,22 @@ def crop_to_object(pipeline, image):
     return upscale_small(image.crop(box))
 
 
+INPUTS = {}  # "folder": where the pictures as TRELLIS.2 saw them are saved (set by --out: next to the model)
+
+
+def inputs_folder(out=None):
+    """The folder for what TRELLIS.2 saw of every picture: inputs/ next to the model `out`, else outputs/inputs."""
+    if out:
+        INPUTS["folder"] = os.path.join(os.path.dirname(os.path.abspath(out)), "inputs")
+    folder = INPUTS.get("folder") or os.path.join(OUTPUT_DIR, "inputs")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
 def prepare_image(pipeline, image_path, name):
     """Removes the background and saves what TRELLIS.2 will see as <name>_input.png."""
     image = pipeline.preprocess_image(crop_to_object(pipeline, Image.open(image_path)))
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    image.save(os.path.join(OUTPUT_DIR, f"{name}_input.png"))
+    image.save(os.path.join(inputs_folder(), f"{name}_input.png"))
     return image
 
 
@@ -204,6 +215,7 @@ def main():
     parser.add_argument("--max-tokens", type=int,
                         help="limit for the fine stage (TRELLIS.2 default 49152); lower it when a big object runs "
                              "out of GPU memory at 1536: the resolution then drops a little instead")
+    parser.add_argument("--out", help="the model's file, for one picture (default: outputs/<name>.glb)")
     parser.add_argument("--faces", type=int, default=1_000_000,
                         help="faces in the saved model (default 1,000,000); more keeps finer detail, e.g. 4000000")
     args = parser.parse_args()
@@ -250,6 +262,7 @@ def make_model(pipeline, path, resolution, args):
         name += f"_faces{args.faces // 1000}k"
 
     print("Removing the background...")
+    inputs_folder(getattr(args, "out", None))
     image = prepare_image(pipeline, path, name)
 
     print(f"Generating the 3D model at {resolution} with {args.steps} steps per stage...")
@@ -259,7 +272,7 @@ def make_model(pipeline, path, resolution, args):
 
     print("Saving as .glb...")
     start = time.time()
-    glb_path = os.path.join(OUTPUT_DIR, f"{name}.glb")
+    glb_path = getattr(args, "out", None) or os.path.join(OUTPUT_DIR, f"{name}.glb")
     save_glb(mesh, resolution, glb_path, faces=args.faces)
     del mesh
     print(f"    saved in {time.time() - start:.0f} s")
