@@ -16,6 +16,42 @@ no uni server, no cloud. The add-on starts and stops the server by itself.
 
 For the uni GPU server see [HOW-TO.md](#2-the-uni-server-from-anywhere).
 
+### A computer without a GPU: everything on the uni server
+
+A weak laptop only sends the data and shows the result: the whole flow (the data sheet, the base model, the edit, the
+inpainting, the judges) runs on the server, as one job.
+
+```
+THE LAPTOP (any Python 3, no GPU)          SCIEBO CLOUD                    THE UNI SERVER
+─────────────────────────────────          ────────────                    ──────────────
+flow_page.py --open  →  /app                                               cloud_worker.py (keeps running)
+  data + words → the plan → Run  ── <job>.zip (flow + files) ──────────►   run_flow.py: flow.py, every node here
+  the city, the chat           ◄── <job>__live_state.json (every 15 s) ──  each node's state, note, minutes
+  pictures, the last model     ◄── <job>__live_<file> ─────────────────
+  Stop                          ── <job>__stop ─────────────────────────►  ends the flow
+```
+
+On the laptop, once: get the project (`git clone`, or *BP Setup* in Blender), then `python3 scripts/server/cloud.py setup`
+(the Sciebo login). Every time: `python3 scripts/pipeline/flow_page.py --open`, and in the plan leave *Where the work
+runs* on **everything on the uni server**. The page's server needs no AI libraries.
+
+On the server, once after this was added (Nov 16): `git pull`, start the worker again, and see what it has:
+
+```
+python3 scripts/server/cloud.py check        # from any computer: Blender? the vision AI? the picture AI? ...
+bash install_server_extras.sh                # on the server: what was missing (Blender, Ollama, UniRig, the mask AI)
+```
+
+What a flow needs there besides TRELLIS.2: **Blender** (every picture of a model: the edit and the judges; without it
+only a base model can be made), a **vision AI** (Ollama with qwen3.6:27b; without it the data sheet takes every
+picture as a front view and the judges only measure), and for a part from words the **picture AI** (ComfyUI with
+Qwen-Image-Edit; not installed by the script). Tried on Nov 16 with this PC standing in for the server, on a cloud
+folder of its own: a small project went out, ran, came back with its pictures and model, and Stop ended it. On the
+real server it was not run yet. A test worker on another folder: `INPAINTING_CLOUD_FOLDER=inpainting-jobs-test`.
+
+Understanding a request on a laptop: without the local AI the page uses simple rules (the first data is the model,
+what comes after it the new part); the plan can always be changed by hand.
+
 ### Once: setup
 
 1. The project: `git clone https://git.uni-due.de/students/bp_samy_hashem.git ~/inpainting-3D`, then
