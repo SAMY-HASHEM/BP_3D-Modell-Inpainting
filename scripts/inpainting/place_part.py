@@ -108,6 +108,158 @@ def old_part(mesh, mask, origin, right, toward, size, per_pixel, voxel, behind):
     return chosen
 
 
+def old_part_by_word(mesh, word, folder):
+    """Which faces are the part that goes, found by its name ("axe") on pictures from eight sides: the mask AI
+    (find_part.py: Grounding DINO + SAM 2.1, its own environment) marks it in every picture, and every face is voted on
+    by the pictures that see it. For one fused mesh (what TRELLIS.2 makes), where the part is no piece of its own."""
+    os.makedirs(folder, exist_ok=True)
+    whole = os.path.join(folder, "model.glb")
+    trimesh.Scene([mesh]).export(whole)
+    if not os.path.isfile(os.path.join(folder, "render", "views.json")):
+        subprocess.run([BLENDER, "-b", "--python", os.path.join(PROJECT, "scripts/tools/render_views.py"), "--", os.path.abspath(whole),
+                        os.path.abspath(os.path.join(folder, "render")), "--turn", "45", "--samples", "16"], check=True, stdout=subprocess.DEVNULL)
+    info = json.load(open(os.path.join(folder, "render", "views.json")))
+    for k in range(8):
+        on_grey(Image.open(os.path.join(folder, "render", f"view_{k}.png")).convert("RGBA")).save(os.path.join(folder, f"view_{k}.png"))
+    # several names for the same thing, with commas ("axe, battle axe, weapon"): the mask AI often boxes the whole
+    # figure that holds the thing (7 of 8 pictures of the warrior for "axe"). A mask over more than 40 % of the object in
+    # its picture is the whole thing and does not vote; per picture the first name with a usable mask counts
+    masks, names = {}, [w.strip() for w in word.split(",") if w.strip()]
+    for n, name in enumerate(names):
+        sub = os.path.join(folder, f"word_{n}")
+        os.makedirs(sub, exist_ok=True)
+        for k in range(8):
+            if not os.path.exists(os.path.join(sub, f"view_{k}.png")):
+                os.symlink(os.path.abspath(os.path.join(folder, f"view_{k}.png")), os.path.join(sub, f"view_{k}.png"))
+        json.dump({"word": name, "views": [{"picture": f"view_{k}.png", "clicks": []} for k in range(8)]}, open(os.path.join(sub, "views.json"), "w"))
+        if not os.path.isfile(os.path.join(sub, "masks.npz")):
+            subprocess.run([os.path.join(PROJECT, "conda/envs/mask-ai/bin/python"), os.path.join(PROJECT, "scripts/inpainting/find_part.py"),
+                            os.path.abspath(sub)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        found = np.load(os.path.join(sub, "masks.npz"))
+        for k in range(8):
+            if f"view_{k}" in found.files and f"view_{k}" not in masks:
+                there = np.asarray(Image.open(os.path.join(folder, "render", f"view_{k}.png")).convert("RGBA").resize(found[f"view_{k}"].shape[::-1]))[..., 3] > 128
+                if 0.005 < found[f"view_{k}"].sum() / max(1, there.sum()) < 0.4:
+                    masks[f"view_{k}"] = found[f"view_{k}"]
+    size, per_pixel, origin = info["size"], info["span"] / info["size"], to_gltf(np.array(info["center"]))
+    voxel = np.ptp(mesh.vertices, 0).max() / GRID
+    centres = mesh.triangles_center
+    yes, seen_by = np.zeros(len(centres)), np.zeros(len(centres))
+    for k in range(8):
+        if f"view_{k}" not in masks:
+            continue
+        mask = np.asarray(Image.fromarray(masks[f"view_{k}"].astype(np.uint8) * 255).resize((size, size), Image.NEAREST)) > 127
+        right, toward = (to_gltf(np.array(info["views"][k][key])) for key in ("right", "toward"))
+        u, v = pixels(centres, origin, right, size, per_pixel)
+        inside = (u >= 0) & (u < size) & (v >= 0) & (v < size)
+        depth = (centres - origin) @ toward
+        nearest = np.full((size, size), -np.inf)
+        order = np.argsort(depth[inside])
+        nearest[v[inside][order], u[inside][order]] = depth[inside][order]
+        seen = inside.copy()
+        seen[inside] = depth[inside] >= nearest[v[inside], u[inside]] - 0.75 * voxel
+        seen_by += seen
+        yes[seen] += mask[v[seen], u[seen]]
+    print(f"    “{word}” was found in {len(masks)} of 8 pictures: {sorted(masks)}", flush=True)
+    assert masks, f"the mask AI found no {word} that is not the whole object: other words"
+    voted = seen_by > 0
+    chosen = np.zeros(len(centres), bool)
+    chosen[voted] = yes[voted] / seen_by[voted] >= 0.5
+    sure = voted & (yes / np.maximum(seen_by, 1) >= 0.8)  # marked in nearly every picture that sees it
+    if (~voted).any() and voted.any():  # a face no picture sees (in a groove): as the nearest face that was seen
+        chosen[~voted] = chosen[voted][cKDTree(centres[voted]).query(centres[~voted])[1]]
+    # decided per small cube of space, not per face: a cube whose faces were mostly chosen goes as a whole, and only the
+    # big connected groups of such cubes count. Face by face the part stayed speckled: every second face of the axe was
+    # left (a face seen from two sides and marked in one of them, faces of the inner side no picture sees)
+    from scipy import ndimage
+    cells = 160
+    low, span = centres.min(0), np.ptp(centres, 0).max() * 1.0001
+    cell = np.minimum(((centres - low) / span * cells).astype(int), cells - 1)
+    flat = (cell[:, 0] * cells + cell[:, 1]) * cells + cell[:, 2]
+    area = mesh.area_faces
+    share = np.bincount(flat, weights=area * chosen, minlength=cells ** 3) / np.maximum(np.bincount(flat, weights=area, minlength=cells ** 3), 1e-12)
+    cube = ndimage.binary_closing((share > 0.3).reshape(cells, cells, cells), iterations=1)
+    groups, count = ndimage.label(cube, structure=np.ones((3, 3, 3)))
+    if count:
+        sizes = ndimage.sum(cube, groups, range(1, count + 1))
+        cube = np.isin(groups, 1 + np.nonzero(sizes >= 0.1 * sizes.max())[0])
+    cube = ndimage.binary_dilation(cube, structure=np.ones((3, 3, 3)))  # and its rim: thin slivers stayed at the part's edges
+    chosen = cube.reshape(-1)[flat]
+    # by colour too: the cubes around an axe's shaft also hold the fingers that close around it, and cutting them out
+    # left a torn hole in the fist that the inpainting did not close (the warrior, Nov 16). The part's own colours are
+    # those of the faces marked in nearly every picture; a chosen face with none of them stays with the model
+    texture = getattr(mesh.visual.material, "baseColorTexture", None)
+    if texture is not None and (sure & chosen).sum() > 500:
+        image = np.asarray(texture.convert("RGB"), float)
+        uv = np.asarray(mesh.visual.uv)[mesh.faces].mean(1)
+        colour = image[np.clip(((1 - uv[:, 1]) * image.shape[0]).astype(int), 0, image.shape[0] - 1),
+                       np.clip((uv[:, 0] * image.shape[1]).astype(int), 0, image.shape[1] - 1)]
+        own = colour[sure & chosen]
+        own = own[np.random.default_rng(0).choice(len(own), min(20000, len(own)), replace=False)]
+        centres_ = own[np.linspace(0, len(own) - 1, 3).astype(int)].copy()
+        for _ in range(12):  # three main colours of the part
+            nearest_ = np.linalg.norm(own[:, None] - centres_[None], axis=2).argmin(1)
+            centres_ = np.array([own[nearest_ == k].mean(0) if (nearest_ == k).any() else centres_[k] for k in range(3)])
+        centres_ = centres_[np.bincount(nearest_, minlength=3) >= 0.08 * len(own)]
+        away = np.linalg.norm(colour[:, None] - centres_[None], axis=2).min(1)
+        stays = chosen & (away > 55)
+        print(f"    by colour: {int(stays.sum()):,} chosen faces are not the part's colour (the hand around it): they stay", flush=True)
+        chosen &= ~stays
+    print(f"    the old part: {int(chosen.sum()):,} of the model's {len(centres):,} faces", flush=True)
+    return chosen
+
+
+def profile(points, axis, slices=60):
+    """Along a long thing: per slice how far it reaches from its middle line (None where it is empty)."""
+    middle = points.mean(0)
+    along = (points - middle) @ axis
+    away = np.linalg.norm((points - middle) - along[:, None] * axis, axis=1)
+    edges = np.linspace(along.min(), along.max(), slices + 1)
+    index = np.clip(np.digitize(along, edges) - 1, 0, slices - 1)
+    reach = np.array([np.percentile(away[index == k], 90) if (index == k).sum() > 20 else np.nan for k in range(slices)])
+    return (edges[:-1] + edges[1:]) / 2, reach, middle
+
+
+def placed_in_hand(part, old_points, rest_points, hand, voxel, factor=1.0):
+    """A held thing (a sword) put into the hand that held the old one (an axe): the 4 x 4 matrix.
+    The grip lies on the old thing's shaft where the hand closes around it, so the fist that held the shaft holds the
+    grip; the blade points to where the old thing's head was; the grip is as thick as the shaft was there (x factor).
+    hand: the hand's joint from the skeleton (rig_parts.py), in the model's coordinates."""
+    cloud = trimesh.sample.sample_surface(part, 200_000, seed=0)[0]
+    (long, wide, thin), _ = axes_of(cloud)
+    at, reach, middle = profile(cloud, long)
+    inner = np.arange(len(at))[4:-4]
+    # the grip: the thinnest place that has something thicker on both sides (the pommel and the guard); a blade's tip has not
+    grips = [k for k in inner if np.isfinite(reach[k]) and np.nanmax(reach[:k]) > 1.3 * reach[k] < np.nanmax(reach[k + 1:]) / 1.3]
+    grip = min(grips, key=lambda k: reach[k]) if grips else int(inner[np.nanargmin(reach[inner])])
+    blade = 1.0 if (at[-1] - at[grip]) > (at[grip] - at[0]) else -1.0  # the long end from the grip is the blade
+    grip_point, grip_radius = middle + at[grip] * long, float(reach[grip])
+    # where the hand closes around the old thing: the model's own surface right next to it, near the hand's joint.
+    # The old thing as it was marked is often only its head (an axe's blade; the shaft hides in the fist), so the
+    # direction is from the fist to the old thing's middle, not the old thing's own longest side
+    hand = np.asarray(hand, float)
+    touching = (cKDTree(old_points).query(rest_points, distance_upper_bound=2.5 * voxel)[0] < np.inf) & \
+               (np.linalg.norm(rest_points - hand, axis=1) < 10 * voxel)
+    fist = rest_points[touching].mean(0) if touching.sum() > 30 else hand
+    out = old_points.mean(0) - fist
+    out /= np.linalg.norm(out)
+    flat = axes_of(old_points)[0][2]
+    flat = flat - (flat @ out) * out
+    flat /= np.linalg.norm(flat)
+    far = float(np.percentile((old_points - fist) @ out, 99))  # the blade's tip comes where the old thing ended
+    scale = factor * far / abs((at[-1] if blade > 0 else at[0]) - at[grip])
+    target = np.stack([out, np.cross(flat, out), flat], 1)
+    own = np.stack([blade * long, np.cross(thin, blade * long), thin], 1)
+    turn = target @ own.T
+    matrix = np.eye(4)
+    matrix[:3, :3] = scale * turn
+    matrix[:3, 3] = fist - scale * turn @ grip_point
+    shaft_radius = float("nan")
+    print(f"    the new part in the hand: its grip ({2 * grip_radius * scale / voxel:.1f} voxels thick, the shaft was "
+          f"{2 * shaft_radius / voxel:.1f}) where the hand held the old one, {np.ptp(cloud @ long) * scale / voxel:.0f} voxels long", flush=True)
+    return matrix
+
+
 def axes_of(points):
     """A point cloud's own three directions, the longest first, and how far it reaches along each."""
     middle = points.mean(0)
@@ -183,6 +335,10 @@ def finish(args):
     area = np.load(os.path.join(args.out, "area.npy"))
     near = cKDTree(area).query(result.triangles_center, distance_upper_bound=0.6 * made["voxel"])[0] < np.inf
     new = result.submesh([np.nonzero(near)[0]], append=True)
+    # the model's own surface that was made again (--adjust: the fist around a new grip) goes: the result has it anew
+    again = cKDTree(area).query(rest.triangles_center, distance_upper_bound=0.6 * made["voxel"])[0] < np.inf
+    if again.any():
+        rest = rest.submesh([np.nonzero(~again)[0]], append=True)
     scene = trimesh.Scene()
     scene.add_geometry(rest, geom_name="kept")
     scene.add_geometry(new, geom_name="new_part")
@@ -202,18 +358,27 @@ def main():
                         "TRELLIS.2: the margin around them, as a share of their size (0.5: they fill half of the cube; 0: the whole model)")
     parser.add_argument("--size", type=float, default=1.0, help="the new part bigger or smaller than the picture AI painted it")
     parser.add_argument("--sides", type=int, choices=[4, 8], default=4, help="8: also the four sides in between (45 degrees)")
+    parser.add_argument("--old", metavar="WORD", help="without --edit: the old part by its name (\"axe\"), found on pictures "
+                        "from eight sides by the mask AI. For one fused mesh, where the part is no piece of its own")
+    parser.add_argument("--hand", nargs=2, metavar=("RIG_JSON", "PART"), help="with --old: the new part is a held thing; its grip "
+                        "goes into this hand of the skeleton (rig_parts.py's json, e.g. hand_right), where it held the old one")
+    parser.add_argument("--adjust", type=float, default=0.0, metavar="VOXELS", help="the model's own surface this near to the new "
+                        "part is made again too (a fist around a new grip), and the cut edges where the old part was")
+    parser.add_argument("--front", type=int, default=0, help="without --edit: which straight view is the model's front (0: as TRELLIS.2 puts it)")
     parser.add_argument("--finish", metavar="RESULT", help="after the inpainting: its result's new part into the whole model")
     parser.add_argument("--final", help="--finish: the finished model's file")
     args = parser.parse_args()
     if args.finish:
         return finish(args)
     os.makedirs(args.out, exist_ok=True)
-    made = json.load(open(os.path.join(args.edit, "edit.json")))
-    info = json.load(open(os.path.join(args.edit, "views.json")))
-    side, size = made["side"], info["size"]
-    per_pixel = info["span"] / size
-    origin = to_gltf(np.array(info["center"]))
-    right, toward = (to_gltf(np.array(info["views"][side][k])) for k in ("right", "toward"))
+    made, side = {}, args.front
+    if args.edit:
+        made = json.load(open(os.path.join(args.edit, "edit.json")))
+        info = json.load(open(os.path.join(args.edit, "views.json")))
+        side, size = made["side"], info["size"]
+        per_pixel = info["span"] / size
+        origin = to_gltf(np.array(info["center"]))
+        right, toward = (to_gltf(np.array(info["views"][side][k])) for k in ("right", "toward"))
 
     mesh, part = one_mesh(args.model), one_mesh(args.part)
     labels = pieces_of(part)
@@ -221,11 +386,20 @@ def main():
     if (sizes < 0.05 * sizes.max()).any():  # loose bits beside the part (a piece of its shadow in the picture)
         part = part.submesh([np.nonzero(sizes[labels] >= 0.05 * sizes.max())[0]], append=True)
         print(f"    the new part's model: {int((sizes < 0.05 * sizes.max()).sum())} loose piece(s) left out", flush=True)
-    front_mask = np.asarray(Image.open(os.path.join(args.edit, "mask.png")).convert("L")) > 127
-    goes = old_part(mesh, front_mask, origin, right, toward, size, per_pixel, np.ptp(mesh.vertices, 0).max() / GRID, args.behind)
+    if args.edit:
+        front_mask = np.asarray(Image.open(os.path.join(args.edit, "mask.png")).convert("L")) > 127
+        goes = old_part(mesh, front_mask, origin, right, toward, size, per_pixel, np.ptp(mesh.vertices, 0).max() / GRID, args.behind)
+    else:
+        goes = old_part_by_word(mesh, args.old, os.path.join(args.out, "find"))
     old, rest = mesh.submesh([np.nonzero(goes)[0]], append=True), mesh.submesh([np.nonzero(~goes)[0]], append=True)
     old_points = trimesh.sample.sample_surface(old, 200_000, seed=0)[0]
-    part.apply_transform(placed(part, old_points, front_mask, origin, right, toward, size, per_pixel, args.size))
+    if args.hand:
+        rig = json.load(open(args.hand[0]))  # a part (hand_right) or one bone (arm_right_4: the wrist)
+        joint = np.array((rig["parts"].get(args.hand[1]) or rig["bones"][args.hand[1]])["joint"])
+        part.apply_transform(placed_in_hand(part, old_points, trimesh.sample.sample_surface(rest, 400_000, seed=0)[0], joint,
+                                            np.ptp(mesh.vertices, 0).max() / GRID, args.size))
+    else:
+        part.apply_transform(placed(part, old_points, front_mask, origin, right, toward, size, per_pixel, args.size))
     new_points = trimesh.sample.sample_surface(part, 300_000, seed=0)[0]
     both = np.concatenate([new_points, old_points])
     rest.export(os.path.join(args.out, "rest_whole.glb"))
@@ -306,6 +480,11 @@ def main():
     occupied[index[:, 0], index[:, 1], index[:, 2]] = True
     index = cells(grid)
     kept = occupied[index[:, 0], index[:, 1], index[:, 2]] & (near_new | near_old)
+    if args.adjust:  # the model's own surface next to the new part and at the cut edges: made again, so it joins
+        again = (cKDTree(new_points).query(grid, distance_upper_bound=args.adjust * voxel)[0] < np.inf) | \
+                (cKDTree(old_points).query(grid, distance_upper_bound=voxel)[0] < np.inf)
+        near_old |= kept & again
+        kept &= ~again
     delete, edit = near_old & ~kept, near_new & ~near_old & ~kept
     np.save(os.path.join(args.out, "area.npy"), grid[delete | edit])
     show_area(Image.open(os.path.join(args.out, f"view_{side}.png")).convert("RGBA"),

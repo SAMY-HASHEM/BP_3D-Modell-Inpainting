@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 stem = sys.argv[1]
 d = np.load(stem + "_draw.npz")
 points, low, high, front, left = d["points"], d["low"], d["high"], d["front"], d["left"]
+part, lines, joints, joint_names = d["part"], d["lines"], d["joints"], d["joint_names"]  # read once: an .npz reads again at every access
 S = 900
 centre, scale = (low + high) / 2, 0.86 * S / float((high - low).max())
 palette = [(230, 90, 80), (90, 170, 240), (110, 200, 120), (240, 190, 60), (190, 120, 230), (90, 210, 200), (240, 140, 60),
@@ -22,11 +23,11 @@ for k, (across, depth) in enumerate(((side, front), (front, -side))):  # its lef
     order = np.argsort(points @ depth)  # the far points first, the near ones on top
     for i in order[::max(1, len(order) // 80000)]:
         x, y = spot(points[i])
-        fill = colour.get(str(d["part"][i]), (120, 120, 130)) if len(d["part"]) else (120, 125, 135)
+        fill = colour.get(str(part[i]), (120, 120, 130)) if len(part) else (120, 125, 135)
         draw.rectangle((x - 1, y - 1, x + 1, y + 1), fill=fill)
-    for a, e in d["lines"]:
+    for a, e in lines:
         draw.line([spot(a), spot(e)], fill=(255, 255, 255), width=2)
-    for joint, name in zip(d["joints"], d["joint_names"]):
+    for joint, name in zip(joints, joint_names):
         x, y = spot(joint)
         draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill=(20, 20, 20), outline=(255, 255, 255))
         draw.text((x + 6, y - 5), str(name), fill=(255, 255, 255))

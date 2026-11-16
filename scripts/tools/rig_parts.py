@@ -180,8 +180,10 @@ for mesh in meshes:
     piece = np.array([find(i) for i in same])
     labels, piece = np.unique(piece, return_inverse=True)
     groups = [g.name for g in mesh.vertex_groups]
-    if len(labels) < 2:
-        report[mesh.name] = "one piece: the rig's own blended weights stay"
+    if len(labels) < 2 or np.bincount(piece).max() > 0.5 * len(points):
+        # one fused surface (what TRELLIS.2 makes), perhaps with a few loose specks: nothing to make rigid; all of it on
+        # one bone would freeze the whole figure (the warrior, Nov 16)
+        report[mesh.name] = "one fused piece: the rig's own blended weights stay"
         continue
     weights = np.zeros((len(points), len(groups)))
     for v in data.vertices:
