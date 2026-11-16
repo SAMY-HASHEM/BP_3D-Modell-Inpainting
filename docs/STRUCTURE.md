@@ -158,6 +158,8 @@ rest then counts as kept: 97 instead of 81); a mesh's pieces are counted by posi
 doubled along every seam of the texture); the local vision AI gave good and bad plans alike 10 of 10, only the
 measured part of the judge told them apart; a server job took 20 to 140 minutes that night.
 
+The whole structure, with its commands: [FIRST-SUCCESS.md](FIRST-SUCCESS.md).
+
 ## 3. Where the heavy work runs
 
 ```
@@ -222,3 +224,4 @@ used: `outputs/cloud/` (job packages for the uni server), `blender/` (the add-on
 | [REQUIREMENTS.md](REQUIREMENTS.md) | what is done, how far, and what is next |
 | [HOW-TO.md](HOW-TO.md) | running it: this PC, the uni server, what every setting does |
 | [FLOWS.md](FLOWS.md) | the node flows, the character pipeline and the web app in detail |
+| [FIRST-SUCCESS.md](FIRST-SUCCESS.md) | the first structure that worked (Nov 16): a part replaced by another one, step by step, with its commands and numbers |
