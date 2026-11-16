@@ -68,7 +68,8 @@ class Cloud:
             with open(CONFIG) as f:
                 config = json.load(f)
         self.url = config["url"].rstrip("/")
-        self.folder = config.get("folder", FOLDER)  # e.g. a folder someone shared with you
+        # e.g. a folder someone shared with you; INPAINTING_CLOUD_FOLDER: another one for this process (a test worker)
+        self.folder = os.environ.get("INPAINTING_CLOUD_FOLDER") or config.get("folder", FOLDER)
         token = base64.b64encode(f"{config['user']}:{config['password']}".encode()).decode()
         self.auth = {"Authorization": f"Basic {token}"}
 
@@ -274,6 +275,59 @@ def pipeline(args):
     cloud = Cloud()
     job = send_zip(cloud, path)
     print(f"Sent as {job} ({len(files)} files of {name}). Follow it with:  python3 scripts/server/cloud.py status")
+
+
+def pack_flow(flow_path):
+    """A flow file and its input files as one job .zip: the whole flow then runs on the uni server (run_flow.py).
+    Only files under pictures/uploads/ go along (what the web page uploaded); gives the zip's path."""
+    flow = json.load(open(flow_path))
+    name = re.sub(r"[^A-Za-z0-9_-]+", "_", str(flow.get("name") or os.path.splitext(os.path.basename(flow_path))[0]))[:40]
+    flow["name"] = name
+    os.makedirs(os.path.join(PROJECT_DIR, "outputs", "cloud"), exist_ok=True)
+    path = os.path.join(PROJECT_DIR, "outputs", "cloud", f"{name}_flow.zip")
+    with zipfile.ZipFile(path, "w") as z:
+        for node in flow["nodes"]:
+            for item in node.get("files", []) if node.get("type") == "input" else []:
+                full = os.path.join(PROJECT_DIR, item)
+                found = [os.path.join(root, f) for root, _, names in os.walk(full) for f in names] if os.path.isdir(full) else [full]
+                for one in found:
+                    relative = os.path.relpath(one, PROJECT_DIR).replace(os.sep, "/")
+                    if not relative.startswith("pictures/uploads/") or not os.path.isfile(one):
+                        raise SystemExit(f"{relative}: a flow that runs on the server takes its files from pictures/uploads/ "
+                                         f"(put them into pictures/uploads/{name}/object or /part)")
+                    z.write(one, "files/" + relative)
+        z.writestr("flow.json", json.dumps(flow, indent=1))
+        z.writestr("job.json", json.dumps({"kind": "flow", "name": name}, indent=1))
+    return path
+
+
+def flow(args):
+    """Sends a whole flow to the uni server: every node runs there. --wait prints its state lines until it is done."""
+    cloud = Cloud()
+    job = send_zip(cloud, pack_flow(args.flow))
+    print(f"Sent as {job}. Every node runs on the uni server.", flush=True)
+    if args.wait:
+        wait_for(cloud, job, args.wait)
+
+
+def check(args):
+    """Asks the uni server what it has for the pipeline (Blender, the vision AI, the picture AI, ...) and prints it."""
+    cloud = Cloud()
+    os.makedirs(os.path.join(PROJECT_DIR, "outputs", "cloud"), exist_ok=True)
+    path = os.path.join(PROJECT_DIR, "outputs", "cloud", "check.zip")
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("job.json", json.dumps({"kind": "check"}))
+    job = send_zip(cloud, path)
+    folder = os.path.join(PROJECT_DIR, "outputs", "server_runs", job)
+    results = wait_for(cloud, job, folder)
+    with zipfile.ZipFile(results[0]) as z:
+        found = json.loads(z.read("check.json"))
+    print(f"\nThe uni server: code {found['code']}, {found['disk_free_gb']} GB free, torch {found['torch']}")
+    for gpu in found["gpus"]:
+        print("  GPU " + gpu)
+    for p in found["parts"]:
+        print(f"  {'yes' if p['there'] else 'NO '}  {p['name']}: {p['for']}" + (f"\n        -> {p['do']}" if p["do"] else ""))
+    print("  the server reaches: " + ", ".join(f"{k} {'yes' if v else 'no'}" for k, v in found["internet"].items()))
 
 
 def live(args):
@@ -634,6 +688,12 @@ def main(argv=None):
     p.add_argument("job")
     p.add_argument("folder")
     p.set_defaults(run=lambda a: wait_for(Cloud(), a.job, a.folder))
+    p = sub.add_parser("check", help="ask the uni server what it has: Blender, the vision AI, the picture AI, ...")
+    p.set_defaults(run=check)
+    p = sub.add_parser("flow", help="send a whole flow: every node runs on the uni server (for a computer without a GPU)")
+    p.add_argument("flow", help="the flow file, e.g. flows/my_project.json")
+    p.add_argument("--wait", metavar="FOLDER", help="wait until it is done and download its result into this folder")
+    p.set_defaults(run=flow)
     p = sub.add_parser("status", help="list the jobs and how far they are")
     p.add_argument("jobs", nargs="*", help="only these jobs (default: all)")
     p.set_defaults(run=status)

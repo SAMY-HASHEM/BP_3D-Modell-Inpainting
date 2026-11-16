@@ -79,11 +79,11 @@
   .town { display:flex; flex-direction:column; overflow:hidden; }
   .town .scroll { overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
   #city { width:100%; aspect-ratio:980 / 640; flex:none; display:block; border-radius:10px; }
-  .label { font:700 13px Inter, sans-serif; fill:#1d2433; text-anchor:middle; paint-order:stroke; stroke:#ffffffd9; stroke-width:4px; }
-  .what { font:11px Inter, sans-serif; fill:#2f3747; text-anchor:middle; paint-order:stroke; stroke:#ffffffd9; stroke-width:3.5px; }
-  .bank { font:800 13px Inter, sans-serif; letter-spacing:.1em; fill:#3d5a3a; }
+  .label { font:700 13px Cinzel, Georgia, serif; fill:#3a2a14; text-anchor:middle; paint-order:stroke; stroke:#fff7e0e6; stroke-width:4px; }
+  .what { font:11px Inter, sans-serif; fill:#4a3a1e; text-anchor:middle; paint-order:stroke; stroke:#fff7e0e6; stroke-width:3.5px; }
+  .bank { font:700 14px Cinzel, Georgia, serif; letter-spacing:.14em; fill:#6b4a1c; }
   .glow { opacity:0; transition:opacity .5s; } .b.running .glow { opacity:.9; animation:pulse 1.6s infinite ease-in-out; }
-  .flag { opacity:0; transition:opacity .4s; } .b.done .flag { opacity:1; } .b.unused { opacity:.45; } .b.failed .crystal { filter:grayscale(1); }
+  .flag { opacity:0; transition:opacity .4s; } .b.done .flag { opacity:1; } .b.unused { opacity:.45; } .b.failed .build { filter:grayscale(1); }
   @keyframes pulse { 0%,100% { opacity:.35; } 50% { opacity:.95; } }
   .b.running .worker { animation:work .7s infinite ease-in-out; }
   @keyframes work { 0%,100% { transform:translateY(0) rotate(0); } 50% { transform:translateY(-3px) rotate(-4deg); } }
@@ -131,7 +131,7 @@
     </div>
   </section>
   <section class="panel town" aria-label="The city">
-    <h2><span class="display">THE CITY</span><span id="townState" style="font:12px Inter, sans-serif; color:var(--dim)">nothing is running</span></h2>
+    <h2><span class="display">THE CITY ON THE NILE</span><span id="townState" style="font:12px Inter, sans-serif; color:var(--dim)">nothing is running</span></h2>
     <div class="scroll">
       <svg id="city" viewBox="0 0 980 640" role="img" aria-label="The run as a city seen from above"></svg>
       <div class="cards" id="cards"></div>
@@ -149,7 +149,7 @@
     <li><b>Press Run</b>. Nothing starts before that. The city shows where the work is; you can stop it at any time.</li>
   </ol>
   <p><b>Shortcuts:</b> <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>Ctrl</kbd>+<kbd>V</kbd> paste data · drop files anywhere · <kbd>Esc</kbd> close this</p>
-  <p><b>The city:</b> the left bank is our device, the right bank is the uni server, the bridge is the cloud folder between them. A building that works glows; a finished one raises a green flag.</p>
+  <p><b>The city:</b> the left bank of the Nile is our device, the right bank is the uni server, the bridge is the cloud folder between them. A building that works glows; a finished one raises a green flag.</p>
   <form method="dialog"><button class="main">Close</button></form>
 </dialog>
 <dialog id="pages">
@@ -175,15 +175,15 @@ const clock = s => { s = Math.max(0, Math.round(s)); return s >= 3600 ? `${Math.
 // Every building: its name, what works there (a local AI, a model, or plain processing), where (our device / the uni
 // server), about how long it takes, the figure in front of it, and which nodes of a flow are its work (types).
 const BUILDINGS = [
-  {id: "gate",     name: "City gate",        runs: "Your data arrives and is sorted",            kind: "processing", where: "device", about: 0.2, who: "guard",    types: ["input"],              x: 75,  y: 585, c: "#8fa3b8", sides: 4, r: 30},
-  {id: "office",   name: "Data office",      runs: "Qwen3.6-27B reads what every picture shows", kind: "local AI",   where: "device", about: 1,   who: "clerk",    types: ["data_sheet"],         x: 120, y: 400, c: "#f2b441", sides: 5, r: 38},
-  {id: "factory",  name: "Model factory",    runs: "TRELLIS.2 builds the 3D model",              kind: "model",      where: "server", about: 15,  who: "engineer", types: ["base"],               x: 830, y: 160, c: "#4f8fe0", sides: 6, r: 50},
-  {id: "studio",   name: "Picture studio",   runs: "Qwen-Image-Edit paints your wish",           kind: "local AI",   where: "device", about: 2,   who: "painter",  types: ["edit"],               x: 270, y: 150, c: "#f2b441", sides: 6, r: 44},
-  {id: "clinic",   name: "Skeleton clinic",  runs: "UniRig finds the bones",                     kind: "model",      where: "device", about: 1,   who: "doctor",   types: ["rig"],                x: 330, y: 545, c: "#f2b441", sides: 6, r: 40},
-  {id: "workshop", name: "Fitting workshop", runs: "Puts the new part in its place",             kind: "processing", where: "device", about: 4,   who: "fitter",   types: ["place"],              x: 480, y: 150, c: "#f2b441", sides: 5, r: 44},
-  {id: "forge",    name: "Detail forge",     runs: "TRELLIS.2 inpaints shape, details, colours", kind: "model",      where: "server", about: 90,  who: "smith",    types: ["inpaint"],            x: 845, y: 500, c: "#4f8fe0", sides: 5, r: 48},
-  {id: "court",    name: "Judge's court",    runs: "Measures, then Qwen3.6-27B looks",           kind: "local AI",   where: "device", about: 6,   who: "judge",    types: ["judge", "pick_seed"], x: 520, y: 450, c: "#a567d8", sides: 8, r: 44},
-  {id: "gallery",  name: "Gallery",          runs: "Your finished model",                        kind: "processing", where: "device", about: 0,   who: "host",     types: [],                     x: 95,  y: 205, c: "#3fbf8f", sides: 8, r: 38},
+  {id: "gate",     name: "City gate",        runs: "Your data arrives and is sorted",            kind: "processing", where: "device", about: 0.2, who: "guard",    types: ["input"],              x: 75,  y: 585, c: "#c0392b", shape: "pylon",   r: 30},
+  {id: "office",   name: "House of scribes", runs: "Qwen3.6-27B reads what every picture shows", kind: "local AI",   where: "device", about: 1,   who: "clerk",    types: ["data_sheet"],         x: 120, y: 400, c: "#2f6fb5", shape: "house",   r: 36},
+  {id: "factory",  name: "The great pyramid", runs: "TRELLIS.2 builds the 3D model",             kind: "model",      where: "server", about: 15,  who: "engineer", types: ["base"],               x: 830, y: 170, c: "#2f6fb5", shape: "pyramid", r: 50},
+  {id: "studio",   name: "Painters' pavilion", runs: "Qwen-Image-Edit paints your wish",         kind: "local AI",   where: "device", about: 2,   who: "painter",  types: ["edit"],               x: 270, y: 150, c: "#c0392b", shape: "kiosk",   r: 40},
+  {id: "clinic",   name: "House of life",    runs: "UniRig finds the bones",                     kind: "model",      where: "device", about: 1,   who: "doctor",   types: ["rig"],                x: 330, y: 545, c: "#2aa58a", shape: "mastaba", r: 38},
+  {id: "workshop", name: "Builders' yard",   runs: "Puts the new part in its place",             kind: "processing", where: "device", about: 4,   who: "fitter",   types: ["place"],              x: 480, y: 150, c: "#d98a2b", shape: "yard",    r: 40},
+  {id: "forge",    name: "The forge",        runs: "TRELLIS.2 inpaints shape, details, colours", kind: "model",      where: "server", about: 90,  who: "smith",    types: ["inpaint"],            x: 845, y: 500, c: "#c0392b", shape: "step",    r: 46},
+  {id: "court",    name: "Hall of judgement", runs: "Measures, then Qwen3.6-27B looks",          kind: "local AI",   where: "device", about: 6,   who: "judge",    types: ["judge", "pick_seed"], x: 520, y: 450, c: "#8a4fc0", shape: "temple",  r: 42},
+  {id: "gallery",  name: "The gallery",      runs: "Your finished model",                        kind: "processing", where: "device", about: 0,   who: "host",     types: [],                     x: 95,  y: 215, c: "#2aa58a", shape: "obelisk", r: 36},
 ];
 const B = Object.fromEntries(BUILDINGS.map(b => [b.id, b]));
 const TYPICAL = {input: 0.2, data_sheet: 1, base: 15, pick_seed: 2, edit: 2, inpaint: 30, judge: 2, rig: 1, place: 4};  // minutes per node
@@ -212,89 +212,175 @@ function along(pts, t) {
   for (let i = 0; i < len.length; i++) { if (d <= len[i] || i === len.length - 1) { const f = len[i] ? Math.min(1, d / len[i]) : 0; return [pts[i][0] + f * (pts[i + 1][0] - pts[i][0]), pts[i][1] + f * (pts[i + 1][1] - pts[i][1])]; } d -= len[i]; }
   return pts[0];
 }
-// the figures (drawn at 0,0, feet at y = 0); one function each, so they can be replaced by our own models later
-const body = (g, coat, skin = "#f1c9a5") => { el("ellipse", {cx: 0, cy: 1, rx: 9, ry: 3, fill: "#0003"}, g);
-  el("path", {d: "M-7 0 L-6 -15 Q0 -19 6 -15 L7 0 Z", fill: coat, stroke: "#0005", "stroke-width": .8}, g); el("circle", {cx: 0, cy: -21, r: 5.6, fill: skin, stroke: "#0005", "stroke-width": .8}, g); };
+// the people (drawn at 0,0, feet at y = 0): ancient Egyptians, one function each, so they can be replaced by our own
+// models later. egy() is the body: brown skin, a white kilt, a broad collar in the building's colour, a black wig
+const SKIN = "#b8773f";
+function egy(g, collar = "#d98a2b", opts = {}) {
+  el("ellipse", {cx: 0, cy: 1, rx: 9, ry: 3, fill: "#0003"}, g);
+  el("path", {d: "M-6 0 L-5 -10 L5 -10 L6 0 Z", fill: opts.kilt || "#fbf7ea", stroke: "#0005", "stroke-width": .7}, g);          // the kilt
+  el("path", {d: "M-5 -10 L-5.5 -17 Q0 -19.5 5.5 -17 L5 -10 Z", fill: SKIN, stroke: "#0005", "stroke-width": .7}, g);             // the chest
+  el("path", {d: "M-5.5 -17 Q0 -12.5 5.5 -17 Q0 -19.5 -5.5 -17 Z", fill: collar, stroke: "#0004", "stroke-width": .5}, g);        // the broad collar
+  el("circle", {cx: 0, cy: -22, r: 5, fill: SKIN, stroke: "#0005", "stroke-width": .7}, g);
+  if (!opts.bald) el("path", {d: "M-6 -17.5 L-6 -23 Q-6 -28.5 0 -28.5 Q6 -28.5 6 -23 L6 -17.5 L4.2 -17.5 L4.2 -23.5 Q0 -25.5 -4.2 -23.5 L-4.2 -17.5 Z", fill: opts.cloth || "#15110c"}, g);  // the wig
+  el("circle", {cx: -1.8, cy: -22, r: .8, fill: "#15110c"}, g); el("circle", {cx: 1.8, cy: -22, r: .8, fill: "#15110c"}, g);
+}
+const ankh = (g, x, y, s = 1) => { el("ellipse", {cx: x, cy: y - 5 * s, rx: 2.4 * s, ry: 3.4 * s, fill: "none", stroke: "#e8b923", "stroke-width": 1.6 * s}, g);
+  el("line", {x1: x, y1: y - 1.6 * s, x2: x, y2: y + 7 * s, stroke: "#e8b923", "stroke-width": 1.8 * s}, g); el("line", {x1: x - 3.6 * s, y1: y + .4 * s, x2: x + 3.6 * s, y2: y + .4 * s, stroke: "#e8b923", "stroke-width": 1.8 * s}, g); };
 const WORKERS = {
-  painter: g => { body(g, "#3d6fb5"); el("path", {d: "M-7 -24 Q0 -32 8 -25 L4 -23 Z", fill: "#c0392b"}, g);
-    el("line", {x1: 15, y1: 0, x2: 19, y2: -24, stroke: "#7a5a3a", "stroke-width": 2}, g); el("line", {x1: 27, y1: 0, x2: 21, y2: -24, stroke: "#7a5a3a", "stroke-width": 2}, g);
-    el("rect", {x: 12, y: -26, width: 17, height: 14, fill: "#fff", stroke: "#7a5a3a"}, g); el("circle", {cx: 17, cy: -20, r: 2.4, fill: "#e74c3c"}, g); el("circle", {cx: 23, cy: -17, r: 2.4, fill: "#3498db"}, g); },
-  doctor: g => { body(g, "#ffffff"); el("rect", {x: -2, y: -14, width: 4, height: 9, fill: "#e74c3c"}, g); el("rect", {x: -4.5, y: -11.5, width: 9, height: 4, fill: "#e74c3c"}, g);
-    el("line", {x1: 11, y1: -20, x2: 19, y2: -6, stroke: "#f7f3e8", "stroke-width": 3.4, "stroke-linecap": "round"}, g);
-    for (const [x, y] of [[10, -21], [12, -19], [18, -7], [20, -5]]) el("circle", {cx: x, cy: y, r: 2.3, fill: "#f7f3e8", stroke: "#0003", "stroke-width": .5}, g); },
-  fitter: g => { body(g, "#e67e22"); el("path", {d: "M-7 -23 Q0 -33 7 -23 Z", fill: "#f1c40f", stroke: "#0005", "stroke-width": .8}, g);
-    el("line", {x1: 8, y1: -10, x2: 17, y2: -22, stroke: "#8b95a3", "stroke-width": 3}, g); el("path", {d: "M14 -25 L20 -26 L21 -20 L17 -21 Z", fill: "#8b95a3"}, g); },
-  judge: g => { body(g, "#1f1f28"); el("path", {d: "M-8 -18 Q-9 -29 0 -29 Q9 -29 8 -18 Q5 -22 0 -22 Q-5 -22 -8 -18 Z", fill: "#f4f4f4", stroke: "#0004", "stroke-width": .7}, g);
-    el("rect", {x: -1.5, y: -15, width: 3, height: 7, fill: "#fff"}, g); el("line", {x1: 9, y1: -9, x2: 18, y2: -19, stroke: "#7a5a3a", "stroke-width": 2.4}, g);
-    el("rect", {x: 14, y: -25, width: 10, height: 6, rx: 1.5, fill: "#5b3d1f", transform: "rotate(-40 19 -22)"}, g); el("rect", {x: -18, y: -8, width: 9, height: 8, fill: "#5b3d1f"}, g); },
-  engineer: g => { body(g, "#2c6fb0"); el("path", {d: "M-7 -23 Q0 -32 7 -23 Z", fill: "#ecf0f1", stroke: "#0005", "stroke-width": .8}, g);
-    el("rect", {x: 9, y: -16, width: 11, height: 14, fill: "#fdfdfd", stroke: "#566", "stroke-width": .8}, g); for (const y of [-12, -9, -6]) el("line", {x1: 11, y1: y, x2: 18, y2: y, stroke: "#2c6fb0", "stroke-width": 1}, g); },
-  smith: g => { body(g, "#6b4a2b"); el("rect", {x: -5, y: -14, width: 10, height: 13, fill: "#3b2a1a"}, g);
-    el("rect", {x: 12, y: -6, width: 16, height: 5, fill: "#4a4f58"}, g); el("rect", {x: 16, y: -1, width: 8, height: 2, fill: "#4a4f58"}, g);
-    el("line", {x1: 7, y1: -12, x2: 16, y2: -22, stroke: "#7a5a3a", "stroke-width": 2.2}, g); el("rect", {x: 12, y: -28, width: 10, height: 6, fill: "#70757f", transform: "rotate(-35 17 -25)"}, g); },
-  clerk: g => { body(g, "#7d5ba6"); el("circle", {cx: -2.3, cy: -21.5, r: 2, fill: "none", stroke: "#222", "stroke-width": .9}, g); el("circle", {cx: 2.6, cy: -21.5, r: 2, fill: "none", stroke: "#222", "stroke-width": .9}, g);
-    el("rect", {x: 9, y: -18, width: 12, height: 15, fill: "#fff8e1", stroke: "#8a7a4a", "stroke-width": .8}, g); el("circle", {cx: 15, cy: -11, r: 3.4, fill: "none", stroke: "#3d6fb5", "stroke-width": 1.4}, g); el("line", {x1: 17.5, y1: -8.5, x2: 20, y2: -6, stroke: "#3d6fb5", "stroke-width": 1.4}, g); },
-  guard: g => { body(g, "#5d6d7e"); el("path", {d: "M-6 -24 L0 -31 L6 -24 Z", fill: "#95a5a6", stroke: "#0005", "stroke-width": .8}, g); el("line", {x1: 10, y1: 0, x2: 10, y2: -30, stroke: "#7a5a3a", "stroke-width": 2}, g); el("polygon", {points: "10,-36 13,-30 7,-30", fill: "#bdc3c7"}, g); },
-  host: g => { body(g, "#27ae60"); el("rect", {x: 10, y: -24, width: 14, height: 14, fill: "#fff8e1", stroke: "#c8a13a", "stroke-width": 2}, g); el("polygon", {points: "13,-13 17,-19 20,-15 22,-17 22,-12", fill: "#4f8fe0"}, g); },
-  courier: g => { body(g, "#34495e"); el("path", {d: "M-7 -23 Q0 -30 7 -23 L10 -22 L-7 -22 Z", fill: "#e74c3c"}, g); },
+  painter: g => { egy(g, "#c0392b");  // paints a wall: a panel with coloured bands, a brush
+    el("rect", {x: 11, y: -27, width: 16, height: 25, fill: "#f6e7c1", stroke: "#8a6a3a"}, g);
+    for (const [y, c] of [[-24, "#c0392b"], [-18, "#2f6fb5"], [-12, "#e8b923"], [-6, "#2aa58a"]]) el("rect", {x: 13, y, width: 12, height: 3.2, fill: c}, g);
+    el("line", {x1: 5, y1: -12, x2: 12, y2: -18, stroke: "#5b3d1f", "stroke-width": 1.6}, g); },
+  clerk: g => { egy(g, "#2f6fb5");    // a scribe: a papyrus roll and a reed pen
+    el("rect", {x: 8, y: -17, width: 13, height: 11, fill: "#f3e2a9", stroke: "#8a6a3a", "stroke-width": .8}, g); el("circle", {cx: 8, cy: -11.5, r: 2.2, fill: "#e2cc85", stroke: "#8a6a3a", "stroke-width": .6}, g);
+    for (const y of [-14, -11, -8]) el("line", {x1: 11, y1: y, x2: 19, y2: y, stroke: "#3a2a14", "stroke-width": .8}, g);
+    el("line", {x1: 4, y1: -12, x2: 12, y2: -19, stroke: "#3a2a14", "stroke-width": 1.2}, g); },
+  doctor: g => { egy(g, "#2aa58a", {bald: true}); ankh(g, 13, -14, 1.15); },       // a priest of the House of Life, with an ankh
+  fitter: g => { egy(g, "#d98a2b", {cloth: "#f1ece0"});                             // a mason: a stone block, a mallet
+    el("polygon", {points: "9,-1 9,-9 21,-9 21,-1", fill: "#e3c88d", stroke: "#8a6a3a"}, g); el("polygon", {points: "9,-9 12,-12 24,-12 21,-9", fill: "#f1dcab", stroke: "#8a6a3a", "stroke-width": .7}, g);
+    el("line", {x1: 6, y1: -12, x2: 14, y2: -20, stroke: "#5b3d1f", "stroke-width": 2}, g); el("rect", {x: 11, y: -25, width: 8, height: 5, rx: 1, fill: "#7a5a3a", transform: "rotate(-40 15 -22)"}, g); },
+  judge: g => { egy(g, "#8a4fc0");                                                  // as Ma'at: her feather, and the scales
+    el("path", {d: "M0 -28 Q5 -37 1 -42 Q-4 -37 0 -28 Z", fill: "#fff", stroke: "#8a4fc0", "stroke-width": .8}, g);
+    el("line", {x1: 15, y1: -2, x2: 15, y2: -24, stroke: "#8a6a3a", "stroke-width": 1.6}, g); el("line", {x1: 7, y1: -22, x2: 23, y2: -22, stroke: "#8a6a3a", "stroke-width": 1.6}, g);
+    for (const x of [7, 23]) { el("line", {x1: x, y1: -22, x2: x, y2: -15, stroke: "#8a6a3a", "stroke-width": .7}, g); el("path", {d: `M${x - 4} -15 Q${x} -10 ${x + 4} -15 Z`, fill: "#e8b923", stroke: "#8a6a3a", "stroke-width": .6}, g); } },
+  engineer: g => { egy(g, "#2f6fb5", {cloth: "#2f6fb5"});                           // the master builder: a plan and a measuring rod
+    el("rect", {x: 8, y: -18, width: 12, height: 13, fill: "#f3e2a9", stroke: "#8a6a3a", "stroke-width": .8}, g); el("polygon", {points: "10,-8 14,-15 18,-8", fill: "none", stroke: "#2f6fb5", "stroke-width": 1}, g);
+    el("line", {x1: -10, y1: 0, x2: -10, y2: -30, stroke: "#5b3d1f", "stroke-width": 1.6}, g); },
+  smith: g => { egy(g, "#c0392b", {kilt: "#7a5a3a"});                               // a metal worker: a crucible over the fire
+    el("path", {d: "M10 -1 L12 -8 L24 -8 L26 -1 Z", fill: "#5a5148", stroke: "#0006", "stroke-width": .6}, g); el("path", {d: "M13 -8 Q18 -19 23 -8 Z", fill: "#f08c2e"}, g); el("path", {d: "M15.5 -8 Q18 -14 20.5 -8 Z", fill: "#ffd76a"}, g);
+    el("line", {x1: 5, y1: -12, x2: 14, y2: -12, stroke: "#3a3a3a", "stroke-width": 1.4}, g); },
+  guard: g => { egy(g, "#8a6a3a", {cloth: "#e8b923"});                              // a spear and a shield
+    el("line", {x1: 10, y1: 0, x2: 10, y2: -34, stroke: "#5b3d1f", "stroke-width": 1.8}, g); el("polygon", {points: "10,-40 12.5,-34 7.5,-34", fill: "#c9c2b2"}, g);
+    el("path", {d: "M-15 -3 L-15 -14 Q-10.5 -19 -6 -14 L-6 -3 Z", fill: "#c98a4a", stroke: "#5b3d1f", "stroke-width": .8}, g); },
+  host: g => { egy(g, "#2aa58a"); el("rect", {x: 9, y: -6, width: 10, height: 6, fill: "#e3c88d", stroke: "#8a6a3a", "stroke-width": .7}, g);   // shows a small golden statue
+    el("path", {d: "M11.5 -6 L11.5 -15 Q14 -19 16.5 -15 L16.5 -6 Z", fill: "#e8b923", stroke: "#8a6a3a", "stroke-width": .6}, g); el("circle", {cx: 14, cy: -19, r: 2.4, fill: "#e8b923", stroke: "#8a6a3a", "stroke-width": .6}, g); },
+  courier: g => { egy(g, "#e8b923", {cloth: "#c0392b"}); },
+};
+// the buildings (drawn around bx, by; r is their size): sandstone, with one colour of their own
+const STONE = {light: "#f3ddaa", mid: "#dcbd7c", dark: "#b6924f", line: "#8a6a3a"};
+const SHAPES = {
+  pyramid: (g, x, y, r, c) => {  // the great pyramid, with its capstone
+    const top = [x, y - r * 1.05], left = [x - r * 1.25, y + r * .62], right = [x + r * 1.25, y + r * .62], front = [x + r * .2, y + r * .86];
+    el("polygon", {points: [top, left, front].map(p => p.join(",")).join(" "), fill: STONE.light, stroke: STONE.line}, g);
+    el("polygon", {points: [top, front, right].map(p => p.join(",")).join(" "), fill: STONE.dark, stroke: STONE.line}, g);
+    for (let k = 1; k < 6; k++) { const t = k / 6; el("line", {x1: top[0] + (left[0] - top[0]) * t, y1: top[1] + (left[1] - top[1]) * t, x2: top[0] + (front[0] - top[0]) * t, y2: top[1] + (front[1] - top[1]) * t, stroke: STONE.line, "stroke-width": .5, opacity: .5}, g); }
+    el("polygon", {points: [top, [top[0] + (left[0] - top[0]) * .16, top[1] + (left[1] - top[1]) * .16], [top[0] + (front[0] - top[0]) * .16, top[1] + (front[1] - top[1]) * .16], [top[0] + (right[0] - top[0]) * .16, top[1] + (right[1] - top[1]) * .16]].map(p => p.join(",")).join(" "), fill: "#f6cf4e", stroke: "#a8801f", "stroke-width": .7}, g);
+    el("rect", {x: x - r * .22, y: y + r * .5, width: r * .18, height: r * .26, fill: c}, g); },
+  step: (g, x, y, r, c) => {     // a step pyramid; a fire burns on it while the forge works
+    for (let k = 0; k < 4; k++) { const w = r * (1.2 - k * .26), top = y + r * .7 - (k + 1) * r * .36, h = r * .36;
+      el("polygon", {points: `${x - w},${top + h} ${x - w * .9},${top} ${x + w * .9},${top} ${x + w},${top + h}`, fill: k % 2 ? STONE.mid : STONE.light, stroke: STONE.line}, g);
+      el("polygon", {points: `${x + w * .25},${top} ${x + w * .9},${top} ${x + w},${top + h} ${x + w * .3},${top + h}`, fill: STONE.dark, opacity: .55}, g); }
+    el("rect", {x: x - r * .12, y: y + r * .4, width: r * .24, height: r * .3, fill: c}, g);
+    el("path", {d: `M${x - r * .16} ${y - r * .74} Q${x} ${y - r * 1.25} ${x + r * .16} ${y - r * .74} Z`, fill: "#f08c2e"}, g); el("path", {d: `M${x - r * .08} ${y - r * .74} Q${x} ${y - r * 1.02} ${x + r * .08} ${y - r * .74} Z`, fill: "#ffd76a"}, g); },
+  temple: (g, x, y, r, c) => {   // a hall with columns
+    el("polygon", {points: `${x - r * 1.2},${y + r * .7} ${x - r * 1.05},${y + r * .52} ${x + r * 1.05},${y + r * .52} ${x + r * 1.2},${y + r * .7}`, fill: STONE.dark, stroke: STONE.line}, g);
+    el("rect", {x: x - r * .95, y: y - r * .42, width: r * 1.9, height: r * .94, fill: "#8d6d38"}, g);
+    for (let k = 0; k < 5; k++) { const cx = x - r * .82 + k * r * .41; el("rect", {x: cx - r * .09, y: y - r * .42, width: r * .18, height: r * .94, fill: k % 2 ? STONE.mid : STONE.light, stroke: STONE.line, "stroke-width": .7}, g);
+      el("rect", {x: cx - r * .13, y: y - r * .46, width: r * .26, height: r * .1, fill: c}, g); }
+    el("polygon", {points: `${x - r * 1.12},${y - r * .46} ${x - r * 1.02},${y - r * .74} ${x + r * 1.02},${y - r * .74} ${x + r * 1.12},${y - r * .46}`, fill: STONE.light, stroke: STONE.line}, g);
+    el("rect", {x: x - r * 1.02, y: y - r * .86, width: r * 2.04, height: r * .13, fill: c, stroke: STONE.line, "stroke-width": .7}, g);
+    el("circle", {cx: x, cy: y - r * .6, r: r * .1, fill: "#f6cf4e", stroke: "#a8801f", "stroke-width": .6}, g); },
+  pylon: (g, x, y, r, c) => {    // the gate: two towers and the way between them
+    for (const s of [-1, 1]) { el("polygon", {points: `${x + s * r * .25},${y + r * .7} ${x + s * r * .32},${y - r * .7} ${x + s * r * 1.0},${y - r * .7} ${x + s * r * 1.15},${y + r * .7}`, fill: s < 0 ? STONE.light : STONE.mid, stroke: STONE.line}, g);
+      el("rect", {x: x + (s < 0 ? -r * 1.03 : r * .29), y: y - r * .86, width: r * .74, height: r * .16, fill: c, stroke: STONE.line, "stroke-width": .7}, g);
+      el("line", {x1: x + s * r * .66, y1: y - r * .86, x2: x + s * r * .66, y2: y - r * 1.5, stroke: "#5b3d1f", "stroke-width": 1.4}, g); el("polygon", {points: `${x + s * r * .66},${y - r * 1.5} ${x + s * r * .66 + 10},${y - r * 1.4} ${x + s * r * .66},${y - r * 1.3}`, fill: "#c0392b"}, g); }
+    el("rect", {x: x - r * .3, y: y - r * .25, width: r * .6, height: r * .95, fill: "#5b4424"}, g); el("rect", {x: x - r * .36, y: y - r * .4, width: r * .72, height: r * .16, fill: STONE.light, stroke: STONE.line, "stroke-width": .7}, g); },
+  house: (g, x, y, r, c) => {    // the scribes' house: mud brick, a flat roof, an awning
+    el("polygon", {points: `${x - r},${y + r * .7} ${x - r},${y - r * .3} ${x + r * .55},${y - r * .3} ${x + r * .55},${y + r * .7}`, fill: STONE.light, stroke: STONE.line}, g);
+    el("polygon", {points: `${x + r * .55},${y + r * .7} ${x + r * .55},${y - r * .3} ${x + r},${y - r * .52} ${x + r},${y + r * .45}`, fill: STONE.dark, stroke: STONE.line}, g);
+    el("polygon", {points: `${x - r},${y - r * .3} ${x - r * .6},${y - r * .52} ${x + r},${y - r * .52} ${x + r * .55},${y - r * .3}`, fill: STONE.mid, stroke: STONE.line}, g);
+    el("rect", {x: x - r * .35, y: y + r * .1, width: r * .34, height: r * .6, fill: "#5b4424"}, g);
+    for (const wx of [-.8, .15]) el("rect", {x: x + r * wx, y: y - r * .12, width: r * .22, height: r * .2, fill: "#5b4424"}, g);
+    el("polygon", {points: `${x - r * .55},${y + r * .1} ${x - r * .7},${y + r * .3} ${x + r * .2},${y + r * .3} ${x + r * .05},${y + r * .1}`, fill: c, opacity: .95}, g);
+    el("rect", {x: x - r * .2, y: y - r * .95, width: r * .5, height: r * .36, fill: "#f3e2a9", stroke: STONE.line, "stroke-width": .7}, g); for (const k of [0, 1, 2]) el("line", {x1: x - r * .12, y1: y - r * (.86 - k * .09), x2: x + r * .22, y2: y - r * (.86 - k * .09), stroke: "#3a2a14", "stroke-width": .7}, g); },
+  kiosk: (g, x, y, r, c) => {    // the painters' pavilion: a painted wall under a roof on columns
+    el("polygon", {points: `${x - r * 1.1},${y + r * .7} ${x - r * .95},${y + r * .55} ${x + r * .95},${y + r * .55} ${x + r * 1.1},${y + r * .7}`, fill: STONE.dark, stroke: STONE.line}, g);
+    el("rect", {x: x - r * .62, y: y - r * .32, width: r * 1.24, height: r * .87, fill: "#f6e7c1", stroke: STONE.line, "stroke-width": .7}, g);
+    [["#c0392b", 0], ["#2f6fb5", 1], ["#e8b923", 2], ["#2aa58a", 3]].forEach(([col, k]) => el("rect", {x: x - r * .56, y: y - r * .24 + k * r * .19, width: r * 1.12, height: r * .11, fill: col}, g));
+    for (const s of [-1, 1]) el("rect", {x: x + s * r * .84 - r * .09, y: y - r * .4, width: r * .18, height: r * .95, fill: STONE.light, stroke: STONE.line, "stroke-width": .7}, g);
+    el("polygon", {points: `${x - r * 1.08},${y - r * .4} ${x - r * .96},${y - r * .68} ${x + r * .96},${y - r * .68} ${x + r * 1.08},${y - r * .4}`, fill: c, stroke: STONE.line}, g); },
+  mastaba: (g, x, y, r, c) => {  // the House of Life: sloping walls, the ankh over its door
+    el("polygon", {points: `${x - r * 1.15},${y + r * .7} ${x - r * .92},${y - r * .3} ${x + r * .5},${y - r * .3} ${x + r * .62},${y + r * .7}`, fill: STONE.light, stroke: STONE.line}, g);
+    el("polygon", {points: `${x + r * .62},${y + r * .7} ${x + r * .5},${y - r * .3} ${x + r * .95},${y - r * .5} ${x + r * 1.15},${y + r * .45}`, fill: STONE.dark, stroke: STONE.line}, g);
+    el("polygon", {points: `${x - r * .92},${y - r * .3} ${x - r * .5},${y - r * .5} ${x + r * .95},${y - r * .5} ${x + r * .5},${y - r * .3}`, fill: STONE.mid, stroke: STONE.line}, g);
+    el("rect", {x: x - r * .42, y: y + r * .12, width: r * .36, height: r * .58, fill: "#5b4424"}, g); el("rect", {x: x - r * .5, y: y + r * .02, width: r * .52, height: r * .12, fill: c}, g); ankh(g, x - r * .24, y - r * .98, r / 26); },
+  yard: (g, x, y, r, c) => {     // the builders' yard: cut blocks and an obelisk in its scaffold
+    el("polygon", {points: `${x - r * .2},${y + r * .7} ${x - r * .1},${y - r * .85} ${x},${y - r * 1.05} ${x + r * .1},${y - r * .85} ${x + r * .2},${y + r * .7}`, fill: STONE.light, stroke: STONE.line}, g);
+    el("polygon", {points: `${x},${y - r * 1.05} ${x + r * .1},${y - r * .85} ${x + r * .2},${y + r * .7} ${x + r * .02},${y + r * .7}`, fill: STONE.dark, opacity: .6}, g);
+    for (const s of [-1, 1]) el("line", {x1: x + s * r * .42, y1: y + r * .7, x2: x + s * r * .3, y2: y - r * .7, stroke: "#7a5a3a", "stroke-width": 1.6}, g);
+    for (const k of [0, 1, 2]) el("line", {x1: x - r * (.4 - k * .03), y1: y + r * (.35 - k * .42), x2: x + r * (.4 - k * .03), y2: y + r * (.35 - k * .42), stroke: "#7a5a3a", "stroke-width": 1.4}, g);
+    for (const [bx2, by2, w] of [[-1.05, .7, .42], [-.95, .42, .34], [.55, .7, .5]]) { el("rect", {x: x + r * bx2, y: y + r * by2 - r * .28, width: r * w, height: r * .28, fill: STONE.mid, stroke: STONE.line}, g); }
+    el("rect", {x: x + r * .62, y: y + r * .16, width: r * .34, height: r * .26, fill: c, stroke: STONE.line, "stroke-width": .7}, g); },
+  obelisk: (g, x, y, r, c) => {  // the gallery: an obelisk with a golden tip, a statue beside it
+    el("rect", {x: x - r * .55, y: y + r * .5, width: r * .9, height: r * .2, fill: STONE.dark, stroke: STONE.line}, g);
+    el("polygon", {points: `${x - r * .32},${y + r * .5} ${x - r * .2},${y - r * .95} ${x - r * .02},${y - r * .95} ${x + r * .1},${y + r * .5}`, fill: STONE.light, stroke: STONE.line}, g);
+    el("polygon", {points: `${x - r * .2},${y - r * .95} ${x - r * .11},${y - r * 1.2} ${x - r * .02},${y - r * .95}`, fill: "#f6cf4e", stroke: "#a8801f", "stroke-width": .7}, g);
+    for (const k of [0, 1, 2, 3]) el("rect", {x: x - r * .17, y: y - r * (.7 - k * .28), width: r * .12, height: r * .12, fill: c, opacity: .8}, g);
+    el("rect", {x: x + r * .35, y: y + r * .3, width: r * .5, height: r * .4, fill: STONE.mid, stroke: STONE.line}, g);
+    el("path", {d: `M${x + r * .46} ${y + r * .3} L${x + r * .46} ${y - r * .25} Q${x + r * .6} ${y - r * .45} ${x + r * .74} ${y - r * .25} L${x + r * .74} ${y + r * .3} Z`, fill: c, stroke: STONE.line, "stroke-width": .7}, g);
+    el("circle", {cx: x + r * .6, cy: y - r * .45, r: r * .13, fill: c, stroke: STONE.line, "stroke-width": .7}, g); },
 };
 const parts = {};  // per building: its svg group, its bar in the map, its card
 (function drawCity() {
-  el("defs").innerHTML = `<linearGradient id="water" x1="0" x2="1"><stop offset="0" stop-color="#57b6f2"/><stop offset=".5" stop-color="#3e9ae6"/><stop offset="1" stop-color="#63c2f5"/></linearGradient>
-    <radialGradient id="halo"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#ffd27a" stop-opacity="0"/></radialGradient>
+  el("defs").innerHTML = `<linearGradient id="water" x1="0" x2="1"><stop offset="0" stop-color="#3f9bd9"/><stop offset=".5" stop-color="#2b7fc4"/><stop offset="1" stop-color="#4aa8de"/></linearGradient>
+    <radialGradient id="halo"><stop offset="0" stop-color="#ffe08a"/><stop offset="1" stop-color="#ffe08a" stop-opacity="0"/></radialGradient>
     <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="5"/></filter>`;
-  el("rect", {width: 980, height: 640, fill: "#bfe3a8"});
+  el("rect", {width: 980, height: 640, fill: "#ecd49c"});
   let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  for (let gx = 0; gx < 14; gx++) for (let gy = 0; gy < 10; gy++) { const x = gx * 72, y = gy * 68, j = () => rnd() * 26 - 13;
-    el("polygon", {points: [[x + j(), y + j()], [x + 72 + j(), y + j()], [x + 36 + j(), y + 68 + j()]].map(p => p.join(",")).join(" "), fill: shade(x > 640 ? "#a9d6c9" : "#bfe3a8", .93 + rnd() * .12), opacity: .9}); }
-  el("path", {d: "M650 0 C625 150 700 215 672 320 C648 420 708 500 684 640 L752 640 C776 500 716 420 742 320 C770 215 700 150 722 0 Z", fill: "url(#water)"});
-  for (let i = 0; i < 16; i++) { const y = 20 + i * 40, x = 690 + Math.sin(i * 1.7) * 22; el("polygon", {points: `${x},${y} ${x + 26},${y + 7} ${x + 6},${y + 16}`, fill: "#fff", opacity: .18 + (i % 3) * .07}); }
+  for (let gx = 0; gx < 14; gx++) for (let gy = 0; gy < 10; gy++) { const x = gx * 72, y = gy * 68, j = () => rnd() * 26 - 13;  // the desert, in facets of sand
+    el("polygon", {points: [[x + j(), y + j()], [x + 72 + j(), y + j()], [x + 36 + j(), y + 68 + j()]].map(p => p.join(",")).join(" "), fill: shade("#ecd49c", .9 + rnd() * .16), opacity: .9}); }
+  for (const [x, y, w] of [[120, 90, 150], [520, 560, 190], [880, 400, 120], [400, 40, 140]]) el("path", {d: `M${x} ${y} q${w / 2} -22 ${w} 0`, fill: "none", stroke: "#d2b473", "stroke-width": 2, opacity: .7});  // dunes
+  const nile = "M650 0 C625 150 700 215 672 320 C648 420 708 500 684 640 L752 640 C776 500 716 420 742 320 C770 215 700 150 722 0 Z";
+  el("path", {d: nile, fill: "none", stroke: "#8fbf5a", "stroke-width": 52, "stroke-linejoin": "round", opacity: .9});  // the green land along the river
+  el("path", {d: nile, fill: "none", stroke: "#6fa844", "stroke-width": 22, "stroke-linejoin": "round", opacity: .8});
+  el("path", {d: nile, fill: "url(#water)"});
+  for (let i = 0; i < 16; i++) { const y = 20 + i * 40, x = 690 + Math.sin(i * 1.7) * 20; el("path", {d: `M${x} ${y} q8 -5 16 0 q8 5 16 0`, fill: "none", stroke: "#fff", "stroke-width": 1.4, opacity: .35}); }
+  for (const [x, y] of [[700, 120], [706, 470], [716, 580]]) {  // boats on the Nile
+    const boat = el("g", {}); el("path", {d: `M${x - 20} ${y} Q${x} ${y + 12} ${x + 20} ${y} L${x + 26} ${y - 7} L${x + 14} ${y - 2} L${x - 14} ${y - 2} L${x - 26} ${y - 7} Z`, fill: "#b9834a", stroke: "#74502a"}, boat);
+    el("line", {x1: x, y1: y - 2, x2: x, y2: y - 30, stroke: "#5b3d1f", "stroke-width": 1.6}, boat); el("path", {d: `M${x + 1} ${y - 29} L${x + 17} ${y - 20} L${x + 1} ${y - 9} Z`, fill: "#fbf7ea", stroke: "#8a6a3a", "stroke-width": .7}, boat);
+    boat.innerHTML += `<animateTransform attributeName="transform" type="translate" values="0 0; 0 3; 0 0" dur="${3.5 + x % 3}s" repeatCount="indefinite"/>`; }
   el("text", {x: 20, y: 28, class: "bank"}).textContent = "OUR DEVICE";
-  el("text", {x: 846, y: 626, class: "bank", fill: "#2f5d73"}).textContent = "UNI SERVER";
+  el("text", {x: 846, y: 626, class: "bank"}).textContent = "UNI SERVER";
+  el("text", {x: 711, y: 22, class: "what", transform: "rotate(84 711 22)", "text-anchor": "start", style: "fill:#fff; stroke:none; opacity:.8; letter-spacing:.2em"}).textContent = "THE NILE";
   const drawn = new Set();
-  for (const k in STREET) { const [a, b] = k.split(">"); if (drawn.has(b + ">" + a)) continue; drawn.add(k); const d = "M" + STREET[k].map(p => p.join(" ")).join(" L");
-    el("path", {d, fill: "none", stroke: "#7b8494", "stroke-width": 19, "stroke-linecap": "round"}); el("path", {d, fill: "none", stroke: "#d9dee8", "stroke-width": 14, "stroke-linecap": "round"});
-    el("path", {d, fill: "none", stroke: "#fff", "stroke-width": 1.5, "stroke-dasharray": "8 9", opacity: .9}); }
-  el("polygon", {points: "640,292 760,298 760,338 640,330", fill: "#b9834a", stroke: "#74502a", "stroke-width": 2});
-  for (let x = 648; x < 760; x += 14) el("line", {x1: x, y1: 293, x2: x, y2: 337, stroke: "#8d6236", "stroke-width": 2});
-  el("path", {d: "M" + STREET["quay>land"].map(p => p.join(" ")).join(" L"), fill: "none", stroke: "#e9dcc6", "stroke-width": 12});
-  el("text", {x: 700, y: 284, class: "what"}).textContent = "the bridge: the cloud folder";
-  for (const k of ["square", "west", "quay", "land"]) { el("circle", {cx: P[k].x, cy: P[k].y, r: 15, fill: "#d9dee8", stroke: "#7b8494", "stroke-width": 2.5}); el("circle", {cx: P[k].x, cy: P[k].y, r: 5, fill: "#9fc7e8"}); }
-  for (const [x, y, s] of [[390, 250, .9], [600, 120, 1.1], [40, 480, .8], [250, 610, 1], [440, 600, .9], [600, 570, 1.1], [930, 330, 1], [760, 60, .9], [930, 590, .8], [200, 300, .8], [420, 390, .8], [940, 60, 1], [30, 300, .8]])
-    { el("polygon", {points: `${x},${y - 20 * s} ${x + 13 * s},${y + 6 * s} ${x - 13 * s},${y + 6 * s}`, fill: "#3fa56a"}); el("polygon", {points: `${x},${y - 20 * s} ${x + 13 * s},${y + 6 * s} ${x},${y + 6 * s}`, fill: "#2c8553"}); el("rect", {x: x - 2, y: y + 6 * s, width: 4, height: 6, fill: "#7a5a3a"}); }
+  for (const k in STREET) { const [a, b] = k.split(">"); if (drawn.has(b + ">" + a)) continue; drawn.add(k); const d = "M" + STREET[k].map(p => p.join(" ")).join(" L");  // roads of stone
+    el("path", {d, fill: "none", stroke: "#a5834d", "stroke-width": 19, "stroke-linecap": "round"}); el("path", {d, fill: "none", stroke: "#f6e7c1", "stroke-width": 14, "stroke-linecap": "round"});
+    el("path", {d, fill: "none", stroke: "#d9bf86", "stroke-width": 14, "stroke-dasharray": "1.5 12", opacity: .9}); }
+  el("polygon", {points: "640,290 760,296 760,340 640,332", fill: "#dcbd7c", stroke: "#8a6a3a", "stroke-width": 2});  // the bridge of stone
+  for (const x of [662, 700, 738]) el("path", {d: `M${x - 12} 338 q12 -16 24 0`, fill: "#2b7fc4", stroke: "#8a6a3a", "stroke-width": 1.2});
+  el("path", {d: "M" + STREET["quay>land"].map(p => p.join(" ")).join(" L"), fill: "none", stroke: "#f6e7c1", "stroke-width": 12});
+  el("text", {x: 700, y: 282, class: "what"}).textContent = "the bridge: the cloud folder";
+  for (const k of ["square", "west", "quay", "land"]) { el("circle", {cx: P[k].x, cy: P[k].y, r: 15, fill: "#f6e7c1", stroke: "#a5834d", "stroke-width": 2.5}); el("circle", {cx: P[k].x, cy: P[k].y, r: 5, fill: "#e8b923"}); }
+  for (const [x, y, s] of [[395, 255, .9], [600, 125, 1.05], [40, 490, .85], [250, 612, 1], [440, 600, .9], [598, 575, 1.05], [930, 335, 1], [775, 70, .9], [930, 590, .85], [205, 300, .85], [425, 392, .8], [940, 70, 1], [30, 300, .85], [636, 430, .8], [770, 230, .85]]) {  // palm trees
+    el("path", {d: `M${x} ${y + 8 * s} q${3 * s} ${-14 * s} ${-1 * s} ${-26 * s}`, fill: "none", stroke: "#8a6a3a", "stroke-width": 3 * s, "stroke-linecap": "round"});
+    for (const a of [-150, -110, -70, -30, 200, 160]) { const r2 = a * Math.PI / 180, ex = x - s + Math.cos(r2) * 15 * s, ey = y - 18 * s + Math.sin(r2) * 9 * s + 6 * s;
+      el("path", {d: `M${x - s} ${y - 18 * s} Q${(x - s + ex) / 2} ${y - 26 * s} ${ex} ${ey}`, fill: "none", stroke: a % 40 ? "#3f8f4f" : "#2f7a43", "stroke-width": 2.6 * s, "stroke-linecap": "round"}); } }
   for (const b of BUILDINGS) {
     const bx = b.x, by = b.y - b.r - 22, g = el("g", {class: "b", tabindex: 0, role: "img", "aria-label": b.name});
     g.addEventListener("click", () => parts[b.id].card.scrollIntoView({behavior: "smooth", block: "nearest"}));
-    el("ellipse", {cx: bx, cy: by + 8, rx: b.r * 1.5, ry: b.r * 1.3, fill: "url(#halo)", class: "glow"}, g);
-    el("ellipse", {cx: bx + 6, cy: by + b.r * .55, rx: b.r * 1.05, ry: b.r * .5, fill: "#0003", filter: "url(#soft)"}, g);
-    const crystal = el("g", {class: "crystal"}, g);
-    const ring = Array.from({length: b.sides}, (_, i) => { const a = Math.PI * 2 * i / b.sides - Math.PI / 2 + (b.sides % 2 ? 0 : Math.PI / b.sides); return [bx + Math.cos(a) * b.r, by + Math.sin(a) * b.r * .82]; });
-    const inner = ring.map(([x, y]) => [bx + (x - bx) * .45, by - 6 + (y - by) * .45]);
-    ring.forEach((p, i) => { const q = ring[(i + 1) % b.sides], light = .72 + .5 * (.5 - .5 * Math.cos(Math.PI * 2 * (i + .5) / b.sides - 2.2));
-      el("polygon", {points: [p, q, inner[(i + 1) % b.sides], inner[i]].map(v => v.join(",")).join(" "), fill: shade(b.c, light), stroke: "#ffffff66", "stroke-width": .8}, crystal); });
-    el("polygon", {points: inner.map(v => v.join(",")).join(" "), fill: shade(b.c, 1.28), stroke: "#ffffffaa"}, crystal);
-    el("polygon", {points: [inner[0], inner[1], [bx, by - 6]].map(v => v.join(",")).join(" "), fill: "#fff", opacity: .45}, crystal);
-    for (const [k, dx] of [["", "-10px"], [" s2", "6px"], [" s3", "16px"]]) el("polygon", {points: `${bx},${by - 18} ${bx + 4},${by - 12} ${bx},${by - 6} ${bx - 4},${by - 12}`, fill: "#fff6c9", class: "spark" + k, style: `--dx:${dx}; transform-origin:${bx}px ${by - 12}px`}, g);
-    const flag = el("g", {class: "flag"}, g); el("line", {x1: bx + b.r * .7, y1: by - b.r * .2, x2: bx + b.r * .7, y2: by - b.r - 6, stroke: "#3c4657", "stroke-width": 2}, flag);
-    el("polygon", {points: `${bx + b.r * .7},${by - b.r - 6} ${bx + b.r * .7 + 15},${by - b.r - 1} ${bx + b.r * .7},${by - b.r + 4}`, fill: "#27a567"}, flag);
-    el("ellipse", {cx: b.x, cy: b.y, rx: 30, ry: 13, fill: "#eef1f6", stroke: "#7b8494", "stroke-width": 2}, g);
+    el("ellipse", {cx: bx, cy: by + 8, rx: b.r * 1.6, ry: b.r * 1.35, fill: "url(#halo)", class: "glow"}, g);
+    el("ellipse", {cx: bx + 8, cy: by + b.r * .7, rx: b.r * 1.25, ry: b.r * .3, fill: "#0003", filter: "url(#soft)"}, g);
+    SHAPES[b.shape](el("g", {class: "build"}, g), bx, by, b.r, b.c);
+    for (const [k, dx] of [["", "-10px"], [" s2", "6px"], [" s3", "16px"]]) el("polygon", {points: `${bx},${by - 18} ${bx + 4},${by - 12} ${bx},${by - 6} ${bx - 4},${by - 12}`, fill: "#fff3b0", class: "spark" + k, style: `--dx:${dx}; transform-origin:${bx}px ${by - 12}px`}, g);
+    const flag = el("g", {class: "flag"}, g); el("line", {x1: bx + b.r * 1.05, y1: by + b.r * .6, x2: bx + b.r * 1.05, y2: by - b.r * .5, stroke: "#5b3d1f", "stroke-width": 2}, flag);
+    el("polygon", {points: `${bx + b.r * 1.05},${by - b.r * .5} ${bx + b.r * 1.05 + 15},${by - b.r * .5 + 5} ${bx + b.r * 1.05},${by - b.r * .5 + 10}`, fill: "#27a567"}, flag);
+    el("ellipse", {cx: b.x, cy: b.y, rx: 30, ry: 13, fill: "#f6e7c1", stroke: "#a5834d", "stroke-width": 2}, g);
     const w = el("g", {transform: `translate(${b.x - 12},${b.y + 2})`}, g); WORKERS[b.who](el("g", {class: "worker"}, w));
-    el("text", {x: bx, y: by - b.r - 18, class: "label"}, g).textContent = b.name;
-    el("text", {x: bx, y: by - b.r - 5, class: "what"}, g).textContent = `${b.kind} · ${WHERE[b.where]}`;
-    el("rect", {x: b.x - 30, y: b.y + 17, width: 60, height: 7, rx: 3.5, fill: "#1d2433", opacity: .8}, g);  // the loading bar in the map
+    el("text", {x: bx, y: by - b.r * 1.25 - 16, class: "label"}, g).textContent = b.name;
+    el("text", {x: bx, y: by - b.r * 1.25 - 3, class: "what"}, g).textContent = `${b.kind} · ${WHERE[b.where]}`;
+    el("rect", {x: b.x - 30, y: b.y + 17, width: 60, height: 7, rx: 3.5, fill: "#3a2a14", opacity: .85}, g);  // the loading bar in the map
     const fill = el("rect", {x: b.x - 29, y: b.y + 18, width: 0, height: 5, rx: 2.5, fill: "#f08c2e"}, g);
     // the same building as a card under the map: name, what works there, where, time, loading bar
     const card = h("div", {class: "card"}, h("div", {class: "top"}, h("b", {}, b.name), h("span", {class: "state"}, "waiting")),
       h("div", {class: "runs"}, b.runs), h("div", {class: "tags"}, h("span", {class: "tag"}, b.kind), h("span", {class: "tag " + b.where}, WHERE[b.where])),
       h("div", {class: "bar"}, h("i")), h("div", {class: "time"}, h("span", {}, "0 s"), h("span", {}, b.about ? "about " + clock(b.about * 60) : "")));
     $("cards").append(card);
-    parts[b.id] = {g, fill, card};
+    parts[b.id] = {g, fill, card, tag: card.querySelector(".tags .tag:last-child"), sub: g.querySelector(".what")};
   }
 })();
-const courier = el("g"), courierIn = el("g", {}, courier); WORKERS.courier(courierIn);
-el("polygon", {points: "8,-20 16,-25 24,-20 16,-15", fill: "#fff", stroke: "#0005", "stroke-width": .8}, courierIn);
-el("polygon", {points: "8,-20 16,-15 16,-5 8,-10", fill: "#c9a34a", stroke: "#0005", "stroke-width": .8}, courierIn); el("polygon", {points: "24,-20 16,-15 16,-5 24,-10", fill: "#f5d76e", stroke: "#0005", "stroke-width": .8}, courierIn);
-const folk = [["#8e5a7a", "gallery", "clinic"], ["#5a7a8e", "studio", "court"], ["#7a8e5a", "factory", "forge"]].map(([c, a, b]) => { const g = el("g", {opacity: .85}); body(g, c); return {g, pts: route(a, b)}; });
+const courier = el("g"), courierIn = el("g", {}, courier); WORKERS.courier(courierIn);  // the runner carries a chest
+el("rect", {x: 8, y: -19, width: 13, height: 9, rx: 1, fill: "#e8b923", stroke: "#8a6a3a", "stroke-width": .8}, courierIn); el("rect", {x: 8, y: -21.5, width: 13, height: 3.5, rx: 1, fill: "#c0392b", stroke: "#8a6a3a", "stroke-width": .6}, courierIn);
+const folk = [["#2aa58a", "gallery", "clinic"], ["#c0392b", "studio", "court"], ["#2f6fb5", "factory", "forge"]].map(([c, a, b]) => { const g = el("g", {opacity: .9}); egy(g, c); return {g, pts: route(a, b)}; });
 let walk = {at: "gate", pts: [[P.gate.x, P.gate.y]], start: 0};
 function sendCourier(to) { if (to && to !== walk.at) { walk = {at: to, pts: route(walk.at, to), start: performance.now()}; } }
 (function frame(now) {
@@ -304,6 +390,10 @@ function sendCourier(to) { if (to && to !== walk.at) { walk = {at: to, pts: rout
   folk.forEach((f, k) => { const u = ((now / (30000 + k * 7000)) + k * .37) % 2, [fx, fy] = along(f.pts, u > 1 ? 2 - u : u); f.g.setAttribute("transform", `translate(${fx - 10},${fy + 8}) scale(.8)`); });
   requestAnimationFrame(frame);
 })(performance.now());
+function places(allOnServer) {  // a run with everything on the uni server: the buildings say so (the gate and the gallery are here)
+  for (const b of BUILDINGS) { const where = allOnServer && !["gate", "gallery"].includes(b.id) ? "server" : b.where;
+    parts[b.id].tag.textContent = WHERE[where]; parts[b.id].tag.className = "tag " + where; parts[b.id].sub.textContent = `${b.kind} · ${WHERE[where]}`; }
+}
 const WORD = {idle: "waiting", waiting: "next", running: "working", done: "done", failed: "did not work", unused: "not in this run"};
 // (rule 3) one place that shows a run: states = {building: {status, progress 0..1, seconds, note}}
 function showCity(states, active, headline) {
@@ -428,7 +518,8 @@ function showPlan(text, plan) {
   const first = (data.find(i => i.role === "object") || data[0]).name.replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30) || "my_project";
   const name = h("input", {value: first, maxlength: 40, "aria-label": "Project name"}), old = h("input", {value: plan.old_part || "", placeholder: "nothing"}),
         place = h("input", {value: plan.place || "", placeholder: "the page finds the place"}), words = h("input", {value: plan.part_words || "", placeholder: "e.g. a wide wizard hat"}),
-        where = h("select", {}, h("option", {value: "server"}, "the uni server (fast, across the bridge)"), h("option", {value: "pc"}, "our device (this PC's GPU)")),
+        where = h("select", {}, h("option", {value: "all"}, "everything on the uni server (this device needs no GPU)"),
+                  h("option", {value: "server"}, "the models on the uni server, the rest on this device"), h("option", {value: "pc"}, "everything on this device (it needs a strong GPU)")),
         why = h("div", {class: "why"}), run = h("button", {class: "main"}, "Run"), wordsRow = h("label", {}, "The new part in words (no data shows it)", words);
   const rows = data.map(item => { const role = h("select", {"aria-label": "What " + item.name + " is"}, h("option", {value: "object"}, "the model to change"), h("option", {value: "part"}, "the new part"), h("option", {value: "unused"}, "don't use"));
     role.value = item.role; role.onchange = () => { item.role = role.value; check(); };
@@ -449,7 +540,7 @@ function showPlan(text, plan) {
   [name, words].forEach(input => input.oninput = check);
   const card = say("guide", p(plan.say || "This is what I understood."), h("div", {class: "plan"}, rows,
     h("div", {class: "two"}, h("label", {}, "What goes away", old), h("label", {}, "Where the new part goes", place)), wordsRow,
-    h("details", {}, h("summary", {}, "More: project name and where it runs"), h("div", {class: "two", style: "margin-top:6px"}, h("label", {}, "Project name", name), h("label", {}, "The models run on", where))),
+    h("details", {}, h("summary", {}, "More: project name and where it runs"), h("div", {style: "margin-top:6px; display:grid; gap:8px"}, h("label", {}, "Project name", name), h("label", {}, "Where the work runs", where))),
     why, h("div", {}, run, " ", h("small", {style: "color:var(--dim)"}, "understood by " + plan.by))));
   run.onclick = () => { card.querySelectorAll("input, select, button").forEach(e => e.disabled = true);
     start({name: name.value, text, place: place.value.trim(), old: old.value.trim(), words: wordsRow.hidden ? "" : words.value.trim(), where: where.value}); };
@@ -468,7 +559,7 @@ async function start(plan) {
       items.push({path: answer.path, role: item.role, prompt: ""});
     }
     bar.style.width = "100%";
-    await post("/api/app/create", {flow: plan.name, prompt: plan.text, items, part_prompt: plan.words, at: plan.place, replace: !!plan.old, settings: {where: plan.where, resolution: "1024", seed: 42, steps: 25}});
+    await post("/api/app/create", {flow: plan.name, prompt: plan.text, items, part_prompt: plan.words, at: plan.place, replace: !!plan.old, settings: {where: plan.where, resolution: plan.resolution || "1024", seed: 42, steps: 25}});
     await post("/api/run", {flow: plan.name});
     note.remove();
     follow(plan.name, true);
@@ -505,13 +596,16 @@ function follow(name, fresh) {
   const tick = async () => {
     if (!running || running.name !== name) return;
     let flow; try { flow = await get("/api/flow?name=" + encodeURIComponent(name)); } catch (error) { line.textContent = "The page's server does not answer: " + error.message; return setTimeout(tick, 5000); }
+    places(flow.runs === "server");
     const {states, active} = cityOf(flow), all = flow.nodes.length, done = flow.nodes.filter(n => n.status === "done").length, failed = flow.nodes.find(n => n.status === "failed");
     const busy = flow.running || (flow.run && flow.run.active);
     if (busy) running.wasBusy = true;
     if (done === all) states.gallery = {status: "done", progress: 1, seconds: 0};
     showCity(states, done === all ? "gallery" : active, busy ? `running: ${name}, step ${Math.min(done + 1, all)} of ${all}` : null);
     bar.style.width = (done / all * 100) + "%";
-    line.textContent = active ? `${B[active].name} (${WHERE[B[active].where]}) is working: ${states[active].note || B[active].runs}. ${clock((Date.now() - running.began) / 1000)} so far.` : busy ? "Getting ready …" : "";
+    const remote = flow.remote ? ` The uni server says: ${flow.remote.line || flow.remote.message || "…"}` : "";
+    line.textContent = (active ? `${B[active].name} is working: ${states[active].note || B[active].runs}. ` : busy ? (flow.remote ? "Your data is on its way to the uni server. " : "Getting ready … ") : "") + (busy ? `${clock((Date.now() - running.began) / 1000)} so far.` : "") + (busy ? remote : "");
+    if (flow.remote && (flow.remote.notes || []).length && !note.dataset.told) { note.dataset.told = 1; note.append(p(h("small", {}, "Note from the server: " + flow.remote.notes.join("; ")))); }
     if (active && active !== running.last) running.last = active;
     if (done === all || failed || (!busy && running.wasBusy && Date.now() - running.began > 8000)) return finish(flow, note, stop, failed);
     setTimeout(tick, 3000);

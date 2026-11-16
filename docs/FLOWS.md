@@ -397,17 +397,24 @@ The project as one web page: add data, say what you want, press Run, see the 3D 
   bank) or the uni server (right bank; the bridge is the cloud folder). It reads the same `GET /api/flow` as the other
   pages and turns the flow's nodes into the buildings' states:
 
-| Building | What works there | Where | A flow's nodes |
+| Building (its form) | What works there | Where | A flow's nodes |
 |---|---|---|---|
-| City gate | the data arrives | our device | input |
-| Data office | Qwen3.6-27B reads every picture | our device | data sheet |
-| Model factory | TRELLIS.2 builds the model | uni server | base |
-| Picture studio | Qwen-Image-Edit paints the wish | our device | edit |
-| Skeleton clinic | UniRig finds the bones | our device | none yet |
-| Fitting workshop | the new part is placed | our device | none yet |
-| Detail forge | TRELLIS.2 inpaints shape, details, colours | uni server | inpaint |
-| Judge's court | measured, then Qwen3.6-27B | our device | pick seed, judge |
-| Gallery | the finished model | our device | – |
+| City gate (a pylon gate, a guard) | the data arrives | our device | input |
+| House of scribes (a mud-brick house, a scribe) | Qwen3.6-27B reads every picture | our device | data sheet |
+| The great pyramid (the master builder) | TRELLIS.2 builds the model | uni server | base |
+| Painters' pavilion (a painter) | Qwen-Image-Edit paints the wish | our device | edit |
+| House of life (a mastaba, a priest with an ankh) | UniRig finds the bones | our device | none yet |
+| Builders' yard (an obelisk in its scaffold, a mason) | the new part is placed | our device | none yet |
+| The forge (a step pyramid with a fire, a metal worker) | TRELLIS.2 inpaints shape, details, colours | uni server | inpaint |
+| Hall of judgement (a hall of columns, Ma'at with feather and scales) | measured, then Qwen3.6-27B | our device | pick seed, judge |
+| The gallery (an obelisk and a statue) | the finished model | our device | – |
+
+  The city is drawn as ancient Egypt, like the rest of the site: the Nile runs between our device and the uni server,
+  the bridge over it is the cloud folder. Every form and every figure is one function in the page (`SHAPES`, `WORKERS`).
+- **Everything on the uni server** (*More* in the plan, the default): for a computer without a GPU. The flow file gets
+  `"runs": "server"`; Run sends the flow and its files as ONE job (`cloud.py flow`), the server runs every node
+  itself (`scripts/server/run_flow.py`) and sends the state back every 15 s; the page shows it like a run of its own,
+  and every building then says "uni server". See [HOW-TO.md](HOW-TO.md#a-computer-without-a-gpu-everything-on-the-uni-server).
 
 - **Made after Shneiderman's eight golden rules**; where each is in the page is marked in its code with `(rule N)`:
   one look and the same words everywhere (1), Enter / paste / drop (2), every action answered by a chat line, a bar or

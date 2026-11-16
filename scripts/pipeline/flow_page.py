@@ -59,6 +59,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -245,9 +246,10 @@ def last_run(one):
         return {}, False
 
 
-def describe(file):
-    """One flow as the page wants it."""
-    one = flows.Flow(os.path.join(FLOWS, file + ".json"))
+def describe(file, path=None):
+    """One flow as the page wants it. path: the flow file when it is not in flows/ (a flow that runs on the uni server
+    is described there, by run_flow.py, and the answer comes back through the cloud)."""
+    one = flows.Flow(path or os.path.join(FLOWS, file + ".json"))
     one.peek(previews=False)
     saved, fresh = last_run(one)
     place, _ = one.layout()
@@ -292,7 +294,7 @@ def describe(file):
     running = any(n["status"] in ("running", "starting") for n in nodes)
     painting = any(key.startswith(file + "/") and job["process"].poll() is None for key, job in PROMPTS.items())
     return {"file": file, "name": one.name, "about": one.file.get("about", ""), "prompt": one.file.get("prompt", ""),
-            "app": one.file.get("made_by") == "app", "running": running, "nodes": nodes,
+            "app": one.file.get("made_by") == "app", "running": running, "nodes": nodes, "runs": one.file.get("runs"),
             "time": time.strftime("%H:%M:%S"), "run": run_state(file), "painting": painting, "choices": CHOICES}
 
 
@@ -348,9 +350,117 @@ def without_dead_proxy(env):
         env.setdefault("HF_HUB_OFFLINE", "1")
 
 
+# ---------------------------------------------------------------- a flow that runs completely on the uni server
+# For a computer without a GPU: the flow file says "runs": "server". Run then sends the flow and its files as one job
+# (cloud.py: pack_flow), the server runs every node (run_flow.py) and sends its state every 15 s; a thread here
+# fetches that state and the pictures it names into outputs/server_runs/<job>/, and /api/flow answers with it.
+
+REMOTE = {}  # {flow file: {"job", "state", "active", "message"}}
+
+
+def remote_note(file):
+    return os.path.join(core.PROJECT, "outputs", "server_runs", f"{file}.job")
+
+
+def remote_follow(file, job):
+    sys.path.insert(0, os.path.join(core.SCRIPTS, "server"))
+    from cloud import Cloud
+    run = REMOTE[file]
+    root = os.path.join(core.PROJECT, "outputs", "server_runs", job)
+    os.makedirs(os.path.join(root, "root"), exist_ok=True)
+    have, cloud = {}, None
+    while run["active"]:
+        try:
+            cloud = cloud or Cloud()
+            status = cloud.read_status(job) or {"state": "?", "message": ""}
+            run["message"] = f"{status['state']}: {status.get('message', '')}"[:200]
+            try:
+                state = json.loads(cloud.request("GET", f"{cloud.folder}/{job}__live_state.json", tries=1))
+            except urllib.error.HTTPError:
+                state = None  # the server has not started it yet
+            if state:
+                for address, sent in state.get("files", {}).items():
+                    relative = urllib.parse.unquote(address[len("/file/"):].split("?")[0])
+                    local = os.path.realpath(os.path.join(root, "root", relative))
+                    if not local.startswith(os.path.realpath(root) + os.sep):
+                        continue
+                    if have.get(address) != sent["stamp"] or not os.path.isfile(local):
+                        os.makedirs(os.path.dirname(local), exist_ok=True)
+                        cloud.download(sent["name"], local + ".part")
+                        os.replace(local + ".part", local)
+                        have[address] = sent["stamp"]
+                run["state"] = state
+                json.dump(state, open(os.path.join(root, "state.json"), "w"))
+            if status["state"] in ("done", "failed") and (state is None or not state.get("running") or status["state"] == "failed"):
+                run["active"] = False
+        except Exception as e:  # noqa: BLE001 (the cloud comes and goes: look again)
+            run["message"] = f"the cloud does not answer ({type(e).__name__}): trying again"
+            cloud = None
+        time.sleep(8)
+
+
+def start_remote(file):
+    path = flow_path(file)
+    if (REMOTE.get(file) or {}).get("active"):
+        raise ValueError("this flow is running on the uni server already")
+    sys.path.insert(0, os.path.join(core.SCRIPTS, "server"))
+    try:
+        import cloud
+        connection = cloud.Cloud()
+        job = cloud.send_zip(connection, cloud.pack_flow(path))
+    except SystemExit as e:  # no cloud login yet, or a file from outside pictures/uploads/
+        raise ValueError(str(e)) from None
+    os.makedirs(os.path.dirname(remote_note(file)), exist_ok=True)
+    open(remote_note(file), "w").write(job)
+    REMOTE[file] = {"job": job, "state": None, "active": True, "message": "queued: waiting for the uni server"}
+    threading.Thread(target=remote_follow, args=(file, job), daemon=True).start()
+
+
+def stop_remote(file):
+    run = REMOTE.get(file)
+    if run and run["active"]:
+        sys.path.insert(0, os.path.join(core.SCRIPTS, "server"))
+        from cloud import Cloud
+        cloud = Cloud()
+        cloud.request("PUT", f"{cloud.folder}/{run['job']}__stop", data=b"stop")
+
+
+def remote_state(file):
+    """What /api/flow answers for a flow that runs (or last ran) on the uni server, or None for a flow of this computer."""
+    run = REMOTE.get(file)
+    if run is None:  # the page was started again: the last server run of this flow, as it was fetched
+        try:
+            job = open(remote_note(file)).read().strip()
+            saved = json.load(open(os.path.join(core.PROJECT, "outputs", "server_runs", job, "state.json")))
+        except (OSError, ValueError):
+            return None
+        run = REMOTE[file] = {"job": job, "state": saved, "active": bool(saved.get("running")), "message": ""}
+        if run["active"]:
+            threading.Thread(target=remote_follow, args=(file, job), daemon=True).start()
+    state = run["state"]
+    if state is None:  # sent, not started there yet: this computer's own view of the flow, all of it waiting
+        state = describe(file)
+        for node in state["nodes"]:
+            node.update(status="waiting", note="")
+    prefix = f"/file/outputs/server_runs/{run['job']}/root/"
+
+    def here(value):  # the pictures are in this computer's copy
+        if isinstance(value, dict):
+            return {k: here(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [here(v) for v in value]
+        return prefix + value[len("/file/"):] if isinstance(value, str) and value.startswith("/file/") else value
+    answer = here({k: v for k, v in state.items() if k != "files"})
+    answer.update(file=file, running=run["active"], runs="server", run={"active": run["active"]},
+                  remote={"job": run["job"], "message": run["message"], **(state.get("server") or {})})
+    return answer
+
+
 def start_run(file, upto=None):
     """flow.py for this flow."""
     path = flow_path(file)
+    if json.load(open(path)).get("runs") == "server":  # every node on the uni server
+        return start_remote(file)
     if (RUNS.get(file) or {}).get("process") and RUNS[file]["process"].poll() is None:
         raise ValueError("this flow is running already")
     nodes = [n["id"] for n in json.load(open(path))["nodes"]]
@@ -369,6 +479,8 @@ def start_run(file, upto=None):
 
 
 def stop_run(file):
+    if (REMOTE.get(file) or {}).get("active"):
+        return stop_remote(file)
     run = RUNS.get(file)
     if run and run["process"].poll() is None:
         group = hasattr(os, "killpg")  # not on Windows: there only flow.py itself is stopped
@@ -472,6 +584,8 @@ def create_flow(wanted):
     except (TypeError, ValueError):
         raise ValueError("seed and steps are whole numbers") from None
     resolution, where = str(given.get("resolution", "1024")), given.get("where", "server")
+    everything = where == "all"  # every node on the uni server: this computer only sends the data (no GPU needed here)
+    where = "server" if everything else where
     if resolution not in ("512", "1024", "1536") or where not in CHOICES["where"] or not 1 <= steps <= 100 or seed < 0:
         raise ValueError("the settings don't fit: resolution 512, 1024 or 1536; runs on server or pc; steps 1 to 100")
     said = lambda role: {"prompts": prompts[role]} if prompts[role] else {}
@@ -496,7 +610,8 @@ def create_flow(wanted):
             before = f"judge_{step}"
     prompt = " ".join(str(wanted.get("prompt", "")).split())
     os.makedirs(FLOWS, exist_ok=True)
-    save_flow(path, {"name": file, "about": prompt or "Made on the main page.", "prompt": prompt, "made_by": "app", "nodes": nodes})
+    save_flow(path, {"name": file, "about": prompt or "Made on the main page.", "prompt": prompt, "made_by": "app",
+                     **({"runs": "server"} if everything else {}), "nodes": nodes})
 
 
 UNDERSTAND = """A user of a tool that changes 3D models wrote a message and attached data. Work out what each piece of data is for.
@@ -816,7 +931,7 @@ class Page(BaseHTTPRequestHandler):
                     return self.answer({"error": f"no flow {name}"}, 404)
                 with self.lock:
                     if name not in self.seen or time.time() - self.seen[name][0] > 2:
-                        self.seen[name] = (time.time(), describe(name))
+                        self.seen[name] = (time.time(), remote_state(name) or describe(name))
                     return self.answer(self.seen[name][1])
             if address.path.startswith("/file/"):
                 return self.file(urllib.parse.unquote(address.path[len("/file/"):]))
@@ -878,7 +993,10 @@ class Page(BaseHTTPRequestHandler):
                     raise ValueError("this flow is running, stop it first")
                 set_settings(file, wanted)
             elif self.path == "/api/app/create":
-                if (run_state(file) or {}).get("active"):
+                REMOTE.pop(file, None) if not (REMOTE.get(file) or {}).get("active") else None  # a new plan: not the last server run
+                if os.path.isfile(remote_note(file)) and file not in REMOTE:
+                    os.remove(remote_note(file))
+                if (run_state(file) or {}).get("active") or (REMOTE.get(file) or {}).get("active"):
                     raise ValueError("this project is running, stop it first")
                 create_flow(wanted)
             elif self.path == "/api/run":

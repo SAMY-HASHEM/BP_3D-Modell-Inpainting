@@ -91,6 +91,10 @@ def command_for(job, folder, zip_path, gpu):
         return [sys.executable, "-u", "scripts/pipeline/auto_pipeline.py", pictures, "--name", name,
                 "--out", os.path.join(folder, name), "--rounds", str(rounds), "--threshold", str(threshold), "--zip",
                 "--live", os.path.basename(os.path.normpath(folder))]
+    if job["kind"] == "check":  # what this server has for the pipeline (scripts/server/server_check.py)
+        return [sys.executable, "-u", "scripts/server/server_check.py", "--out", folder]
+    if job["kind"] == "flow":  # a whole flow, every node here: for a computer without a GPU (scripts/server/run_flow.py)
+        return [sys.executable, "-u", "scripts/server/run_flow.py", folder, "--live", os.path.basename(os.path.normpath(folder))]
     if job["kind"] != "generate":
         raise ValueError(f"unknown kind of job: {job['kind']}")
     pictures = [os.path.join(folder, os.path.basename(p)) for p in job["pictures"]]
@@ -177,7 +181,7 @@ def prepare(cloud, job_name):
         os.replace(zip_path + ".part", zip_path)
     with zipfile.ZipFile(zip_path) as z:
         job = json.loads(z.read("job.json"))
-        if job.get("kind") in ("generate", "organise", "pipeline"):
+        if job.get("kind") in ("generate", "organise", "pipeline", "flow"):
             z.extractall(folder)  # zipfile drops '..' and absolute paths
     return folder, zip_path, job
 
