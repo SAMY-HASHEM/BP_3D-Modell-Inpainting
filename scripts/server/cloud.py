@@ -394,6 +394,17 @@ def edit(args):
     befores = [os.path.join(args.edit, "before.png")] + made["more_edit"][2::4]
     masks = [os.path.join(args.edit, "mask.png")] + made["more_edit"][3::4]
     variant = f"{EDIT_SETTINGS},room={made['room']}"
+    if not (args.details or args.colours or args.unchecked):
+        # the judge before the inpainting (edit_check.py): what is wrong in the pictures or the 3D area is seen in a
+        # minute here; on the server it costs 20 to 40 minutes (the toaster robot's book went twice, Nov 15)
+        from edit_check import check
+        checked = os.path.join(args.edit, "check.json")
+        result = json.load(open(checked)) if os.path.isfile(checked) and os.path.getmtime(checked) >= os.path.getmtime(
+            os.path.join(args.edit, "edit.json")) else check(args.edit, part=made.get("prompt") or "a new part")
+        for found in result["findings"]:
+            print(f"  [{found['how_bad']}] {found['what']}\n      -> {found['do']}", flush=True)
+        if result["verdict"] != "pass":
+            raise SystemExit("the edit is not sent: the judge before the inpainting says redo (--unchecked sends it anyway)")
     if args.details or args.colours:
         folder = os.path.join(args.edit, "colours" if args.colours else "details")
         os.makedirs(folder, exist_ok=True)
@@ -614,6 +625,7 @@ def main(argv=None):
     p.add_argument("--seeds", type=int, nargs="+", default=[1])
     p.add_argument("--details", action="store_true", help="model is the shape step's result: only its fine shape")
     p.add_argument("--colours", action="store_true", help="the last step: only the colours of the model")
+    p.add_argument("--unchecked", action="store_true", help="send it also when the judge before the inpainting says redo")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch")
     p.add_argument("--here", action="store_true", help="run it on this PC's GPU instead of the uni server (needs --wait)")
     p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")

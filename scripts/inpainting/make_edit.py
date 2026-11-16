@@ -149,7 +149,7 @@ def changed_part(args, render, side):
     return part.crop(box)
 
 
-def part_from_words(args, render, reference=None):
+def part_from_words(args, render, reference=None, side=0):
     """No picture of the part: the picture AI paints --prompt onto BEFORE, the new part is what differs from BEFORE
     (only the big changes: the picture AI's small noise elsewhere is not the part). Sets --place to where it is;
     returns it cut out, as a part's picture would be. Writes words.png (what the picture AI painted).
@@ -165,12 +165,18 @@ def part_from_words(args, render, reference=None):
     wanted = Image.open(painted).convert("RGB")
     differs = np.abs(np.asarray(wanted, int) - np.asarray(plate, int)).sum(-1) > 60
     differs = ndimage.binary_closing(ndimage.binary_opening(differs, iterations=2), iterations=4)
+    erased = os.path.join(args.hand or "", f"erase_{side}.png")
+    if args.hand and os.path.isfile(erased):  # painted by hand: this stays. Taken out here already, so that the 3D
+        # area is not as high as what the picture AI changed by the way (a leg under the book: the area reached the floor)
+        differs &= ~(np.asarray(Image.open(erased).convert("L").resize(render.size, Image.NEAREST)) > 127)
     labels, count = ndimage.label(differs)
     if not count:
         raise SystemExit(f"the picture AI changed nothing to see for “{args.prompt}”: other words, or another --prompt-seed")
     sizes = ndimage.sum(np.ones(labels.shape), labels, range(1, count + 1))
     big = [k + 1 for k, pixels_ in enumerate(sizes) if pixels_ > max(400, 0.25 * sizes.max())]
-    differs = ndimage.binary_fill_holes(np.isin(labels, big))
+    # gaps closed: where the new part has the old part's colour (a dark red book in place of a brown toast) the
+    # difference is small, and the old part showed through the new one in thin streaks and notches (Nov 15)
+    differs = ndimage.binary_fill_holes(ndimage.binary_closing(np.isin(labels, big), iterations=8))
     share = differs.mean()
     print(f"    the words changed {100 * share:.1f} % of the picture, in {len(big)} piece(s)", flush=True)
     if share > 0.5:
@@ -236,6 +242,9 @@ def main():
                         "add_<view>.png (white = changes too) and erase_<view>.png (white = stays) per side")
     parser.add_argument("--after", metavar="PICTURE", help="by hand: a ready AFTER picture of the main side (--side), e.g. "
                         "from a prompt; the new part is what differs from BEFORE inside the painted area (--hand, add_<side>.png)")
+    parser.add_argument("--behind", type=float, metavar="VOXELS", help="a part on the side that is seen: how far behind the "
+                        "nearest surface the area reaches, in TRELLIS.2's voxels (default: 3, or 0.35 of the part's half "
+                        "width). With --replace it must reach through the whole old part: a toast held tilted is 8 deep")
     parser.add_argument("--replace", action="store_true", help="the model's surface under the 2D mask goes too (DELETE); "
                         "without it the whole surface stays and the part grows only into the empty room")
     args = parser.parse_args()
@@ -275,7 +284,7 @@ def main():
             if os.path.isdir(args.part) else args.part
         own = cut_out(remover, first)
         del remover
-        parts = [part_from_words(args, render, own)]
+        parts = [part_from_words(args, render, own, side)]
     elif args.part:
         video = args.part.lower().endswith((".mp4", ".mov", ".webm", ".mkv"))
         if os.path.isdir(args.part):  # a folder: its pictures in turning order
@@ -285,7 +294,7 @@ def main():
         parts = [cut_out(remover, p) for p in paths]
     else:
         del remover
-        parts = [part_from_words(args, render)]
+        parts = [part_from_words(args, render, side=side)]
     by_words = bool(args.prompt and (not args.part or not given))  # the picture AI painted it
     anywhere = bool(args.after or by_words)  # such a part is where the picture shows it, not only on the top
     for k, one in enumerate(parts):  # the cut-out parts: the web page shows them to place the part by hand
@@ -371,7 +380,7 @@ def main():
         if tops:
             at = (low + high) / 2
         else:
-            at, behind = high, max(3 * voxel, 0.35 * half)
+            at, behind = high, args.behind * voxel if args.behind else max(3 * voxel, 0.35 * half)
         middle = to_gltf(center) + right_axis * across.mean() + depth_axis * at
         print(f"    the part {'tops the model: the area goes all around it' if tops else 'sits on the side that is seen: the area starts at the surface there'}", flush=True)
     steps = np.arange(-half, half + voxel / 2, voxel / 2)

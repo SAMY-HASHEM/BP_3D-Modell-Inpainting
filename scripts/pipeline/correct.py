@@ -11,6 +11,8 @@
                the same camera:
                  measured  outline (edge cells), colour difference, how much fine detail the render has of the picture's
                  seen      the local vision AI (Qwen3.6-27B, Ollama): shape, colour, detail, 0 to 100
+               a grey clay render judges no colours. A model's score: every view weighs the same, a view it
+               doesn't fit counts as 0
                a cell is bad only if BOTH are below the threshold (the outline alone kept a worse block, Nov 15)
     4 CORRECT  only that part is regenerated (refine_region.py --box3d: zoomed in, inversion), from that view's
                crop at the picture's full resolution, with the camera of step 2. The model is turned so that the
@@ -221,6 +223,9 @@ def step_judge(task):
                     answer = asked([ref, mine], QUESTION)
                     seen = {k: answer.get(k) for k in ("shape", "colour", "detail")}
                     seen["defects"] = answer.get("defects", [])
+                if view.get("grey"):  # a grey clay render says nothing about the colours
+                    numbers.pop("colour", None)
+                    seen.pop("colour", None)
                 low_measured, low_seen = lowest(numbers), lowest(seen)
                 bad = (low_measured is not None and low_measured < threshold
                        and (low_seen < threshold if low_seen is not None else True))
@@ -471,7 +476,8 @@ def main():
     if not run(command + (["--sides", args.sides] if args.sides else []), os.path.join(out, "00_views", "log.txt"), sheet_path):
         return 1
     sheet = json.load(open(sheet_path))
-    views = [{"name": v["name"], "side": v.get("side"),  # the file next to the sheet: the folder may have been moved
+    views = [{"name": v["name"], "side": v.get("side"), "grey": v.get("saturation", 1) < 0.09,  # clay renders: 0.05 to 0.07
+              # the file next to the sheet: the folder may have been moved
               "path": os.path.relpath(os.path.join(os.path.dirname(sheet_path), "views", os.path.basename(v["path"])), PROJECT)}
              for v in sheet["views"]]
     main_view = args.main or sheet["lists"]["base"][0]
@@ -484,10 +490,19 @@ def main():
         if not step("judge", task, os.path.join(folder, "judge.json")):
             return None
         live(os.path.join(folder, "judge.jpg"), f"judge{suffix}_{name}.jpg")
-        return json.load(open(os.path.join(folder, "judge.json")))
+        result = json.load(open(os.path.join(folder, "judge.json")))
+        fits = json.load(open(os.path.join(os.path.dirname(cameras), "fit.json")))
+        result["left_out"] = [n for n, o in fits.items() if o < MIN_FIT]
+        return result
 
     def mean(result):
-        return float(np.mean([c["score"] for c in result["cells"] if not c.get("whole") and c["score"] is not None]))
+        """Every view weighs the same, and a view the model doesn't fit counts as 0: a model made from the front alone
+        was judged only from the front and beat one that is right from every side (magic boy, Nov 15)."""
+        per_view = {}
+        for c in result["cells"]:
+            if not c.get("whole") and c["score"] is not None:
+                per_view.setdefault(c["view"], []).append(c["score"])
+        return float(np.mean([np.mean(v) for v in per_view.values()] + [0.0] * len(result.get("left_out", []))))
 
     print("1 BASE", flush=True)
     # two candidates: the main view alone (free renders that don't fit together doubled parts when mixed), and all
@@ -542,7 +557,7 @@ def main():
     def line(result, label):
         cells = [c for c in result["cells"] if not c.get("whole") and c["score"] is not None]
         scores = [c["score"] for c in cells]
-        return (f"- {label}: {len(cells)} cells, mean {np.mean(scores):.1f}, lowest {min(scores)}, "
+        return (f"- {label}: {len(cells)} cells, mean {mean(result):.1f}, lowest {min(scores)}, "
                 f"{sum(c['bad'] for c in cells)} bad")
 
     result = judged[suffix][3]  # the chosen base's judging: round 1 starts from it

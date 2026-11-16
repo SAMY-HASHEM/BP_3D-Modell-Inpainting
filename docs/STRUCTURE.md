@@ -112,8 +112,51 @@ when mixed (the robot arms), so both candidates are made and judged. Corrections
 tore the model seen from the others (68.7 down to 56.0); judged from every view, the damaging ones are refused.
 Replacing a part on purpose (a new head) works; polishing a model that is roughly right is still an open experiment.
 
+Magic boy (Nov 15, six base models from the uni server, 1536, judged from 7 views: 4 colour, 3 grey clay):
+
+| Base made from | Score | What it showed |
+|---|---|---|
+| the big finished render alone (1440 x 2160) | 28.1 | good front (68), but it fits neither the side nor the back |
+| the sheet's 3 colour views (each about 600 x 1000) | 62.9 | fits every side, weak front |
+| **the big render + the sheet's side and back** | **74.8** | the best: the sharpest picture as the front, true sides for the rest |
+| the same, seed 1 instead of 42 | 65.2 | the seed alone moves the score by 10 |
+| the sheet's 3 views + 3 clay views for the shape only | 60.4 | the clay views did not help (62.9 without them) |
+| the big render + side and back + 3 clay views for the shape only | 71.4 | again not better than without them (74.8) |
+
+Two faults of the judge showed there and are fixed: a view the model does not fit was left out of its score (the
+render-alone model got 65.6 from its front views only and beat the sheet model), so now every view weighs the same and
+a view that does not fit counts as 0; and the grey clay views judged colours against a coloured model, so now a grey
+view (saturation under 0.09) judges shape and detail only.
+
 On the uni server: `cloud.py pipeline <pictures> --loop correct --sides "front, side, back" --threshold 80`. Without
 Ollama there the judge is Qwen3-VL-8B (weaker). Base models made on the server can be given: `--base a.glb b.glb`.
+
+### E. A part in place of another, placed in 3D (`place_part.py`), and the judge before the inpainting (`edit_check.py`)
+
+```
+make_edit.py --prompt ─► generate.py ─► place_part.py ───────► edit_check.py ─► cloud.py edit --details ─► place_part.py --finish
+the front picture: the   the new part   the part put where     the plan judged   only the fine shape and    the new part back
+picture AI paints the    as its own     the old one is, zoomed  before it is     the join are regenerated,  into the whole,
+part, its 2D mask        3D model       in; before / after /    sent (cloud.py    on the placed part's       untouched model
+                                        mask from 4 or 8 sides  refuses on redo)  voxels
+```
+
+What the toaster robot showed (Nov 15 and 16: the toast in its hand replaced by a book, `outputs/sad_toaster`):
+
+| Try | What went to the server | Result (kept / how close to the wanted result) |
+|---|---|---|
+| 1, 2 | one front picture from the picture AI, a column of 7,200 voxels in front of the robot | a thin torn slab, loose pieces; the judge before the inpainting now says redo |
+| 3 | the book as a 3D model in the hand, 4 sides, the whole robot (book 20 x 17 x 2.5 voxels) | a small brown plate (97 / 21 and 37): the book reached 3 voxels past the model's box and was cut off |
+| 4 A, B, C | the same zoomed in (book up to 42 x 36 x 5 voxels), 4 and 8 sides, the area from new noise | shards or a small plate (97 / 13 to 28): a thin flat part is not built from noise, also with 8 sides |
+| **5** | **the placed book as the structure, only the details step on it** (`--details`) | **a solid book held by the fingers (98 / 97), pass** |
+
+So: a new part whose own model can be made is placed, and the inpainting only makes its fine shape and its join with
+the model (step 2, details). Making its structure from noise (step 1, shape) is for parts that grow out of the model
+(a crown on a head), not for a thin separate thing. More found there: a model must be one mesh; a model saved again
+by trimesh shines differently than its file, so BEFORE and AFTER are rendered from models saved the same way (the
+rest then counts as kept: 97 instead of 81); a mesh's pieces are counted by position (a textured mesh has its corners
+doubled along every seam of the texture); the local vision AI gave good and bad plans alike 10 of 10, only the
+measured part of the judge told them apart; a server job took 20 to 140 minutes that night.
 
 ## 3. Where the heavy work runs
 

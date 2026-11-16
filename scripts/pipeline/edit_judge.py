@@ -118,6 +118,18 @@ def measure_side(original, candidate, mask, after, area):
         if there.sum() > 50:
             away = float(np.linalg.norm(wish[there].mean(0) - b[there].mean(0)))
             result.update(colour=round(float(np.clip(100 - 1.5 * away, 0, 100))), colour_difference=round(away, 1))
+        # like: how close the candidate is to the AFTER picture around the change. Only fair when AFTER is a render of
+        # the wanted model (place_part.py), not a collage: where there is something in one and nothing in the other,
+        # and the colour difference pixel by pixel where both have something. `part` only says that something changed:
+        # a brown plate where a toast was got 0, a torn slab 80 (the toaster robot's book, Nov 16)
+        around = wide(mask, 8)
+        if around.sum() > 50:
+            wish_on = np.abs(np.asarray(after.convert("RGB"), int) - np.array(GREY)).sum(-1) > 24
+            wrong = float(((wish_on != b_on) & around).sum() / around.sum())
+            both = wish_on & b_on & around
+            apart = float(np.linalg.norm(wish[both] - b[both], axis=-1).mean()) if both.any() else 0.0
+            result.update(like=round(float(np.clip(min(100 - 300 * wrong, 100 - 1.5 * apart), 0, 100))),
+                          like_shape=round(float(np.clip(100 - 300 * wrong, 0, 100))), like_colour=round(float(np.clip(100 - 1.5 * apart, 0, 100))))
     return result
 
 
@@ -182,12 +194,19 @@ def main():
                                area_seen(points, info, index))
             if k >= sides:
                 one.pop("part")
+            if not edit.get("placed_in_3d"):
+                for key in ("like", "like_shape", "like_colour"):
+                    one.pop(key, None)
             per_side.append({"view": index, **one})
         parts = [s["part"] for s in per_side if "part" in s]
         colours = [s["colour"] for s in per_side if "colour" in s]
         entry = {"model": model, "sides": per_side, "kept": min(s["kept"] for s in per_side), "part": round(float(np.mean(parts))),
                  "colour": round(float(np.mean(colours))) if colours else None, "renders": folder,
                  "psnr": round(float(np.mean([s["psnr"] for s in per_side])), 1), "chamfer": chamfer_kept(args.original, model, points)}
+        likes = [s["like_shape" if args.step != "colours" else "like"] for s in per_side if "like" in s]
+        if likes:  # the wanted result is known from every side: how close to it, instead of "something changed"
+            entry["like"] = round(float(np.mean(likes)))
+            entry["part"] = entry["like"]
         entry["measured"] = min(entry["kept"], entry["part"], *([entry["colour"]] if args.step == "colours" and colours else []))
         report.append(entry)
         print(f"  {number + 1}: kept {entry['kept']}, part {entry['part']}, colour {entry['colour']}, PSNR outside {entry['psnr']} dB, "
