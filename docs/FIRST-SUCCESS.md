@@ -11,6 +11,19 @@ untouched.
 | after the details step (`v02`) | 98 | 97 | 93 |
 | after the colours step (`v03`, the one the user chose) | 98 | 93 | 96 |
 
+The result (`v03`), from the front, the left, behind and the right:
+
+![the robot holds the book, from four sides](first-success/result_v03_details_and_colours.jpg)
+
+| Picture | What it shows |
+|---|---|
+| [original_front.jpg](first-success/original_front.jpg) | the robot before, with the toast |
+| [result_v02_details.jpg](first-success/result_v02_details.jpg) | after the details step |
+| [plan_before_after_mask.jpg](first-success/plan_before_after_mask.jpg) | the plan of step 3: before, after and 2D mask from four sides |
+| [plan_3d_area.jpg](first-success/plan_3d_area.jpg) | the plan's 3D area (red: the old part goes, blue: room for the new one, green: kept) |
+| [judge_compare.jpg](first-success/judge_compare.jpg) | the judge's sheet: wanted, original, details (1), colours (2) |
+| [failed_shape_from_noise.jpg](first-success/failed_shape_from_noise.jpg) | try 4 B, the same plan with the shape from noise: shards |
+
 The files are in `outputs/sad_toaster/` (not in Git: the robot and the book picture belong to other artists):
 `v03_book_inpainted_details_colours.glb` and `.jpg`, `v02_book_inpainted_details.glb`, `compare_details_and_colours.jpg`.
 
