@@ -80,8 +80,8 @@ runs; `flow.py` runs them in order (a node whose result is there is not run agai
             local AI)                         local AI)        2D mask, area)             local AI)
 ```
 
-Front ends of the same flows: the terminal (`flow.py flows/x.json`), the web app (`web/app.html` + `flow_page.py`,
-see [FLOWS.md](FLOWS.md#3-web-app)), the older node page (`web/index.html`). Details: [FLOWS.md](FLOWS.md#1-inpainting-flow).
+Front ends of the same flows: the terminal (`flow.py flows/x.json`), the web app (`user_interface_model/app.html`: a chat, the
+data and the city that shows the run, + `flow_page.py`, see [FLOWS.md](FLOWS.md#3-web-app); its earlier pages in `old/`). Details: [FLOWS.md](FLOWS.md#1-inpainting-flow).
 
 ### C. The character pipeline (`scripts/pipeline/auto_pipeline.py`): many pictures → one detailed model
 
@@ -191,12 +191,12 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | **Core** | `inpainting/inpaint.py`, `inversion.py`; `generation/generate.py`, `multi_image.py` | ~1,400 |
 | **Making the five things** | `inpainting/make_edit.py`, `picture_check.py`, `picture_from_prompt.py`, `find_part.py`; `pipeline/data_sheet.py`, `edit_judge.py`, `pick_seed.py`, `judge.py` | ~2,300 |
 | **Running it** | `server/inpaint_server.py`, `run_job.py`, `cloud.py`, `cloud_worker.py`; `pipeline/flow.py`, `nodes_core.py` | ~2,000 |
-| **Front ends** | `blender/inpaint_addon.py`; `web/app.html`, `index.html`, `login.html` + `pipeline/flow_page.py`, `accounts.py`; `blender/pipeline_nodes.py`; `comfyui/` | ~8,700 |
+| **Front ends** | `blender/inpaint_addon.py`; `user_interface_model/app.html`, `login.html`, `old/` + `pipeline/flow_page.py`, `accounts.py`; `blender/pipeline_nodes.py`; `comfyui/` | ~8,700 |
 | **Character pipeline** | `pipeline/correct.py`, `auto_pipeline.py`, `run_pipeline.py`, `sort_pictures.py`, `grid_judge.py`, `refine_region.py`, `combine_parts.py`, `hair_strands.py`, `preview.py`; `generation/organise_pictures.py` | ~2,800 |
 | **Helpers** | `tools/render_views.py`, `render_preview.py`, `project_texture.py`, `compare_in_blender.py`; `generation/views_from_picture.py`, `views_from_video.py`, `fix_normals.py`, `run_tests.py` | ~1,700 |
 | **Kept for an open task** | `generation/try_settings.py` (requirement 2: the best settings), `tools/compare_models.sh` | ~80 |
 
-Paths are under `scripts/` unless they start with `blender/`, `web/` or `comfyui/`.
+Paths are under `scripts/` unless they start with `blender/`, `user_interface_model/` or `comfyui/`.
 
 ## 6. Where the results are
 

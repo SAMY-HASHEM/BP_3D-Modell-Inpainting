@@ -24,7 +24,7 @@ exactly the same:
 | Blender's node editor | tree type *BP Pipeline* → sidebar (N) → *BP* → **New inpainting flow** → *Run up to here* on a node |
 
 A third place is **the web page**: `python scripts/pipeline/flow_page.py --open` (this PC only,
-http://127.0.0.1:8777, the page itself is `web/index.html`). It shows every flow of `flows/` as its node chain and
+http://127.0.0.1:8777, the page itself is `user_interface_model/old/nodes.html`). It shows every flow of `flows/` as its node chain and
 works on the same flow files and result folders as `flow.py`:
 
 | On the page | What it does |
@@ -371,19 +371,69 @@ Sources: [TRELLIS.2 + Pixal3D in ComfyUI](https://comfyui-wiki.com/en/news/2026-
 
 *The web app: front end and back end*
 
-The project as one web page: add pictures, write prompts, press Run, see the 3D result. Made after the sketches in
-`UI-skitch/`.
+The project as one web page: add data, say what you want, press Run, see the 3D result. All pages are in one folder,
+`user_interface_model/`; the back end and the engine are the same for all of them.
+
+### The main page: a chat, the data, the city (`user_interface_model/app.html`, at `/app`, Nov 16)
+
+```
+ CHAT                                          THE CITY
+ you: "replace the axe in his hand             our device  │ river │  uni server
+       with this sword" + 3 files              buildings   │bridge │  buildings
+ guide: the plan (what each data is,           ─────────────────────────────────
+        what goes away, where) → Run           a card per building: name, what works there,
+ guide: the run, with Stop → the result        where, time, loading bar
+```
+
+- **The chat** takes words and data together: pictures, videos, 3D models, any file (button, drop, or paste).
+- **What the words mean** is worked out by the local AI (`POST /api/understand`: Qwen3.6-27B sees the words, the file
+  names and a small picture of each data): which data is the model to change, which the new part, what goes away and
+  where the part goes. Tried with the warrior: two files of him + a picture of a sword and "replace the axe in his hand
+  with this sword" gave object, object, part, "axe", "in his hand" in 14 s. Without the local AI, simple rules do it
+  (the first data is the model).
+- **The plan** is shown before anything runs and every line of it can be changed; Run is off, with the reason, while
+  the plan can't work.
+- **The city** shows a run from above: every building is a local AI, a model or plain processing, on our device (left
+  bank) or the uni server (right bank; the bridge is the cloud folder). It reads the same `GET /api/flow` as the other
+  pages and turns the flow's nodes into the buildings' states:
+
+| Building | What works there | Where | A flow's nodes |
+|---|---|---|---|
+| City gate | the data arrives | our device | input |
+| Data office | Qwen3.6-27B reads every picture | our device | data sheet |
+| Model factory | TRELLIS.2 builds the model | uni server | base |
+| Picture studio | Qwen-Image-Edit paints the wish | our device | edit |
+| Skeleton clinic | UniRig finds the bones | our device | none yet |
+| Fitting workshop | the new part is placed | our device | none yet |
+| Detail forge | TRELLIS.2 inpaints shape, details, colours | uni server | inpaint |
+| Judge's court | measured, then Qwen3.6-27B | our device | pick seed, judge |
+| Gallery | the finished model | our device | – |
+
+- **Made after Shneiderman's eight golden rules**; where each is in the page is marked in its code with `(rule N)`:
+  one look and the same words everywhere (1), Enter / paste / drop (2), every action answered by a chat line, a bar or
+  a lit building (3), a run ends with one message and the result (4), Run only when the plan can work, errors say
+  what to do (5), removed data and a cleared chat can be undone, a run stopped (6), the page proposes and the user
+  decides (7), the plan, the steps and the buildings stay on the screen (8).
+- **Not there yet:** a run from the page is still the flow of section 1 (the part's shape from noise), so the skeleton
+  clinic and the fitting workshop show "not in this run": the way of [FIRST-SUCCESS.md](FIRST-SUCCESS.md) has no flow
+  nodes yet. A 3D model as data is shown, but a run can't start from one. The demo button plays the first success in
+  the city without starting anything.
+
+### The page before it (`user_interface_model/old/app.html`, at `/old/app`)
+
+Made after the sketches in `UI-skitch/`: data rows with a prompt each, the developer view with every node and the edit
+by hand of a mask. What follows describes it; its back end is the one the main page uses.
 
 | Part | File | What it is |
 |---|---|---|
-| **Front end** | `web/app.html` | the page itself: one file, no build step. Two colours (sand gold and black), hieroglyphs behind it |
+| **Front end** | `user_interface_model/old/app.html` | the page itself: one file, no build step. Two colours (sand gold and black), hieroglyphs behind it |
 | **Back end** | `scripts/pipeline/flow_page.py` | a small server on this PC only (127.0.0.1:8777). It writes flow files and starts `flow.py` |
 | the engine | `scripts/pipeline/flow.py`, `nodes_core.py` | unchanged: the same nodes and result folders as from the terminal or Blender |
-| the older page | `web/index.html` (at `/`) | the node chain from left to right; still there, linked from the menu |
+| the node page | `user_interface_model/old/nodes.html` (at `/`) | the node chain from left to right; still there, linked from the menu |
 
 ```
 source activate.sh
-python scripts/pipeline/flow_page.py --open      # then http://127.0.0.1:8777/app
+python scripts/pipeline/flow_page.py --open      # then http://127.0.0.1:8777/app (the main page) or /old/app
 ```
 
 Opened as a file (double click on `app.html`) the page only shows its look: Run needs the back end.
@@ -440,7 +490,7 @@ python scripts/pipeline/flow_page.py --accounts --host 0.0.0.0    # the page for
 - A password is made up by `accounts.py` and shown once. A forgotten one: `add` the name again (a new password).
 - `accounts.json` (project folder, not in Git, readable only by its owner) keeps per name a salt and the password's
   hash (PBKDF2-SHA256), never the password.
-- Without a login the pages go to `/login` (`web/login.html`) and every other address answers 401. A login lasts 7
+- Without a login the pages go to `/login` (`user_interface_model/login.html`) and every other address answers 401. A login lasts 7
   days, or until the page is started again. 8 wrong passwords in a row: that name waits ten minutes.
 - `--host` for other computers is refused without `--accounts`. *Open in Blender* is off with accounts.
 - In the menu of the main page: who is logged in; a click logs out.

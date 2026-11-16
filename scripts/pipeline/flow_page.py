@@ -8,9 +8,10 @@ goes to outputs/<name>/work/run.log); a flow.py started in a terminal is followe
     python scripts/pipeline/flow_page.py            # then open http://127.0.0.1:8777
     python scripts/pipeline/flow_page.py --open     # opens the browser by itself
 
-The page itself is web/index.html; http://127.0.0.1:8777/app is the main page (web/app.html, after UI-skitch/).
+All pages are in user_interface_model/: http://127.0.0.1:8777/app is the main page (app.html: the chat, the data and the
+city that shows the run); / is the node page (old/nodes.html), /old/app the main page before it (old/app.html).
 
-For other people (e.g. on the uni server, inside the uni network): --accounts asks for a login first (web/login.html).
+For other people (e.g. on the uni server, inside the uni network): --accounts asks for a login first (user_interface_model/login.html).
 The accounts are handed out with accounts.py, nobody makes one on the page. Only with --accounts may --host be
 another address than this PC's own:
 
@@ -36,7 +37,8 @@ The page gets everything from here:
     POST /api/prompt            {"flow", "node", "prompt", "seed", "reference", "area"}: the local picture AI paints the
                                 prompt into the painted area of the main side (picture_from_prompt.py), into flows/hand/
 
-The main page (web/app.html: add data, a prompt per data, the total workflow) makes its own flow files with these:
+The main page makes its own flow files with these (POST /api/understand {"prompt", "items"} before them: the local AI
+reads the chat's words and data and says which data is the model and which the new part):
     POST /api/upload?flow=<name>&role=object|part&name=<file>   the request's body is the picture or video itself; it is
                                 saved as pictures/uploads/<flow>/<role>/<file>
     POST /api/app/create        {"flow", "prompt", "items": [{"path", "role", "prompt"}], "part_prompt", "settings": {"seed",
@@ -65,9 +67,11 @@ import accounts
 import flow as flows
 import nodes_core as core
 
-PAGE = os.path.join(core.PROJECT, "web", "index.html")
-APP = os.path.join(core.PROJECT, "web", "app.html")  # the main page (GET /app)
-LOGIN = os.path.join(core.PROJECT, "web", "login.html")  # GET /login, only with --accounts
+UI = os.path.join(core.PROJECT, "user_interface_model")  # every page of the web site
+PAGE = os.path.join(UI, "old", "nodes.html")  # the node page (GET /)
+APP = os.path.join(UI, "app.html")  # the main page (GET /app): the chat, the data, the city
+OLD_APP = os.path.join(UI, "old", "app.html")  # the main page before it (GET /old/app): data rows, the developer view
+LOGIN = os.path.join(UI, "login.html")  # GET /login, only with --accounts
 COOKIE = "flow_login"
 UPLOADS = os.path.join(core.PROJECT, "pictures", "uploads")  # what the main page sends: uploads/<flow>/<role>/<file>
 NAME = r"[A-Za-z0-9_-]{1,40}"  # a flow the main page makes: its name is a file name and a folder name
@@ -481,7 +485,9 @@ def create_flow(wanted):
     nodes.append({"id": "base", "type": "base", "seed": seed, "where": where, "resolution": resolution, "steps": steps,
                   "in": {"data": "object_sheet"}})
     if files["part"] or words:
-        nodes.append({"id": "edit", "type": "edit", "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}} if files["part"]
+        at = " ".join(str(wanted.get("at") or "").split())[:120]  # where the part goes, in words ("in the right hand")
+        nodes.append({"id": "edit", "type": "edit", **({"at": at} if at else {}), **({"replace": True} if wanted.get("replace") else {}),
+                      "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}} if files["part"]
                      else {"id": "edit", "type": "edit", "prompt": words, "in": {"model": "base", "object": "object_sheet"}})
         before = "base"
         for step in ("shape", "details", "colours"):
@@ -491,6 +497,55 @@ def create_flow(wanted):
     prompt = " ".join(str(wanted.get("prompt", "")).split())
     os.makedirs(FLOWS, exist_ok=True)
     save_flow(path, {"name": file, "about": prompt or "Made on the main page.", "prompt": prompt, "made_by": "app", "nodes": nodes})
+
+
+UNDERSTAND = """A user of a tool that changes 3D models wrote a message and attached data. Work out what each piece of data is for.
+The message: "%s"
+The data, numbered:
+%s
+Roles: "object" = the thing that is to be changed (the model is built from it; several pictures or a video of the same thing
+are all "object"); "part" = a new thing that is to be put onto the object or to replace something of it; "unused" = neither.
+With one thing only, all data are "object". If the message asks for a new part that no data shows (e.g. "give him a hat"),
+there is no "part" data: put the new part's description into part_words.
+Answer only with JSON, no other text:
+{"roles": ["object" or "part" or "unused", one per data, in order],
+ "old_part": "what of the object goes away, a few words, or empty",
+ "place": "where the new part goes, e.g. in the right hand, or empty",
+ "part_words": "the new part described in words, only when no data shows it, else empty",
+ "say": "one short friendly sentence that tells the user what you understood"}"""
+
+
+def understand(wanted):
+    """The chat's words and data read by the local AI (Qwen3.6-27B, Ollama): which data is the object, which the new
+    part, what goes away and where the part goes. The page shows it as a plan the user can change before anything runs."""
+    import urllib.request
+    from judge import MODEL, OLLAMA
+    prompt = " ".join(str(wanted.get("prompt", "")).split())[:1500]
+    items = [i for i in (wanted.get("items") or []) if isinstance(i, dict)][:12]
+    if not items:
+        raise ValueError("no data to understand")
+    lines, images = [], []
+    for k, item in enumerate(items):
+        thumb = str(item.get("thumb") or "")
+        shown = ""
+        if thumb.startswith("data:image/") and "," in thumb and len(thumb) < 600_000:
+            images.append(thumb.split(",", 1)[1])
+            shown = f", shown as image {len(images)}"
+        lines.append(f"{k + 1}. {str(item.get('kind', 'file'))[:20]} \"{str(item.get('name', ''))[:80]}\"{shown}")
+    body = {"model": MODEL, "stream": False, "format": "json", "think": False, "options": {"temperature": 0},
+            "messages": [{"role": "user", "content": UNDERSTAND % (prompt.replace('"', "'"), "\n".join(lines)), "images": images}]}
+    try:
+        request = urllib.request.Request(OLLAMA + "/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})
+        answer = json.loads(json.load(urllib.request.urlopen(request, timeout=120))["message"]["content"])
+    except (OSError, ValueError, KeyError) as e:
+        raise ValueError(f"the local AI did not answer ({type(e).__name__})") from None
+    roles = [r if r in ("object", "part", "unused") else "unused" for r in (answer.get("roles") or [])][:len(items)]
+    roles += ["unused"] * (len(items) - len(roles))
+    if "object" not in roles:
+        roles[0] = "object"
+    text = lambda key, most: " ".join(str(answer.get(key) or "").split())[:most]
+    return {"roles": roles, "old_part": text("old_part", 80), "place": text("place", 120), "part_words": text("part_words", 400),
+            "say": text("say", 300), "by": MODEL}
 
 
 def server_jobs(only=None):
@@ -731,7 +786,7 @@ class Page(BaseHTTPRequestHandler):
                     if name:
                         return self.send(b"", "text/plain", 302, [("Location", "/app")])
                     return self.send(open(LOGIN, "rb").read(), "text/html; charset=utf-8", extra=[("Cache-Control", "no-store")])
-                if not name and address.path in ("/", "/app"):
+                if not name and address.path in ("/", "/app", "/old/app"):
                     return self.send(b"", "text/plain", 302, [("Location", "/login"), ("Cache-Control", "no-store")])
                 if not name:
                     return self.answer({"error": "log in first"}, 401)
@@ -739,8 +794,9 @@ class Page(BaseHTTPRequestHandler):
                 return self.answer({"accounts": self.accounts, "name": name if self.accounts else None})
             if address.path == "/":
                 return self.send(open(PAGE, "rb").read(), "text/html; charset=utf-8", extra=[("Cache-Control", "no-store")])
-            if address.path == "/app":  # the main page after the sketch in UI-skitch/ (web/app.html)
-                return self.send(open(APP, "rb").read(), "text/html; charset=utf-8", extra=[("Cache-Control", "no-store")])
+            if address.path in ("/app", "/old/app"):  # the main page, and the one before it
+                return self.send(open(APP if address.path == "/app" else OLD_APP, "rb").read(), "text/html; charset=utf-8",
+                                 extra=[("Cache-Control", "no-store")])
             if address.path == "/api/flows":
                 return self.answer(flow_list())
             if address.path == "/api/server":
@@ -810,6 +866,8 @@ class Page(BaseHTTPRequestHandler):
                 return self.answer({"error": "too much"}, 413)
             wanted = json.loads(self.rfile.read(length) or b"{}")
             file = wanted.get("flow", "")
+            if self.path == "/api/understand":
+                return self.answer({"ok": True, **understand(wanted)})
             if self.path == "/api/blender":
                 if self.accounts:
                     raise ValueError("not on a shared page: it would open Blender on the computer the page runs on")

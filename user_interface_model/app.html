@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inpainting 3D</title>
+<!-- The main page (Nov 16): a chat, the data, and the city that shows the run.
+
+     You write what you want and attach data (pictures, videos, 3D models, anything). The page says what it understood
+     (which data is the model, which the new part) as a plan you can change; nothing runs before you press Run. While it
+     runs, the city shows it: every building is a local AI, a model or a processing step, with its name, where it works
+     (our device or the uni server across the river), its time and a loading bar.
+
+     Made after Shneiderman's eight golden rules; where each one is in the page is marked with (rule N) in the code:
+       1 consistency          one look, the same words everywhere: data, model, new part, run
+       2 shortcuts            Enter sends, Shift+Enter a new line, paste or drop data anywhere, Esc closes
+       3 feedback             every action is answered: a chat line, a bar, a lit building
+       4 closure              a run ends with one clear message and the result
+       5 error prevention     Run is off until the plan can work, and says why; errors say what to do
+       6 easy reversal        removed data and a cleared chat can be undone; a run can be stopped
+       7 the user in control  the page proposes, the user decides: roles, name, where it runs, Run and Stop
+       8 little to remember   the plan, the steps and the buildings stay on the screen
+
+     Served by scripts/pipeline/flow_page.py at /app. Opened as a file it shows a demo only. The pages before it: old/. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+<style>
+  /* (rule 1) the site's two colours, sand gold and black; the city keeps its own colours because they mean something */
+  :root { --sand:#D4A853; --ink:#14100A; --raised:#231c11; --line:#6f5a2f; --dim:#b39048; --ok:#27a567; --now:#f08c2e; --bad:#e2574c; --radius:14px; }
+  * { box-sizing:border-box; scrollbar-color:var(--line) transparent; }
+  [hidden] { display:none !important; }
+  html, body { margin:0; height:100%; }
+  body { background:var(--ink); color:var(--sand); font:15px/1.5 Inter, system-ui, sans-serif; display:flex; flex-direction:column; }
+  h1, h2, .display { font-family:Cinzel, Georgia, serif; letter-spacing:.06em; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  button { cursor:pointer; border-radius:10px; border:1.5px solid var(--sand); background:none; padding:7px 14px; font-weight:600; }
+  button:hover:not(:disabled) { background:#d4a85322; } button:disabled { opacity:.45; cursor:not-allowed; }
+  button.main { background:var(--sand); color:var(--ink); } button.main:hover:not(:disabled) { background:#e3bb6c; }
+  button.quiet { border-color:transparent; padding:6px 10px; }
+  :focus-visible { outline:2px solid #fff; outline-offset:2px; }
+  header { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; padding:10px 18px; border-bottom:2px solid var(--sand); }
+  header h1 { margin:0; font-size:20px; text-align:center; } header small { display:block; font:12px Inter, sans-serif; letter-spacing:0; color:var(--dim); }
+  header .right { justify-self:end; display:flex; gap:6px; }
+  main { flex:1; min-height:0; display:grid; grid-template-columns:minmax(330px, 420px) minmax(0, 1fr); gap:14px; padding:14px; }
+  @media (max-width:980px) { main { grid-template-columns:1fr; } html, body { height:auto; } .chat { height:80vh; } }
+  .panel { border:1.5px solid var(--line); border-radius:var(--radius); background:#1a140c; min-height:0; }
+  /* ------------------------------------------------ the chat */
+  .chat { display:flex; flex-direction:column; }
+  .chat h2, .town h2 { margin:0; padding:10px 14px; font-size:14px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+  #log { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:94%; padding:9px 12px; border-radius:12px; border:1px solid var(--line); background:var(--raised); overflow-wrap:anywhere; }
+  .msg.you { align-self:flex-end; background:var(--sand); color:var(--ink); border-color:var(--sand); }
+  .msg .who { font-size:11px; font-weight:600; opacity:.75; margin-bottom:2px; }
+  .msg.bad { border-color:var(--bad); } .msg p { margin:0 0 6px; } .msg p:last-child { margin:0; }
+  .data { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .chip { position:relative; width:74px; text-align:center; font-size:10.5px; line-height:1.2; }
+  .chip .thumb { width:74px; height:74px; border-radius:8px; border:1.5px solid currentColor; display:grid; place-items:center; overflow:hidden; background:#0006; font-size:11px; font-weight:600; }
+  .chip img, .chip video { width:100%; height:100%; object-fit:cover; }
+  .chip .name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
+  .chip .x { position:absolute; top:-6px; right:-6px; width:22px; height:22px; padding:0; border-radius:50%; background:var(--ink); color:var(--sand); border:1.5px solid var(--sand); line-height:1; }
+  .plan { display:grid; gap:8px; margin-top:8px; }
+  .plan .row { display:grid; grid-template-columns:48px 1fr auto; gap:8px; align-items:center; }
+  .plan .row .thumb { width:48px; height:48px; border-radius:6px; border:1px solid var(--line); overflow:hidden; display:grid; place-items:center; font-size:10px; }
+  .plan .row img, .plan .row video { width:100%; height:100%; object-fit:cover; }
+  .plan label { display:grid; gap:2px; font-size:12px; color:var(--dim); }
+  .plan input, .plan select { background:var(--ink); border:1px solid var(--line); border-radius:8px; padding:6px 8px; color:var(--sand); min-width:0; }
+  .plan .two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .plan .why { font-size:12.5px; min-height:18px; } .plan .why.stop { color:var(--bad); } .plan .why.go { color:var(--ok); }
+  .plan details { font-size:12.5px; } .plan summary { cursor:pointer; color:var(--dim); }
+  .bar { height:8px; border-radius:99px; background:#0008; border:1px solid var(--line); overflow:hidden; }
+  .bar i { display:block; height:100%; width:0; background:var(--sand); }
+  .compose { border-top:1px solid var(--line); padding:10px; display:grid; gap:8px; }
+  .compose .line { display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:end; }
+  .compose textarea { resize:none; min-height:42px; max-height:140px; background:var(--ink); border:1.5px solid var(--line); border-radius:10px; padding:9px 11px; }
+  .compose .hint { font-size:11.5px; color:var(--dim); }
+  model-viewer { width:100%; height:300px; background:#0007; border-radius:10px; margin-top:6px; }
+  /* ------------------------------------------------ the city */
+  .town { display:flex; flex-direction:column; overflow:hidden; }
+  .town .scroll { overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
+  #city { width:100%; aspect-ratio:980 / 640; flex:none; display:block; border-radius:10px; }
+  .label { font:700 13px Inter, sans-serif; fill:#1d2433; text-anchor:middle; paint-order:stroke; stroke:#ffffffd9; stroke-width:4px; }
+  .what { font:11px Inter, sans-serif; fill:#2f3747; text-anchor:middle; paint-order:stroke; stroke:#ffffffd9; stroke-width:3.5px; }
+  .bank { font:800 13px Inter, sans-serif; letter-spacing:.1em; fill:#3d5a3a; }
+  .glow { opacity:0; transition:opacity .5s; } .b.running .glow { opacity:.9; animation:pulse 1.6s infinite ease-in-out; }
+  .flag { opacity:0; transition:opacity .4s; } .b.done .flag { opacity:1; } .b.unused { opacity:.45; } .b.failed .crystal { filter:grayscale(1); }
+  @keyframes pulse { 0%,100% { opacity:.35; } 50% { opacity:.95; } }
+  .b.running .worker { animation:work .7s infinite ease-in-out; }
+  @keyframes work { 0%,100% { transform:translateY(0) rotate(0); } 50% { transform:translateY(-3px) rotate(-4deg); } }
+  .spark { opacity:0; } .b.running .spark { animation:spark 1.1s infinite; } .b.running .spark.s2 { animation-delay:.35s; } .b.running .spark.s3 { animation-delay:.7s; }
+  @keyframes spark { 0% { opacity:1; transform:translate(0,0) scale(.6); } 100% { opacity:0; transform:translate(var(--dx),-30px) scale(1.3); } }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:10px; }
+  .card { border:1.5px solid var(--line); border-radius:12px; padding:9px 11px; background:var(--raised); display:grid; gap:5px; }
+  .card.running { border-color:var(--now); box-shadow:0 0 0 2px #f08c2e44; } .card.done { border-color:var(--ok); } .card.failed { border-color:var(--bad); } .card.unused { opacity:.5; }
+  .card .top { display:flex; justify-content:space-between; gap:6px; align-items:baseline; } .card b { font-size:14px; }
+  .card .state { font-size:11.5px; font-weight:600; } .card.running .state { color:var(--now); } .card.done .state { color:var(--ok); } .card.failed .state { color:var(--bad); }
+  .card .runs { font-size:12px; color:#e9d5a4; min-height:34px; }
+  .tags { display:flex; gap:5px; flex-wrap:wrap; } .tag { font-size:10.5px; font-weight:600; padding:1px 7px; border-radius:99px; border:1px solid var(--line); }
+  .tag.device { background:#f2b44133; } .tag.server { background:#4f8fe044; border-color:#4f8fe0; color:#b9d6ff; }
+  .card .time { display:flex; justify-content:space-between; font-size:11.5px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .card.running .bar i { background:var(--now); } .card.done .bar i { background:var(--ok); }
+  /* ------------------------------------------------ small things */
+  #toast { position:fixed; left:50%; bottom:22px; transform:translate(-50%, 80px); background:var(--sand); color:var(--ink); padding:9px 14px; border-radius:10px; font-weight:600; transition:transform .25s; display:flex; gap:12px; align-items:center; z-index:9; }
+  #toast.show { transform:translate(-50%, 0); } #toast button { border-color:var(--ink); padding:3px 10px; }
+  #drop { position:fixed; inset:0; background:#14100Ae6; border:4px dashed var(--sand); display:none; place-items:center; font:700 26px Cinzel, serif; z-index:8; }
+  body.dropping #drop { display:grid; }
+  dialog { background:var(--ink); color:var(--sand); border:2px solid var(--sand); border-radius:var(--radius); max-width:560px; padding:18px 20px; }
+  dialog::backdrop { background:#000a; } dialog h2 { margin-top:0; } kbd { border:1px solid var(--line); border-radius:5px; padding:0 6px; background:var(--raised); }
+  dialog li { margin-bottom:5px; }
+</style>
+</head>
+<body>
+<header>
+  <div><button class="quiet" id="menuOld" title="The pages before this one">Other pages</button></div>
+  <h1>INPAINTING 3D<small>change a part of a 3D model by saying it</small></h1>
+  <div class="right"><button class="quiet" id="demoButton" title="Plays a run in the city without starting anything">Watch a demo</button><button class="quiet" id="helpButton" title="How this page works and its shortcuts">Help</button></div>
+</header>
+<main>
+  <section class="panel chat" aria-label="Chat">
+    <h2><span class="display">CHAT</span><button class="quiet" id="clearButton" title="Empties the chat and your data (can be undone)">Start over</button></h2>
+    <div id="log" aria-live="polite"></div>
+    <div class="compose">
+      <div class="data" id="pending"></div>
+      <div class="line">
+        <button id="attach" title="Add data: pictures, videos, 3D models or other files">+ Data</button>
+        <textarea id="text" rows="1" placeholder="Say what you want …" aria-label="Your message"></textarea>
+        <button class="main" id="send" disabled>Send</button>
+      </div>
+      <div class="hint" id="composeHint">Enter sends · Shift+Enter makes a new line · drop or paste data anywhere</div>
+      <input type="file" id="files" multiple hidden>
+    </div>
+  </section>
+  <section class="panel town" aria-label="The city">
+    <h2><span class="display">THE CITY</span><span id="townState" style="font:12px Inter, sans-serif; color:var(--dim)">nothing is running</span></h2>
+    <div class="scroll">
+      <svg id="city" viewBox="0 0 980 640" role="img" aria-label="The run as a city seen from above"></svg>
+      <div class="cards" id="cards"></div>
+    </div>
+  </section>
+</main>
+<div id="drop">Drop your data here</div>
+<div id="toast" role="status"><span></span><button hidden>Undo</button></div>
+<dialog id="help">
+  <h2 class="display">How it works</h2>
+  <ol>
+    <li><b>Add data</b>: pictures, a video, a 3D model, or any other file. Several pictures of the same thing are fine.</li>
+    <li><b>Say what you want</b> in your own words, for example “replace the toast in its hand with this book”.</li>
+    <li><b>Check the plan</b>: the page says which data it takes as the model and which as the new part. Change anything that is wrong.</li>
+    <li><b>Press Run</b>. Nothing starts before that. The city shows where the work is; you can stop it at any time.</li>
+  </ol>
+  <p><b>Shortcuts:</b> <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>Ctrl</kbd>+<kbd>V</kbd> paste data · drop files anywhere · <kbd>Esc</kbd> close this</p>
+  <p><b>The city:</b> the left bank is our device, the right bank is the uni server, the bridge is the cloud folder between them. A building that works glows; a finished one raises a green flag.</p>
+  <form method="dialog"><button class="main">Close</button></form>
+</dialog>
+<dialog id="pages">
+  <h2 class="display">Other pages</h2>
+  <p><a href="/old/app" style="color:var(--sand)">The page before this one</a>: data rows, the developer view with every node, the edit by hand of a mask.</p>
+  <p><a href="/" style="color:var(--sand)">The node page</a>: every flow as its chain of nodes.</p>
+  <p><a href="old/city.html" style="color:var(--sand)">The city alone</a>: its demo, without the chat.</p>
+  <form method="dialog"><button class="main">Close</button></form>
+</dialog>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+function h(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) { if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v); }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) e.append(kid.nodeType ? kid : document.createTextNode(kid));
+  return e;
+}
+const LIVE = location.protocol.startsWith("http");  // served by flow_page.py; as a file the page can only show its demo
+const clock = s => { s = Math.max(0, Math.round(s)); return s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s} s`; };
+
+// ================================================================ the city's buildings
+// Every building: its name, what works there (a local AI, a model, or plain processing), where (our device / the uni
+// server), about how long it takes, the figure in front of it, and which nodes of a flow are its work (types).
+const BUILDINGS = [
+  {id: "gate",     name: "City gate",        runs: "Your data arrives and is sorted",            kind: "processing", where: "device", about: 0.2, who: "guard",    types: ["input"],              x: 75,  y: 585, c: "#8fa3b8", sides: 4, r: 30},
+  {id: "office",   name: "Data office",      runs: "Qwen3.6-27B reads what every picture shows", kind: "local AI",   where: "device", about: 1,   who: "clerk",    types: ["data_sheet"],         x: 120, y: 400, c: "#f2b441", sides: 5, r: 38},
+  {id: "factory",  name: "Model factory",    runs: "TRELLIS.2 builds the 3D model",              kind: "model",      where: "server", about: 15,  who: "engineer", types: ["base"],               x: 830, y: 160, c: "#4f8fe0", sides: 6, r: 50},
+  {id: "studio",   name: "Picture studio",   runs: "Qwen-Image-Edit paints your wish",           kind: "local AI",   where: "device", about: 2,   who: "painter",  types: ["edit"],               x: 270, y: 150, c: "#f2b441", sides: 6, r: 44},
+  {id: "clinic",   name: "Skeleton clinic",  runs: "UniRig finds the bones",                     kind: "model",      where: "device", about: 1,   who: "doctor",   types: ["rig"],                x: 330, y: 545, c: "#f2b441", sides: 6, r: 40},
+  {id: "workshop", name: "Fitting workshop", runs: "Puts the new part in its place",             kind: "processing", where: "device", about: 4,   who: "fitter",   types: ["place"],              x: 480, y: 150, c: "#f2b441", sides: 5, r: 44},
+  {id: "forge",    name: "Detail forge",     runs: "TRELLIS.2 inpaints shape, details, colours", kind: "model",      where: "server", about: 90,  who: "smith",    types: ["inpaint"],            x: 845, y: 500, c: "#4f8fe0", sides: 5, r: 48},
+  {id: "court",    name: "Judge's court",    runs: "Measures, then Qwen3.6-27B looks",           kind: "local AI",   where: "device", about: 6,   who: "judge",    types: ["judge", "pick_seed"], x: 520, y: 450, c: "#a567d8", sides: 8, r: 44},
+  {id: "gallery",  name: "Gallery",          runs: "Your finished model",                        kind: "processing", where: "device", about: 0,   who: "host",     types: [],                     x: 95,  y: 205, c: "#3fbf8f", sides: 8, r: 38},
+];
+const B = Object.fromEntries(BUILDINGS.map(b => [b.id, b]));
+const TYPICAL = {input: 0.2, data_sheet: 1, base: 15, pick_seed: 2, edit: 2, inpaint: 30, judge: 2, rig: 1, place: 4};  // minutes per node
+const WHERE = {device: "our device", server: "uni server"};
+
+const NS = "http://www.w3.org/2000/svg", svg = $("city");
+const el = (tag, attrs = {}, parent = svg) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+const shade = (hex, f) => "#" + [1, 3, 5].map(i => Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(i, i + 2), 16) * f))).toString(16).padStart(2, "0")).join("");
+const P = {...B, square: {x: 320, y: 330}, west: {x: 205, y: 485}, quay: {x: 610, y: 300}, land: {x: 760, y: 320}};
+const ROADS = [["gate", "west", 26], ["west", "office", -20], ["west", "clinic", 26], ["west", "square", -24], ["office", "square", 20], ["gallery", "square", -26],
+               ["square", "studio", 28], ["square", "workshop", -30], ["square", "court", 30], ["clinic", "court", -26], ["workshop", "quay", -34],
+               ["court", "quay", 26], ["quay", "land", 0], ["land", "factory", 30], ["land", "forge", -30]];
+const STREET = {};
+for (const [a, b, bend] of ROADS) {
+  const A = P[a], Z = P[b], len = Math.hypot(Z.x - A.x, Z.y - A.y) || 1, cx = (A.x + Z.x) / 2 - (Z.y - A.y) / len * bend, cy = (A.y + Z.y) / 2 + (Z.x - A.x) / len * bend;
+  const pts = Array.from({length: 23}, (_, i) => { const t = i / 22, u = 1 - t; return [u * u * A.x + 2 * u * t * cx + t * t * Z.x, u * u * A.y + 2 * u * t * cy + t * t * Z.y]; });
+  STREET[a + ">" + b] = pts; STREET[b + ">" + a] = pts.slice().reverse();
+}
+function route(from, to) {  // the shortest way over the streets
+  const before = {[from]: null}, queue = [from];
+  while (queue.length) { const n = queue.shift(); if (n === to) break; for (const k in STREET) { const [a, b] = k.split(">"); if (a === n && !(b in before)) { before[b] = a; queue.push(b); } } }
+  let pts = [[P[to].x, P[to].y]], n = to; while (before[n] != null) { pts = STREET[before[n] + ">" + n].concat(pts); n = before[n]; } return pts;
+}
+function along(pts, t) {
+  const len = pts.slice(1).map((p, i) => Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1])), total = len.reduce((a, b) => a + b, 0); let d = t * total;
+  for (let i = 0; i < len.length; i++) { if (d <= len[i] || i === len.length - 1) { const f = len[i] ? Math.min(1, d / len[i]) : 0; return [pts[i][0] + f * (pts[i + 1][0] - pts[i][0]), pts[i][1] + f * (pts[i + 1][1] - pts[i][1])]; } d -= len[i]; }
+  return pts[0];
+}
+// the figures (drawn at 0,0, feet at y = 0); one function each, so they can be replaced by our own models later
+const body = (g, coat, skin = "#f1c9a5") => { el("ellipse", {cx: 0, cy: 1, rx: 9, ry: 3, fill: "#0003"}, g);
+  el("path", {d: "M-7 0 L-6 -15 Q0 -19 6 -15 L7 0 Z", fill: coat, stroke: "#0005", "stroke-width": .8}, g); el("circle", {cx: 0, cy: -21, r: 5.6, fill: skin, stroke: "#0005", "stroke-width": .8}, g); };
+const WORKERS = {
+  painter: g => { body(g, "#3d6fb5"); el("path", {d: "M-7 -24 Q0 -32 8 -25 L4 -23 Z", fill: "#c0392b"}, g);
+    el("line", {x1: 15, y1: 0, x2: 19, y2: -24, stroke: "#7a5a3a", "stroke-width": 2}, g); el("line", {x1: 27, y1: 0, x2: 21, y2: -24, stroke: "#7a5a3a", "stroke-width": 2}, g);
+    el("rect", {x: 12, y: -26, width: 17, height: 14, fill: "#fff", stroke: "#7a5a3a"}, g); el("circle", {cx: 17, cy: -20, r: 2.4, fill: "#e74c3c"}, g); el("circle", {cx: 23, cy: -17, r: 2.4, fill: "#3498db"}, g); },
+  doctor: g => { body(g, "#ffffff"); el("rect", {x: -2, y: -14, width: 4, height: 9, fill: "#e74c3c"}, g); el("rect", {x: -4.5, y: -11.5, width: 9, height: 4, fill: "#e74c3c"}, g);
+    el("line", {x1: 11, y1: -20, x2: 19, y2: -6, stroke: "#f7f3e8", "stroke-width": 3.4, "stroke-linecap": "round"}, g);
+    for (const [x, y] of [[10, -21], [12, -19], [18, -7], [20, -5]]) el("circle", {cx: x, cy: y, r: 2.3, fill: "#f7f3e8", stroke: "#0003", "stroke-width": .5}, g); },
+  fitter: g => { body(g, "#e67e22"); el("path", {d: "M-7 -23 Q0 -33 7 -23 Z", fill: "#f1c40f", stroke: "#0005", "stroke-width": .8}, g);
+    el("line", {x1: 8, y1: -10, x2: 17, y2: -22, stroke: "#8b95a3", "stroke-width": 3}, g); el("path", {d: "M14 -25 L20 -26 L21 -20 L17 -21 Z", fill: "#8b95a3"}, g); },
+  judge: g => { body(g, "#1f1f28"); el("path", {d: "M-8 -18 Q-9 -29 0 -29 Q9 -29 8 -18 Q5 -22 0 -22 Q-5 -22 -8 -18 Z", fill: "#f4f4f4", stroke: "#0004", "stroke-width": .7}, g);
+    el("rect", {x: -1.5, y: -15, width: 3, height: 7, fill: "#fff"}, g); el("line", {x1: 9, y1: -9, x2: 18, y2: -19, stroke: "#7a5a3a", "stroke-width": 2.4}, g);
+    el("rect", {x: 14, y: -25, width: 10, height: 6, rx: 1.5, fill: "#5b3d1f", transform: "rotate(-40 19 -22)"}, g); el("rect", {x: -18, y: -8, width: 9, height: 8, fill: "#5b3d1f"}, g); },
+  engineer: g => { body(g, "#2c6fb0"); el("path", {d: "M-7 -23 Q0 -32 7 -23 Z", fill: "#ecf0f1", stroke: "#0005", "stroke-width": .8}, g);
+    el("rect", {x: 9, y: -16, width: 11, height: 14, fill: "#fdfdfd", stroke: "#566", "stroke-width": .8}, g); for (const y of [-12, -9, -6]) el("line", {x1: 11, y1: y, x2: 18, y2: y, stroke: "#2c6fb0", "stroke-width": 1}, g); },
+  smith: g => { body(g, "#6b4a2b"); el("rect", {x: -5, y: -14, width: 10, height: 13, fill: "#3b2a1a"}, g);
+    el("rect", {x: 12, y: -6, width: 16, height: 5, fill: "#4a4f58"}, g); el("rect", {x: 16, y: -1, width: 8, height: 2, fill: "#4a4f58"}, g);
+    el("line", {x1: 7, y1: -12, x2: 16, y2: -22, stroke: "#7a5a3a", "stroke-width": 2.2}, g); el("rect", {x: 12, y: -28, width: 10, height: 6, fill: "#70757f", transform: "rotate(-35 17 -25)"}, g); },
+  clerk: g => { body(g, "#7d5ba6"); el("circle", {cx: -2.3, cy: -21.5, r: 2, fill: "none", stroke: "#222", "stroke-width": .9}, g); el("circle", {cx: 2.6, cy: -21.5, r: 2, fill: "none", stroke: "#222", "stroke-width": .9}, g);
+    el("rect", {x: 9, y: -18, width: 12, height: 15, fill: "#fff8e1", stroke: "#8a7a4a", "stroke-width": .8}, g); el("circle", {cx: 15, cy: -11, r: 3.4, fill: "none", stroke: "#3d6fb5", "stroke-width": 1.4}, g); el("line", {x1: 17.5, y1: -8.5, x2: 20, y2: -6, stroke: "#3d6fb5", "stroke-width": 1.4}, g); },
+  guard: g => { body(g, "#5d6d7e"); el("path", {d: "M-6 -24 L0 -31 L6 -24 Z", fill: "#95a5a6", stroke: "#0005", "stroke-width": .8}, g); el("line", {x1: 10, y1: 0, x2: 10, y2: -30, stroke: "#7a5a3a", "stroke-width": 2}, g); el("polygon", {points: "10,-36 13,-30 7,-30", fill: "#bdc3c7"}, g); },
+  host: g => { body(g, "#27ae60"); el("rect", {x: 10, y: -24, width: 14, height: 14, fill: "#fff8e1", stroke: "#c8a13a", "stroke-width": 2}, g); el("polygon", {points: "13,-13 17,-19 20,-15 22,-17 22,-12", fill: "#4f8fe0"}, g); },
+  courier: g => { body(g, "#34495e"); el("path", {d: "M-7 -23 Q0 -30 7 -23 L10 -22 L-7 -22 Z", fill: "#e74c3c"}, g); },
+};
+const parts = {};  // per building: its svg group, its bar in the map, its card
+(function drawCity() {
+  el("defs").innerHTML = `<linearGradient id="water" x1="0" x2="1"><stop offset="0" stop-color="#57b6f2"/><stop offset=".5" stop-color="#3e9ae6"/><stop offset="1" stop-color="#63c2f5"/></linearGradient>
+    <radialGradient id="halo"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#ffd27a" stop-opacity="0"/></radialGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="5"/></filter>`;
+  el("rect", {width: 980, height: 640, fill: "#bfe3a8"});
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let gx = 0; gx < 14; gx++) for (let gy = 0; gy < 10; gy++) { const x = gx * 72, y = gy * 68, j = () => rnd() * 26 - 13;
+    el("polygon", {points: [[x + j(), y + j()], [x + 72 + j(), y + j()], [x + 36 + j(), y + 68 + j()]].map(p => p.join(",")).join(" "), fill: shade(x > 640 ? "#a9d6c9" : "#bfe3a8", .93 + rnd() * .12), opacity: .9}); }
+  el("path", {d: "M650 0 C625 150 700 215 672 320 C648 420 708 500 684 640 L752 640 C776 500 716 420 742 320 C770 215 700 150 722 0 Z", fill: "url(#water)"});
+  for (let i = 0; i < 16; i++) { const y = 20 + i * 40, x = 690 + Math.sin(i * 1.7) * 22; el("polygon", {points: `${x},${y} ${x + 26},${y + 7} ${x + 6},${y + 16}`, fill: "#fff", opacity: .18 + (i % 3) * .07}); }
+  el("text", {x: 20, y: 28, class: "bank"}).textContent = "OUR DEVICE";
+  el("text", {x: 846, y: 626, class: "bank", fill: "#2f5d73"}).textContent = "UNI SERVER";
+  const drawn = new Set();
+  for (const k in STREET) { const [a, b] = k.split(">"); if (drawn.has(b + ">" + a)) continue; drawn.add(k); const d = "M" + STREET[k].map(p => p.join(" ")).join(" L");
+    el("path", {d, fill: "none", stroke: "#7b8494", "stroke-width": 19, "stroke-linecap": "round"}); el("path", {d, fill: "none", stroke: "#d9dee8", "stroke-width": 14, "stroke-linecap": "round"});
+    el("path", {d, fill: "none", stroke: "#fff", "stroke-width": 1.5, "stroke-dasharray": "8 9", opacity: .9}); }
+  el("polygon", {points: "640,292 760,298 760,338 640,330", fill: "#b9834a", stroke: "#74502a", "stroke-width": 2});
+  for (let x = 648; x < 760; x += 14) el("line", {x1: x, y1: 293, x2: x, y2: 337, stroke: "#8d6236", "stroke-width": 2});
+  el("path", {d: "M" + STREET["quay>land"].map(p => p.join(" ")).join(" L"), fill: "none", stroke: "#e9dcc6", "stroke-width": 12});
+  el("text", {x: 700, y: 284, class: "what"}).textContent = "the bridge: the cloud folder";
+  for (const k of ["square", "west", "quay", "land"]) { el("circle", {cx: P[k].x, cy: P[k].y, r: 15, fill: "#d9dee8", stroke: "#7b8494", "stroke-width": 2.5}); el("circle", {cx: P[k].x, cy: P[k].y, r: 5, fill: "#9fc7e8"}); }
+  for (const [x, y, s] of [[390, 250, .9], [600, 120, 1.1], [40, 480, .8], [250, 610, 1], [440, 600, .9], [600, 570, 1.1], [930, 330, 1], [760, 60, .9], [930, 590, .8], [200, 300, .8], [420, 390, .8], [940, 60, 1], [30, 300, .8]])
+    { el("polygon", {points: `${x},${y - 20 * s} ${x + 13 * s},${y + 6 * s} ${x - 13 * s},${y + 6 * s}`, fill: "#3fa56a"}); el("polygon", {points: `${x},${y - 20 * s} ${x + 13 * s},${y + 6 * s} ${x},${y + 6 * s}`, fill: "#2c8553"}); el("rect", {x: x - 2, y: y + 6 * s, width: 4, height: 6, fill: "#7a5a3a"}); }
+  for (const b of BUILDINGS) {
+    const bx = b.x, by = b.y - b.r - 22, g = el("g", {class: "b", tabindex: 0, role: "img", "aria-label": b.name});
+    g.addEventListener("click", () => parts[b.id].card.scrollIntoView({behavior: "smooth", block: "nearest"}));
+    el("ellipse", {cx: bx, cy: by + 8, rx: b.r * 1.5, ry: b.r * 1.3, fill: "url(#halo)", class: "glow"}, g);
+    el("ellipse", {cx: bx + 6, cy: by + b.r * .55, rx: b.r * 1.05, ry: b.r * .5, fill: "#0003", filter: "url(#soft)"}, g);
+    const crystal = el("g", {class: "crystal"}, g);
+    const ring = Array.from({length: b.sides}, (_, i) => { const a = Math.PI * 2 * i / b.sides - Math.PI / 2 + (b.sides % 2 ? 0 : Math.PI / b.sides); return [bx + Math.cos(a) * b.r, by + Math.sin(a) * b.r * .82]; });
+    const inner = ring.map(([x, y]) => [bx + (x - bx) * .45, by - 6 + (y - by) * .45]);
+    ring.forEach((p, i) => { const q = ring[(i + 1) % b.sides], light = .72 + .5 * (.5 - .5 * Math.cos(Math.PI * 2 * (i + .5) / b.sides - 2.2));
+      el("polygon", {points: [p, q, inner[(i + 1) % b.sides], inner[i]].map(v => v.join(",")).join(" "), fill: shade(b.c, light), stroke: "#ffffff66", "stroke-width": .8}, crystal); });
+    el("polygon", {points: inner.map(v => v.join(",")).join(" "), fill: shade(b.c, 1.28), stroke: "#ffffffaa"}, crystal);
+    el("polygon", {points: [inner[0], inner[1], [bx, by - 6]].map(v => v.join(",")).join(" "), fill: "#fff", opacity: .45}, crystal);
+    for (const [k, dx] of [["", "-10px"], [" s2", "6px"], [" s3", "16px"]]) el("polygon", {points: `${bx},${by - 18} ${bx + 4},${by - 12} ${bx},${by - 6} ${bx - 4},${by - 12}`, fill: "#fff6c9", class: "spark" + k, style: `--dx:${dx}; transform-origin:${bx}px ${by - 12}px`}, g);
+    const flag = el("g", {class: "flag"}, g); el("line", {x1: bx + b.r * .7, y1: by - b.r * .2, x2: bx + b.r * .7, y2: by - b.r - 6, stroke: "#3c4657", "stroke-width": 2}, flag);
+    el("polygon", {points: `${bx + b.r * .7},${by - b.r - 6} ${bx + b.r * .7 + 15},${by - b.r - 1} ${bx + b.r * .7},${by - b.r + 4}`, fill: "#27a567"}, flag);
+    el("ellipse", {cx: b.x, cy: b.y, rx: 30, ry: 13, fill: "#eef1f6", stroke: "#7b8494", "stroke-width": 2}, g);
+    const w = el("g", {transform: `translate(${b.x - 12},${b.y + 2})`}, g); WORKERS[b.who](el("g", {class: "worker"}, w));
+    el("text", {x: bx, y: by - b.r - 18, class: "label"}, g).textContent = b.name;
+    el("text", {x: bx, y: by - b.r - 5, class: "what"}, g).textContent = `${b.kind} · ${WHERE[b.where]}`;
+    el("rect", {x: b.x - 30, y: b.y + 17, width: 60, height: 7, rx: 3.5, fill: "#1d2433", opacity: .8}, g);  // the loading bar in the map
+    const fill = el("rect", {x: b.x - 29, y: b.y + 18, width: 0, height: 5, rx: 2.5, fill: "#f08c2e"}, g);
+    // the same building as a card under the map: name, what works there, where, time, loading bar
+    const card = h("div", {class: "card"}, h("div", {class: "top"}, h("b", {}, b.name), h("span", {class: "state"}, "waiting")),
+      h("div", {class: "runs"}, b.runs), h("div", {class: "tags"}, h("span", {class: "tag"}, b.kind), h("span", {class: "tag " + b.where}, WHERE[b.where])),
+      h("div", {class: "bar"}, h("i")), h("div", {class: "time"}, h("span", {}, "0 s"), h("span", {}, b.about ? "about " + clock(b.about * 60) : "")));
+    $("cards").append(card);
+    parts[b.id] = {g, fill, card};
+  }
+})();
+const courier = el("g"), courierIn = el("g", {}, courier); WORKERS.courier(courierIn);
+el("polygon", {points: "8,-20 16,-25 24,-20 16,-15", fill: "#fff", stroke: "#0005", "stroke-width": .8}, courierIn);
+el("polygon", {points: "8,-20 16,-15 16,-5 8,-10", fill: "#c9a34a", stroke: "#0005", "stroke-width": .8}, courierIn); el("polygon", {points: "24,-20 16,-15 16,-5 24,-10", fill: "#f5d76e", stroke: "#0005", "stroke-width": .8}, courierIn);
+const folk = [["#8e5a7a", "gallery", "clinic"], ["#5a7a8e", "studio", "court"], ["#7a8e5a", "factory", "forge"]].map(([c, a, b]) => { const g = el("g", {opacity: .85}); body(g, c); return {g, pts: route(a, b)}; });
+let walk = {at: "gate", pts: [[P.gate.x, P.gate.y]], start: 0};
+function sendCourier(to) { if (to && to !== walk.at) { walk = {at: to, pts: route(walk.at, to), start: performance.now()}; } }
+(function frame(now) {
+  const t = Math.min(1, (now - walk.start) / 4000), [x, y] = along(walk.pts, t);
+  courier.setAttribute("transform", `translate(${x + 14},${y + 4})`);
+  courierIn.setAttribute("transform", t < 1 ? `translate(0,${-Math.abs(Math.sin(now / 110)) * 2.5})` : "");
+  folk.forEach((f, k) => { const u = ((now / (30000 + k * 7000)) + k * .37) % 2, [fx, fy] = along(f.pts, u > 1 ? 2 - u : u); f.g.setAttribute("transform", `translate(${fx - 10},${fy + 8}) scale(.8)`); });
+  requestAnimationFrame(frame);
+})(performance.now());
+const WORD = {idle: "waiting", waiting: "next", running: "working", done: "done", failed: "did not work", unused: "not in this run"};
+// (rule 3) one place that shows a run: states = {building: {status, progress 0..1, seconds, note}}
+function showCity(states, active, headline) {
+  for (const b of BUILDINGS) {
+    const s = states[b.id] || {status: "idle", progress: 0, seconds: 0}, p = parts[b.id], share = Math.max(0, Math.min(1, s.progress || 0));
+    p.g.setAttribute("class", "b " + s.status); p.fill.setAttribute("width", 58 * share); p.fill.setAttribute("fill", s.status === "done" ? "#27a567" : "#f08c2e");
+    p.card.className = "card " + s.status;
+    p.card.querySelector(".state").textContent = WORD[s.status] + (s.status === "running" ? ` ${Math.round(share * 100)} %` : "");
+    p.card.querySelector(".bar i").style.width = share * 100 + "%";
+    p.card.querySelector(".time span").textContent = s.seconds ? clock(s.seconds) : s.status === "done" ? "" : "0 s";
+    p.card.querySelector(".runs").textContent = s.status === "running" && s.note ? s.note : b.runs;
+  }
+  sendCourier(active);
+  $("townState").textContent = headline || "nothing is running";
+}
+showCity({}, null);
+
+// ================================================================ the chat
+let data = [], pending = [], running = null, undo = null, counter = 0;  // data: every piece the chat has so far
+const KIND = {picture: "picture", video: "video", model: "3D model", other: "file"};
+function kindOf(file) {
+  const name = file.name.toLowerCase();
+  if (file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/.test(name)) return "picture";
+  if (file.type.startsWith("video/") || /\.(mp4|mov|webm|avi|mkv|m4v)$/.test(name)) return "video";
+  if (/\.(glb|gltf|obj|fbx|stl|ply|blend)$/.test(name)) return "model";
+  return "other";
+}
+function small(source, width, height) {  // a small picture of a picture or a video frame, for the local AI
+  const scale = Math.min(1, 448 / Math.max(width, height)), canvas = h("canvas", {width: Math.round(width * scale), height: Math.round(height * scale)});
+  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", .8);
+}
+function take(files) {  // (rule 3) data shows up at once, under the text box
+  for (const file of files) {
+    const item = {id: ++counter, file, name: file.name, kind: kindOf(file), url: URL.createObjectURL(file), thumb: null, role: null, faces: []};
+    const got = thumb => { item.thumb = thumb; item.faces.forEach(image => image.src = thumb); };  // a video's picture comes a moment later
+    if (item.kind === "picture") { const image = new Image(); image.onload = () => got(small(image, image.naturalWidth, image.naturalHeight)); image.src = item.url; }
+    if (item.kind === "video") { const video = h("video", {muted: true, preload: "auto"}); video.onloadeddata = () => { video.currentTime = Math.min(.2, video.duration / 2); };
+      video.onseeked = () => got(small(video, video.videoWidth, video.videoHeight)); video.src = item.url; }
+    pending.push(item);
+  }
+  drawPending();
+}
+function face(item) {
+  if (item.kind === "picture") return h("img", {src: item.url, alt: ""});
+  if (item.kind === "video") { const image = h("img", {src: item.thumb || "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==", alt: "", title: "a video"}); item.faces.push(image); return image; }
+  return KIND[item.kind];
+}
+function chip(item, remove) {
+  return h("div", {class: "chip", title: `${item.name} (${KIND[item.kind]})`}, h("div", {class: "thumb"}, face(item)), h("span", {class: "name"}, item.name),
+    remove && h("button", {class: "x", "aria-label": "Remove " + item.name, onclick: remove}, "×"));
+}
+function drawPending() {
+  $("pending").replaceChildren(...pending.map(item => chip(item, () => {  // (rule 6) taking data off can be undone
+    const at = pending.indexOf(item); pending.splice(at, 1); drawPending();
+    toast(`Removed ${item.name}.`, () => { pending.splice(at, 0, item); drawPending(); });
+  })));
+  ready();
+}
+function ready() {  // (rule 5) Send is off while there is nothing to send, and the hint says what is missing
+  const text = $("text").value.trim();
+  $("send").disabled = !text && !pending.length;
+  $("composeHint").textContent = running ? "A run is going on: you can stop it in the chat above." :
+    !data.length && !pending.length ? "Start with + Data: pictures, a video or a 3D model of the thing you want to change." :
+    "For example: “replace the axe in his hand with this sword”. Enter sends, Shift+Enter makes a new line.";
+}
+function say(who, ...kids) {
+  const m = h("div", {class: "msg " + (who === "you" ? "you" : "") + (who === "problem" ? " bad" : "")}, h("div", {class: "who"}, who === "you" ? "You" : "Guide"), ...kids);
+  $("log").append(m); $("log").scrollTop = $("log").scrollHeight; return m;
+}
+const p = (...kids) => h("p", {}, ...kids);
+function toast(text, back) {
+  const t = $("toast"); t.firstChild.textContent = text; t.lastChild.hidden = !back; undo = back || null; t.classList.add("show");
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), back ? 7000 : 3200);
+}
+$("toast").lastChild.onclick = () => { if (undo) undo(); undo = null; $("toast").classList.remove("show"); };
+
+// ---------------------------------------------------------------- what the words and the data mean
+function byRules(text, items) {  // without the local AI: the first thing is the model, what comes after it the new part
+  const lower = text.toLowerCase(), change = /(replace|swap|instead|put|add|give|hold|attach|wear|with this|with the)/.test(lower);
+  const roles = items.map((item, k) => k === 0 || !change ? "object" : "part");
+  const old = (lower.match(/(?:replace|swap|remove|change) (?:the |his |her |its |their )?(.+?) (?:with|by|for|to)\b/) || lower.match(/instead of (?:the |his |her |its )?([\w ]+)/) || [])[1] || "";
+  const place = (lower.match(/\b((?:in|on|onto|into|at|around) (?:the |his |her |its )?(?:left |right )?(?:hand|head|back|arm|leg|foot|chest|neck|top|side|shoulder))\b/) || [])[1] || "";
+  return {roles, old_part: old.trim(), place, part_words: change && items.length === 1 ? text : "", by: "simple rules",
+          say: items.length > 1 && change ? "I took the first data as the model and the rest as the new part." : "I took all data as one thing to build a model from."};
+}
+async function understand(text, items) {
+  if (LIVE) {
+    try {
+      const answer = await post("/api/understand", {prompt: text, items: items.map(i => ({name: i.name, kind: KIND[i.kind], thumb: i.thumb}))});
+      if (answer.roles && answer.roles.length === items.length) return answer;
+    } catch (error) { /* the local AI is off or busy: the rules below */ }
+  }
+  return byRules(text, items);
+}
+async function answerOf(response) {
+  let body = {}; try { body = await response.json(); } catch (e) { /* no JSON */ }
+  if (!response.ok || body.error) throw new Error(body.error || `the page's server answered ${response.status}`);
+  return body;
+}
+const post = async (address, body) => answerOf(await fetch(address, {method: "POST", headers: {"Content-Type": "application/json", "X-Flow-Page": "1"}, body: JSON.stringify(body)}));
+const get = async address => answerOf(await fetch(address));
+
+async function send() {
+  const text = $("text").value.trim();
+  if (!text && !pending.length) return;
+  const added = pending; pending = []; data.push(...added);
+  say("you", text && p(text), added.length ? h("div", {class: "data"}, added.map(i => chip(i))) : null);
+  $("text").value = ""; $("text").style.height = "auto"; drawPending();
+  if (running) return say("guide", p("A run is going on. Stop it first (the Stop button in its message), or wait until it is done."));
+  if (!data.length) return say("guide", p("I need something to work on. Add data with ", h("b", {}, "+ Data"), ": pictures, a video or a 3D model of the thing you want to change."));
+  const wait = say("guide", p("Reading your words and your data …"), h("div", {class: "bar"}, h("i", {style: "width:35%"})));
+  await new Promise(r => setTimeout(r, 300));  // the small pictures of just-added data are made in this moment
+  const plan = await understand(text || "build a 3D model of this", data);
+  wait.remove();
+  showPlan(text, plan);
+}
+
+// (rules 5, 7, 8) the plan: what was understood, shown to be changed, and Run only when it can work
+function showPlan(text, plan) {
+  data.forEach((item, k) => item.role = plan.roles[k]);
+  const first = (data.find(i => i.role === "object") || data[0]).name.replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30) || "my_project";
+  const name = h("input", {value: first, maxlength: 40, "aria-label": "Project name"}), old = h("input", {value: plan.old_part || "", placeholder: "nothing"}),
+        place = h("input", {value: plan.place || "", placeholder: "the page finds the place"}), words = h("input", {value: plan.part_words || "", placeholder: "e.g. a wide wizard hat"}),
+        where = h("select", {}, h("option", {value: "server"}, "the uni server (fast, across the bridge)"), h("option", {value: "pc"}, "our device (this PC's GPU)")),
+        why = h("div", {class: "why"}), run = h("button", {class: "main"}, "Run"), wordsRow = h("label", {}, "The new part in words (no data shows it)", words);
+  const rows = data.map(item => { const role = h("select", {"aria-label": "What " + item.name + " is"}, h("option", {value: "object"}, "the model to change"), h("option", {value: "part"}, "the new part"), h("option", {value: "unused"}, "don't use"));
+    role.value = item.role; role.onchange = () => { item.role = role.value; check(); };
+    return h("div", {class: "row"}, h("div", {class: "thumb"}, face(item)), h("span", {}, item.name, h("br"), h("small", {style: "color:var(--dim)"}, KIND[item.kind])), role); });
+  function check() {
+    const objects = data.filter(i => i.role === "object"), newParts = data.filter(i => i.role === "part"), used = objects.concat(newParts);
+    wordsRow.hidden = newParts.length > 0;
+    let stop = "";
+    if (!objects.length) stop = "One of your data must be the model to change.";
+    else if (used.some(i => i.kind === "model")) stop = "A 3D model as data is shown here, but the run can't start from one yet: it builds the model from pictures or a video. Set it to “don't use”, or add pictures of it.";
+    else if (used.some(i => i.kind === "other")) stop = "One of the files is no picture, video or 3D model: set it to “don't use”.";
+    else if (!/^[A-Za-z0-9_-]{1,40}$/.test(name.value)) stop = "The project name has only letters, numbers, _ and -.";
+    else if (!LIVE) stop = "This page was opened as a file, so it can't run anything. Start it with flow_page.py, or watch the demo.";
+    run.disabled = !!stop; why.className = "why " + (stop ? "stop" : "go");
+    const minutes = TYPICAL.base + (newParts.length || words.value.trim() ? 3 * TYPICAL.inpaint + 10 : 2);
+    why.textContent = stop || `Ready. This takes about ${clock(minutes * 60)}. Nothing is sent before you press Run.`;
+  }
+  [name, words].forEach(input => input.oninput = check);
+  const card = say("guide", p(plan.say || "This is what I understood."), h("div", {class: "plan"}, rows,
+    h("div", {class: "two"}, h("label", {}, "What goes away", old), h("label", {}, "Where the new part goes", place)), wordsRow,
+    h("details", {}, h("summary", {}, "More: project name and where it runs"), h("div", {class: "two", style: "margin-top:6px"}, h("label", {}, "Project name", name), h("label", {}, "The models run on", where))),
+    why, h("div", {}, run, " ", h("small", {style: "color:var(--dim)"}, "understood by " + plan.by))));
+  run.onclick = () => { card.querySelectorAll("input, select, button").forEach(e => e.disabled = true);
+    start({name: name.value, text, place: place.value.trim(), old: old.value.trim(), words: wordsRow.hidden ? "" : words.value.trim(), where: where.value}); };
+  check();
+}
+
+// ---------------------------------------------------------------- a run
+async function start(plan) {
+  const used = data.filter(i => i.role === "object" || i.role === "part"), bar = h("i"), line = p("Sending your data to the city gate …");
+  const note = say("guide", line, h("div", {class: "bar"}, bar));
+  try {
+    const items = [];
+    for (const [k, item] of used.entries()) {  // (rule 3) the upload shows how far it is
+      line.textContent = `Sending your data to the city gate: ${k + 1} of ${used.length} (${item.name})`; bar.style.width = (k / used.length * 100) + "%";
+      const answer = await answerOf(await fetch(`/api/upload?flow=${encodeURIComponent(plan.name)}&role=${item.role}&name=${encodeURIComponent(item.name)}`, {method: "POST", headers: {"X-Flow-Page": "1"}, body: item.file}));
+      items.push({path: answer.path, role: item.role, prompt: ""});
+    }
+    bar.style.width = "100%";
+    await post("/api/app/create", {flow: plan.name, prompt: plan.text, items, part_prompt: plan.words, at: plan.place, replace: !!plan.old, settings: {where: plan.where, resolution: "1024", seed: 42, steps: 25}});
+    await post("/api/run", {flow: plan.name});
+    note.remove();
+    follow(plan.name, true);
+  } catch (error) {  // (rule 5) what went wrong, and what to do
+    note.remove();
+    say("problem", p("That did not start: " + error.message), p("Nothing was run. Change the plan above by sending your message again, or try once more."));
+  }
+}
+const seenRunning = {};
+function cityOf(flow) {  // a flow's nodes as the buildings' states
+  const states = {}; let active = null;
+  for (const b of BUILDINGS) {
+    const nodes = flow.nodes.filter(n => b.types.includes(n.type));
+    if (!nodes.length) { states[b.id] = {status: b.id === "gallery" ? "idle" : "unused", progress: 0, seconds: 0}; continue; }
+    let sum = 0, seconds = 0, note = "";
+    for (const n of nodes) {
+      const busy = n.status === "running" || n.status === "starting";
+      if (busy) seenRunning[n.id] = seenRunning[n.id] || Date.now(); else delete seenRunning[n.id];
+      if (n.status === "done") { sum += 1; seconds += (n.minutes || 0) * 60; }
+      else if (busy) { const spent = (Date.now() - seenRunning[n.id]) / 1000, said = (n.note || "").match(/(\d+)\s*\/\s*(\d+)(?!.*\d+\s*\/\s*\d+)/);
+        sum += said && +said[2] ? Math.min(.98, said[1] / said[2]) : Math.min(.95, spent / ((TYPICAL[n.type] || 2) * 60)); seconds += spent; note = `${n.label}: ${n.note || "working"}`.slice(0, 90); active = active || b.id; }
+    }
+    const status = nodes.some(n => n.status === "failed") ? "failed" : nodes.every(n => n.status === "done") ? "done" : note ? "running" : sum ? "waiting" : "idle";
+    states[b.id] = {status, progress: sum / nodes.length, seconds, note};
+  }
+  return {states, active};
+}
+function follow(name, fresh) {
+  localStorage.setItem("ui_project", name);
+  const stop = h("button", {}, "Stop"), line = p(), bar = h("i");
+  const note = say("guide", p(fresh ? h("b", {}, `Started: ${name}. `) : h("b", {}, `Following the run of ${name}. `), "The city on the right shows where the work is."), line, h("div", {class: "bar"}, bar), h("div", {style: "margin-top:6px"}, stop));
+  stop.onclick = async () => { stop.disabled = true; try { await post("/api/stop", {flow: name}); toast("Stopping the run …"); } catch (error) { toast(error.message); stop.disabled = false; } };  // (rules 6, 7)
+  running = {name, last: null, began: Date.now(), wasBusy: fresh}; ready();
+  const tick = async () => {
+    if (!running || running.name !== name) return;
+    let flow; try { flow = await get("/api/flow?name=" + encodeURIComponent(name)); } catch (error) { line.textContent = "The page's server does not answer: " + error.message; return setTimeout(tick, 5000); }
+    const {states, active} = cityOf(flow), all = flow.nodes.length, done = flow.nodes.filter(n => n.status === "done").length, failed = flow.nodes.find(n => n.status === "failed");
+    const busy = flow.running || (flow.run && flow.run.active);
+    if (busy) running.wasBusy = true;
+    if (done === all) states.gallery = {status: "done", progress: 1, seconds: 0};
+    showCity(states, done === all ? "gallery" : active, busy ? `running: ${name}, step ${Math.min(done + 1, all)} of ${all}` : null);
+    bar.style.width = (done / all * 100) + "%";
+    line.textContent = active ? `${B[active].name} (${WHERE[B[active].where]}) is working: ${states[active].note || B[active].runs}. ${clock((Date.now() - running.began) / 1000)} so far.` : busy ? "Getting ready …" : "";
+    if (active && active !== running.last) running.last = active;
+    if (done === all || failed || (!busy && running.wasBusy && Date.now() - running.began > 8000)) return finish(flow, note, stop, failed);
+    setTimeout(tick, 3000);
+  };
+  tick();
+}
+function finish(flow, note, stop, failed) {  // (rule 4) a run ends with one clear message
+  stop.remove(); running = null; localStorage.removeItem("ui_project"); ready();
+  const last = [...flow.nodes].reverse().find(n => n.model_url), all = flow.nodes.every(n => n.status === "done");
+  if (failed) return say("problem", p(h("b", {}, `${failed.label} did not work. `), (failed.note || "").slice(0, 300)), p("What is done so far is kept. You can look at every step on ", h("a", {href: "/old/app", style: "color:inherit"}, "the detailed page"), ", or send your message again to try once more."));
+  const done = say("guide", p(h("b", {}, all ? "Finished. " : "Stopped. "), all ? "Your model is in the gallery." : "The steps that were done are kept; Run again goes on from there."));
+  if (last) done.append(h("model-viewer", {src: last.model_url, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "0.6", alt: "The result in 3D"}), p(h("small", {}, "Drag to turn it. The file: " + last.model)));
+}
+
+// ---------------------------------------------------------------- a demo: the first run that worked, played in a minute
+function demo() {
+  if (running) return toast("A run is going on.");
+  const steps = [["gate", 2, 0.2, "Your pictures arrive"], ["office", 4, 1, "Reading what every picture shows"], ["factory", 7, 15, "Sampling shape 9/12"], ["studio", 4, 1, "Painting the book into the hand"],
+                 ["clinic", 3, 1, "Naming the bones: hand_left, head …"], ["workshop", 5, 4, "Placing the book, rendering four sides"], ["court", 3, 1, "Measuring the plan: pass"],
+                 ["forge", 9, 67, "Details: step 18/25"], ["court", 4, 2, "Rest kept 98, close to the plan 97: pass"]];
+  running = {name: "demo"}; ready();
+  const note = say("guide", p(h("b", {}, "A demo. "), "This plays the run that replaced a toaster robot's toast with a book. Nothing is started; the times shown are the real ones of that night."));
+  const states = Object.fromEntries(BUILDINGS.map(b => [b.id, {status: "idle", progress: 0, seconds: 0}])); let k = 0, began = performance.now();
+  const tick = () => {
+    if (!running || running.name !== "demo") return;
+    const [id, play, minutes, text] = steps[k], share = Math.min(1, (performance.now() - began) / (play * 1000)), s = states[id];
+    Object.assign(s, {status: share < 1 ? "running" : "done", progress: share, seconds: (s.kept || 0) + share * minutes * 60, note: text});
+    if (share >= 1) { s.kept = s.seconds; k++; began = performance.now(); }
+    if (k >= steps.length) { states.gallery = {status: "done", progress: 1, seconds: 0}; showCity(states, "gallery", "demo: finished"); running = null; ready();
+      return say("guide", p(h("b", {}, "The demo is finished. "), "In a real run your model would be shown here in 3D.")); }
+    showCity(states, steps[k][0], `demo: step ${k + 1} of ${steps.length}`);
+    setTimeout(tick, 200);
+  };
+  tick();
+}
+
+// ---------------------------------------------------------------- the page's controls
+$("send").onclick = send;
+$("text").addEventListener("input", () => { const t = $("text"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight + 2, 140) + "px"; ready(); });
+$("text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });  // (rule 2)
+$("attach").onclick = () => $("files").click();
+$("files").onchange = e => { take(e.target.files); e.target.value = ""; $("text").focus(); };
+addEventListener("paste", e => { const files = [...(e.clipboardData || {}).files || []]; if (files.length) { e.preventDefault(); take(files); toast(`Added ${files.length} from the clipboard.`); } });
+let over = 0;
+addEventListener("dragenter", e => { if ([...e.dataTransfer.types].includes("Files")) { over++; document.body.classList.add("dropping"); } });
+addEventListener("dragleave", () => { if (--over <= 0) { over = 0; document.body.classList.remove("dropping"); } });
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("drop", e => { e.preventDefault(); over = 0; document.body.classList.remove("dropping"); if (e.dataTransfer.files.length) take(e.dataTransfer.files); });
+$("helpButton").onclick = () => $("help").showModal();
+$("menuOld").onclick = () => $("pages").showModal();
+$("demoButton").onclick = demo;
+$("clearButton").onclick = () => {  // (rule 6) starting over can be undone
+  if (running && running.name !== "demo") return toast("A run is going on: stop it first.");
+  const kept = {nodes: [...$("log").children], data, pending}; running = null;
+  $("log").replaceChildren(); data = []; pending = []; drawPending(); showCity({}, null); welcome();
+  toast("The chat and your data are cleared.", () => { $("log").replaceChildren(...kept.nodes); data = kept.data; pending = kept.pending; drawPending(); });
+};
+function welcome() {
+  say("guide", p("Hello. I change a part of a 3D model for you."), p("Add your data (pictures, a video or a 3D model) and tell me in your own words what you want. I will show you what I understood before anything runs."),
+    !LIVE && p(h("b", {}, "This page was opened as a file: "), "it can show the demo, but it can't run anything. Start it with flow_page.py to work with it."));
+}
+welcome(); ready();
+if (new URLSearchParams(location.search).has("demo")) demo();  // app?demo plays the demo at once
+if (LIVE) { const name = localStorage.getItem("ui_project");  // (rule 8) a run that is going on is picked up again after a reload
+  if (name) get("/api/flow?name=" + encodeURIComponent(name)).then(flow => { if (flow.running || (flow.run && flow.run.active)) follow(name, false); else localStorage.removeItem("ui_project"); }).catch(() => localStorage.removeItem("ui_project")); }
+</script>
+</body>
+</html>

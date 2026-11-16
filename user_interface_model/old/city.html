@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The city: how a change is made</title>
+<!-- The pipeline as a small city seen from above (the user's idea, Nov 16): every step is a building of cut crystal with
+     the one who works there standing in front of it (a painter, a doctor, a judge, a smith ...); a courier carries the
+     work along the streets. Our device is the left bank, the uni server the right bank, the cloud folder is the bridge.
+     Now: a demo that plays the steps of docs/FIRST-SUCCESS.md. A real run: city.html?state=<file.json>, a file with
+     {"step": 0..8, "phase": "walking" | "working"} (see the end of the script). The figures are drawn here; they can be
+     replaced by our own generated models later (one <g> per figure, made in WORKERS). -->
+<style>
+  :root { --ink:#1d2433; --muted:#667085; --panel:#ffffff; --now:#f08c2e; --done:#27a567; --idle:#aab2c0; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; color:var(--ink); background:#e9eef5; }
+  .wrap { max-width:1320px; margin:0 auto; padding:16px; display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:16px; }
+  @media (max-width:900px) { .wrap { grid-template-columns:1fr; } }
+  h1 { font-size:20px; margin:0 0 2px; } .sub { color:var(--muted); margin:0 0 10px; }
+  .map, .side { background:var(--panel); border-radius:14px; padding:12px; box-shadow:0 1px 4px #0002; }
+  .side { align-self:start; padding:14px; } .side h2 { font-size:15px; margin:0 0 8px; }
+  svg { width:100%; height:auto; display:block; border-radius:10px; }
+  .say { margin:10px 4px 2px; font-size:16px; min-height:48px; } .say b { color:var(--now); }
+  ol { list-style:none; margin:0; padding:0; } li { display:flex; gap:8px; padding:6px 4px; border-radius:8px; color:var(--muted); }
+  li .dot { flex:0 0 18px; height:18px; margin-top:2px; border-radius:50%; background:var(--idle); color:#fff; font-size:12px; text-align:center; line-height:18px; }
+  li.now { background:#fff4e6; color:var(--ink); } li.now .dot { background:var(--now); }
+  li.done { color:var(--ink); } li.done .dot { background:var(--done); } li small { display:block; color:var(--muted); }
+  .keys { margin-top:12px; padding-top:10px; border-top:1px solid #e4e7ec; font-size:13px; color:var(--muted); }
+  .keys span { display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-1px; margin-right:5px; }
+  button { font:inherit; padding:6px 12px; border-radius:8px; border:1px solid #cfd4dc; background:#fff; cursor:pointer; margin:10px 6px 0 0; }
+  .label { font:700 13px system-ui, sans-serif; fill:var(--ink); text-anchor:middle; paint-order:stroke; stroke:#ffffffd9; stroke-width:4px; }
+  .what { font:11.5px system-ui, sans-serif; fill:#2f3747; text-anchor:middle; paint-order:stroke; stroke:#ffffffd9; stroke-width:3.5px; }
+  .bank { font:800 13px system-ui, sans-serif; letter-spacing:.1em; fill:#3d5a3a; }
+  .glow { opacity:0; transition:opacity .5s; } .b.now .glow { opacity:.9; animation:pulse 1.6s infinite ease-in-out; }
+  .b.done .flag { opacity:1; } .flag { opacity:0; transition:opacity .4s; }
+  @keyframes pulse { 0%,100% { opacity:.35; } 50% { opacity:.95; } }
+  .worker { transition:transform .3s; } .b.now .worker { animation:work .7s infinite ease-in-out; }
+  @keyframes work { 0%,100% { transform:translateY(0) rotate(0); } 50% { transform:translateY(-3px) rotate(-4deg); } }
+  .spark { opacity:0; } .b.now .spark { animation:spark 1.1s infinite; } .b.now .spark.s2 { animation-delay:.35s; } .b.now .spark.s3 { animation-delay:.7s; }
+  @keyframes spark { 0% { opacity:1; transform:translate(0,0) scale(.6); } 100% { opacity:0; transform:translate(var(--dx),-30px) scale(1.3); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="map">
+    <h1>The city</h1>
+    <p class="sub">How a part of a 3D model is replaced. Every building is one step; the one who works there stands in front of it.</p>
+    <svg id="city" viewBox="0 0 980 640" role="img" aria-label="The pipeline as a city seen from above"></svg>
+    <p class="say" id="say"></p>
+    <button id="pause">Pause</button><button id="again">From the start</button>
+  </div>
+  <div class="side">
+    <h2>The steps</h2>
+    <ol id="steps"></ol>
+    <div class="keys">
+      <div><span style="background:#f2b441"></span>our device (the left bank)</div>
+      <div><span style="background:#4f8fe0"></span>the uni server (across the bridge)</div>
+      <div><span style="background:#a567d8"></span>the judge: lets the work pass, or sends it back</div>
+    </div>
+  </div>
+</div>
+<script>
+const NS = "http://www.w3.org/2000/svg", svg = document.getElementById("city");
+const el = (tag, attrs = {}, parent = svg) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+const shade = (hex, f) => "#" + [1, 3, 5].map(i => Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(i, i + 2), 16) * f))).toString(16).padStart(2, "0")).join("");
+
+// ---------------------------------------------------------------- the places: a plaza each, the streets between them
+const P = {  // plazas (where people stand and the courier stops) and plain crossings (no building)
+  gate:     {x: 78,  y: 560, c: "#8fa3b8", sides: 4, r: 30, name: "City gate",        what: "your model arrives",          who: "guard"},
+  gallery:  {x: 120, y: 330, c: "#3fbf8f", sides: 8, r: 40, name: "Gallery",          what: "your finished model",         who: "host"},
+  studio:   {x: 235, y: 150, c: "#f2b441", sides: 6, r: 44, name: "Picture studio",   what: "paints what you wish for",    who: "painter"},
+  clinic:   {x: 330, y: 520, c: "#f2b441", sides: 6, r: 42, name: "Skeleton clinic",  what: "finds the bones",             who: "doctor"},
+  workshop: {x: 470, y: 150, c: "#f2b441", sides: 5, r: 44, name: "Fitting workshop", what: "puts the new part in place",  who: "fitter"},
+  court:    {x: 520, y: 440, c: "#a567d8", sides: 8, r: 44, name: "Judge's court",    what: "checks plan and result",      who: "judge"},
+  factory:  {x: 830, y: 160, c: "#4f8fe0", sides: 6, r: 50, name: "Model factory",    what: "builds 3D from a picture",    who: "engineer"},
+  forge:    {x: 845, y: 500, c: "#4f8fe0", sides: 5, r: 48, name: "Detail forge",     what: "fine shape, join, colours",   who: "smith"},
+  square:   {x: 320, y: 320}, west: {x: 190, y: 450}, quay: {x: 610, y: 300}, land: {x: 760, y: 320},
+};
+const ROADS = [["gate", "west", 30], ["west", "gallery", -24], ["west", "clinic", 28], ["west", "square", -26], ["square", "studio", 30],
+               ["square", "workshop", -30], ["square", "court", 30], ["clinic", "court", -26], ["workshop", "quay", -34], ["court", "quay", 26],
+               ["quay", "land", 0], ["land", "factory", 30], ["land", "forge", -30], ["gallery", "square", -22]];
+const curve = (a, b, bend, n = 22) => {  // a bent street as points
+  const A = P[a], B = P[b], mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, len = Math.hypot(B.x - A.x, B.y - A.y) || 1;
+  const cx = mx - (B.y - A.y) / len * bend, cy = my + (B.x - A.x) / len * bend;
+  return Array.from({length: n + 1}, (_, i) => { const t = i / n, u = 1 - t; return [u * u * A.x + 2 * u * t * cx + t * t * B.x, u * u * A.y + 2 * u * t * cy + t * t * B.y]; });
+};
+const STREET = {};  // "a>b" -> points
+for (const [a, b, bend] of ROADS) { const pts = curve(a, b, bend); STREET[a + ">" + b] = pts; STREET[b + ">" + a] = pts.slice().reverse(); }
+const route = (from, to) => {  // the shortest way over the streets, as points
+  const before = {[from]: null}, queue = [from];
+  while (queue.length) { const n = queue.shift(); if (n === to) break; for (const k in STREET) { const [a, b] = k.split(">"); if (a === n && !(b in before)) { before[b] = a; queue.push(b); } } }
+  let pts = [], n = to; while (before[n] != null) { pts = STREET[before[n] + ">" + n].concat(pts); n = before[n]; } return pts;
+};
+
+// ---------------------------------------------------------------- the ground
+const defs = el("defs");
+defs.innerHTML = `<linearGradient id="water" x1="0" x2="1"><stop offset="0" stop-color="#57b6f2"/><stop offset=".5" stop-color="#3e9ae6"/><stop offset="1" stop-color="#63c2f5"/></linearGradient>
+  <radialGradient id="halo"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#ffd27a" stop-opacity="0"/></radialGradient>
+  <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="5"/></filter>`;
+el("rect", {width: 980, height: 640, fill: "#bfe3a8"});
+// the land in facets, like cut glass
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+for (let gx = 0; gx < 14; gx++) for (let gy = 0; gy < 10; gy++) {
+  const x = gx * 72, y = gy * 68, j = () => rnd() * 26 - 13, right = x > 640;
+  const base = right ? "#a9d6c9" : "#bfe3a8", pts = [[x + j(), y + j()], [x + 72 + j(), y + j()], [x + 36 + j(), y + 68 + j()]];
+  el("polygon", {points: pts.map(p => p.join(",")).join(" "), fill: shade(base, .93 + rnd() * .12), opacity: .9});
+}
+const river = "M650 0 C625 150 700 215 672 320 C648 420 708 500 684 640 L752 640 C776 500 716 420 742 320 C770 215 700 150 722 0 Z";
+el("path", {d: river, fill: "url(#water)"});
+for (let i = 0; i < 16; i++) { const y = 20 + i * 40, x = 690 + Math.sin(i * 1.7) * 22; el("polygon", {points: `${x},${y} ${x + 26},${y + 7} ${x + 6},${y + 16}`, fill: "#ffffff", opacity: .18 + (i % 3) * .07}); }
+el("text", {x: 22, y: 30, class: "bank"}).textContent = "OUR DEVICE";
+el("text", {x: 846, y: 622, class: "bank", fill: "#2f5d73"}).textContent = "UNI SERVER";
+// the streets (a dark edge, a light middle) and the bridge
+const seen = new Set();
+for (const k in STREET) { const [a, b] = k.split(">"); if (seen.has(b + ">" + a)) continue; seen.add(k);
+  const d = "M" + STREET[k].map(p => p.join(" ")).join(" L");
+  el("path", {d, fill: "none", stroke: "#7b8494", "stroke-width": 19, "stroke-linecap": "round"});
+  el("path", {d, fill: "none", stroke: "#d9dee8", "stroke-width": 14, "stroke-linecap": "round"});
+  el("path", {d, fill: "none", stroke: "#ffffff", "stroke-width": 1.5, "stroke-dasharray": "8 9", opacity: .9}); }
+const bridge = STREET["quay>land"], bx0 = 640, bx1 = 760;
+el("polygon", {points: `${bx0},292 ${bx1},298 ${bx1},338 ${bx0},330`, fill: "#b9834a", stroke: "#74502a", "stroke-width": 2});
+for (let x = bx0 + 8; x < bx1; x += 14) el("line", {x1: x, y1: 293, x2: x, y2: 337, stroke: "#8d6236", "stroke-width": 2});
+el("path", {d: "M" + bridge.map(p => p.join(" ")).join(" L"), fill: "none", stroke: "#e9dcc6", "stroke-width": 12});
+el("text", {x: 700, y: 284, class: "what"}).textContent = "the bridge: the cloud folder";
+for (const k of ["square", "west", "quay", "land"]) { el("circle", {cx: P[k].x, cy: P[k].y, r: 15, fill: "#d9dee8", stroke: "#7b8494", "stroke-width": 2.5}); el("circle", {cx: P[k].x, cy: P[k].y, r: 5, fill: "#9fc7e8"}); }
+// crystal trees
+for (const [x, y, s] of [[60, 120, 1], [390, 250, .9], [600, 120, 1.1], [40, 430, .8], [250, 600, 1], [440, 590, .9], [600, 560, 1.1], [930, 330, 1], [760, 60, .9], [930, 600, .8], [150, 60, .8], [420, 380, .8], [940, 60, 1]])
+  { el("polygon", {points: `${x},${y - 20 * s} ${x + 13 * s},${y + 6 * s} ${x - 13 * s},${y + 6 * s}`, fill: "#3fa56a"}); el("polygon", {points: `${x},${y - 20 * s} ${x + 13 * s},${y + 6 * s} ${x},${y + 6 * s}`, fill: "#2c8553"}); el("rect", {x: x - 2, y: y + 6 * s, width: 4, height: 6, fill: "#7a5a3a"}); }
+
+// ---------------------------------------------------------------- the ones who work there (drawn at 0,0, feet at y = 0)
+const body = (g, coat, skin = "#f1c9a5") => { el("ellipse", {cx: 0, cy: 1, rx: 9, ry: 3, fill: "#0003"}, g);
+  el("path", {d: "M-7 0 L-6 -15 Q0 -19 6 -15 L7 0 Z", fill: coat, stroke: "#0005", "stroke-width": .8}, g); el("circle", {cx: 0, cy: -21, r: 5.6, fill: skin, stroke: "#0005", "stroke-width": .8}, g); };
+const WORKERS = {
+  painter: g => { body(g, "#3d6fb5"); el("path", {d: "M-7 -24 Q0 -32 8 -25 L4 -23 Z", fill: "#c0392b"}, g);  // a beret
+    el("line", {x1: 15, y1: 0, x2: 19, y2: -24, stroke: "#7a5a3a", "stroke-width": 2}, g); el("line", {x1: 27, y1: 0, x2: 21, y2: -24, stroke: "#7a5a3a", "stroke-width": 2}, g);
+    el("rect", {x: 12, y: -26, width: 17, height: 14, fill: "#fff", stroke: "#7a5a3a"}, g); el("circle", {cx: 17, cy: -20, r: 2.4, fill: "#e74c3c"}, g); el("circle", {cx: 23, cy: -17, r: 2.4, fill: "#3498db"}, g);
+    el("line", {x1: 6, y1: -12, x2: 12, y2: -18, stroke: "#333", "stroke-width": 1.6}, g); },
+  doctor: g => { body(g, "#ffffff"); el("rect", {x: -2, y: -14, width: 4, height: 9, fill: "#e74c3c"}, g); el("rect", {x: -4.5, y: -11.5, width: 9, height: 4, fill: "#e74c3c"}, g);
+    el("line", {x1: 11, y1: -20, x2: 19, y2: -6, stroke: "#f7f3e8", "stroke-width": 3.4, "stroke-linecap": "round"}, g);  // a bone
+    for (const [x, y] of [[10, -21], [12, -19], [18, -7], [20, -5]]) el("circle", {cx: x, cy: y, r: 2.3, fill: "#f7f3e8", stroke: "#0003", "stroke-width": .5}, g); },
+  fitter: g => { body(g, "#e67e22"); el("path", {d: "M-7 -23 Q0 -33 7 -23 Z", fill: "#f1c40f", stroke: "#0005", "stroke-width": .8}, g);  // a hard hat
+    el("line", {x1: 8, y1: -10, x2: 17, y2: -22, stroke: "#8b95a3", "stroke-width": 3}, g); el("path", {d: "M14 -25 L20 -26 L21 -20 L17 -21 Z", fill: "#8b95a3"}, g); },
+  judge: g => { body(g, "#1f1f28"); el("path", {d: "M-8 -18 Q-9 -29 0 -29 Q9 -29 8 -18 Q5 -22 0 -22 Q-5 -22 -8 -18 Z", fill: "#f4f4f4", stroke: "#0004", "stroke-width": .7}, g);  // a wig
+    el("rect", {x: -1.5, y: -15, width: 3, height: 7, fill: "#fff"}, g);
+    el("line", {x1: 9, y1: -9, x2: 18, y2: -19, stroke: "#7a5a3a", "stroke-width": 2.4}, g); el("rect", {x: 14, y: -25, width: 10, height: 6, rx: 1.5, fill: "#5b3d1f", transform: "rotate(-40 19 -22)"}, g);  // a gavel
+    el("rect", {x: -18, y: -8, width: 9, height: 8, fill: "#5b3d1f"}, g); },
+  engineer: g => { body(g, "#2c6fb0"); el("path", {d: "M-7 -23 Q0 -32 7 -23 Z", fill: "#ecf0f1", stroke: "#0005", "stroke-width": .8}, g);
+    el("rect", {x: 9, y: -16, width: 11, height: 14, fill: "#fdfdfd", stroke: "#566", "stroke-width": .8}, g); for (const y of [-12, -9, -6]) el("line", {x1: 11, y1: y, x2: 18, y2: y, stroke: "#2c6fb0", "stroke-width": 1}, g); },
+  smith: g => { body(g, "#6b4a2b"); el("rect", {x: -5, y: -14, width: 10, height: 13, fill: "#3b2a1a"}, g);  // an apron
+    el("rect", {x: 12, y: -6, width: 16, height: 5, fill: "#4a4f58"}, g); el("rect", {x: 16, y: -1, width: 8, height: 2, fill: "#4a4f58"}, g);  // an anvil
+    el("line", {x1: 7, y1: -12, x2: 16, y2: -22, stroke: "#7a5a3a", "stroke-width": 2.2}, g); el("rect", {x: 12, y: -28, width: 10, height: 6, fill: "#70757f", transform: "rotate(-35 17 -25)"}, g); },
+  guard: g => { body(g, "#5d6d7e"); el("path", {d: "M-6 -24 L0 -31 L6 -24 Z", fill: "#95a5a6", stroke: "#0005", "stroke-width": .8}, g); el("line", {x1: 10, y1: 0, x2: 10, y2: -30, stroke: "#7a5a3a", "stroke-width": 2}, g); el("polygon", {points: "10,-36 13,-30 7,-30", fill: "#bdc3c7"}, g); },
+  host: g => { body(g, "#27ae60"); el("rect", {x: 10, y: -24, width: 14, height: 14, fill: "#fff8e1", stroke: "#c8a13a", "stroke-width": 2}, g); el("polygon", {points: "13,-13 17,-19 20,-15 22,-17 22,-12", fill: "#4f8fe0"}, g); },
+  courier: g => { body(g, "#34495e"); el("path", {d: "M-7 -23 Q0 -30 7 -23 L10 -22 L-7 -22 Z", fill: "#e74c3c"}, g); },  // a cap
+};
+
+// ---------------------------------------------------------------- the buildings: a cut crystal seen from above
+for (const id in P) { const b = P[id]; if (!b.name) continue;
+  const bx = b.x, by = b.y - b.r - 22, g = el("g", {class: "b", id: "b_" + id});
+  el("ellipse", {cx: bx, cy: by + 8, rx: b.r * 1.5, ry: b.r * 1.3, fill: "url(#halo)", class: "glow"}, g);
+  el("ellipse", {cx: bx + 6, cy: by + b.r * .55, rx: b.r * 1.05, ry: b.r * .5, fill: "#0003", filter: "url(#soft)"}, g);
+  const ring = Array.from({length: b.sides}, (_, i) => { const a = Math.PI * 2 * i / b.sides - Math.PI / 2 + (b.sides % 2 ? 0 : Math.PI / b.sides); return [bx + Math.cos(a) * b.r, by + Math.sin(a) * b.r * .82]; });
+  const inner = ring.map(([x, y]) => [bx + (x - bx) * .45, by - 6 + (y - by) * .45]);
+  ring.forEach((p, i) => { const q = ring[(i + 1) % b.sides], pi = inner[i], qi = inner[(i + 1) % b.sides];
+    const light = .72 + .5 * (0.5 - 0.5 * Math.cos(Math.PI * 2 * (i + .5) / b.sides - 2.2));  // lit from the upper left
+    el("polygon", {points: [p, q, qi, pi].map(v => v.join(",")).join(" "), fill: shade(b.c, light), stroke: "#ffffff66", "stroke-width": .8}, g); });
+  el("polygon", {points: inner.map(v => v.join(",")).join(" "), fill: shade(b.c, 1.28), stroke: "#ffffffaa", "stroke-width": 1}, g);
+  el("polygon", {points: [inner[0], inner[1], [bx, by - 6]].map(v => v.join(",")).join(" "), fill: "#ffffff", opacity: .45}, g);
+  for (const [k, dx] of [["", "-10px"], [" s2", "6px"], [" s3", "16px"]]) el("polygon", {points: `${bx},${by - 18} ${bx + 4},${by - 12} ${bx},${by - 6} ${bx - 4},${by - 12}`, fill: "#fff6c9", class: "spark" + k, style: `--dx:${dx}; transform-origin:${bx}px ${by - 12}px`}, g);
+  const flag = el("g", {class: "flag"}, g); el("line", {x1: bx + b.r * .7, y1: by - b.r * .2, x2: bx + b.r * .7, y2: by - b.r - 6, stroke: "#3c4657", "stroke-width": 2}, flag);
+  el("polygon", {points: `${bx + b.r * .7},${by - b.r - 6} ${bx + b.r * .7 + 15},${by - b.r - 1} ${bx + b.r * .7},${by - b.r + 4}`, fill: "var(--done)"}, flag);
+  el("ellipse", {cx: b.x, cy: b.y, rx: 30, ry: 13, fill: "#eef1f6", stroke: "#7b8494", "stroke-width": 2}, g);  // the plaza
+  const w = el("g", {transform: `translate(${b.x - 12},${b.y + 2})`}, g), wi = el("g", {class: "worker", style: "transform-origin:0px 0px"}, w); WORKERS[b.who](wi);
+  el("text", {x: bx, y: by - b.r - 18, class: "label"}, g).textContent = b.name;
+  el("text", {x: bx, y: by - b.r - 4, class: "what"}, g).textContent = b.what;
+}
+
+// ---------------------------------------------------------------- the journeys
+const STEPS = [
+  {from: "gate", to: "studio", item: "#f5d76e", title: "A picture of the wish", walk: "The courier takes a picture of your model to the <b>picture studio</b>.",
+   work: "The <b>painter</b> paints the new part onto the picture, so everyone knows what is wanted."},
+  {from: "studio", to: "factory", item: "#f5d76e", title: "The new part becomes 3D", walk: "The picture of the new part crosses the <b>bridge</b> to the uni server.",
+   work: "The <b>engineer</b> at the model factory builds the new part as its own small 3D model."},
+  {from: "factory", to: "clinic", item: "#7fd1f0", title: "The skeleton", walk: "The new part comes back over the bridge; your model goes to the <b>skeleton clinic</b>.",
+   work: "The <b>doctor</b> finds your model's bones and names them: head, left hand, right foot."},
+  {from: "clinic", to: "workshop", item: "#f7f3e8", title: "Fitting", walk: "The skeleton and the new part go to the <b>fitting workshop</b>.",
+   work: "The <b>fitter</b> puts the new part where the old one was, and takes pictures from every side."},
+  {from: "workshop", to: "court", item: "#ffffff", title: "The plan is judged", walk: "The plan goes to the <b>judge</b> before any long work starts.",
+   work: "The <b>judge</b> measures the plan. A bad plan goes back to the workshop; a good one may cross the bridge."},
+  {from: "court", to: "forge", item: "#ffffff", title: "Details and colours", walk: "The approved plan crosses the <b>bridge</b> to the uni server.",
+   work: "The <b>smith</b> at the detail forge makes the new part's fine shape and its join with your model, then its colours. This is the long step."},
+  {from: "forge", to: "court", item: "#c6a5ff", title: "The result is judged", walk: "The result comes back over the bridge to the <b>judge</b>.",
+   work: "The <b>judge</b> compares the result with the plan: is the rest of your model untouched, is the new part as wanted?"},
+  {from: "court", to: "gallery", item: "#c6a5ff", title: "Finished", walk: "The new part is put back into your whole model.",
+   work: "Your finished model is in the <b>gallery</b>."},
+];
+const courier = el("g"), ci = el("g", {}, courier); WORKERS.courier(ci);
+const parcel = el("g", {}, ci); el("polygon", {points: "8,-20 16,-25 24,-20 16,-15", fill: "#fff", stroke: "#0005", "stroke-width": .8}, parcel);
+const gem = [el("polygon", {points: "8,-20 16,-15 16,-5 8,-10", stroke: "#0005", "stroke-width": .8}, parcel), el("polygon", {points: "24,-20 16,-15 16,-5 24,-10", stroke: "#0005", "stroke-width": .8}, parcel)];
+const folk = [["#8e5a7a", "gallery", "clinic"], ["#5a7a8e", "studio", "court"], ["#7a8e5a", "factory", "forge"]].map(([c, a, b]) => { const g = el("g", {opacity: .85}); body(g, c); return {g, pts: route(a, b)}; });
+
+const list = document.getElementById("steps");
+STEPS.forEach((s, i) => { const li = document.createElement("li"); li.innerHTML = `<span class="dot">${i + 1}</span><span>${s.title}<small>${P[s.to].name}</small></span>`; list.appendChild(li); });
+const along = (pts, t) => {
+  const len = pts.slice(1).map((p, i) => Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1])), total = len.reduce((a, b) => a + b, 0); let d = t * total;
+  for (let i = 0; i < len.length; i++) { if (d <= len[i] || i === len.length - 1) { const f = len[i] ? Math.min(1, d / len[i]) : 0; return [pts[i][0] + f * (pts[i + 1][0] - pts[i][0]), pts[i][1] + f * (pts[i + 1][1] - pts[i][1])]; } d -= len[i]; }
+};
+let step = 0, phase = "walking", since = performance.now(), paused = false, follow = null, path = route(STEPS[0].from, STEPS[0].to);
+const WALK = 5200, WORK = 4600;
+function show() {
+  const s = STEPS[Math.min(step, STEPS.length - 1)], finished = step >= STEPS.length;
+  path = route(s.from, s.to);
+  for (const id in P) if (P[id].name) document.getElementById("b_" + id).setAttribute("class", "b");
+  STEPS.forEach((x, i) => { if (i < step) document.getElementById("b_" + x.to).setAttribute("class", "b done"); });
+  if (!finished && phase === "working") document.getElementById("b_" + s.to).setAttribute("class", "b now");
+  [...list.children].forEach((li, i) => { li.className = i < step ? "done" : i === step ? "now" : ""; li.querySelector(".dot").textContent = i < step ? "✓" : i + 1; });
+  document.getElementById("say").innerHTML = finished ? "Done. " + STEPS[STEPS.length - 1].work : (phase === "walking" ? s.walk : s.work);
+  gem[0].setAttribute("fill", shade(s.item, .82)); gem[1].setAttribute("fill", s.item); parcel.setAttribute("opacity", finished ? 0 : 1);
+}
+function frame(now) {
+  if (!paused && !follow && step < STEPS.length && now - since > (phase === "walking" ? WALK : WORK)) { if (phase === "walking") phase = "working"; else { phase = "walking"; step++; } since = now; show(); }
+  const walking = phase === "walking" && step < STEPS.length, t = walking ? Math.min(1, (now - since) / WALK) : 1;
+  const [x, y] = along(path, follow && walking ? .5 : t);
+  courier.setAttribute("transform", `translate(${x + 14},${y + 4})`);
+  ci.setAttribute("transform", walking && !paused ? `translate(0,${-Math.abs(Math.sin(now / 110)) * 2.5})` : "");
+  folk.forEach((f, k) => { const u = ((now / (30000 + k * 7000)) + k * .37) % 2, [fx, fy] = along(f.pts, u > 1 ? 2 - u : u); f.g.setAttribute("transform", `translate(${fx - 10},${fy + 8}) scale(.8)`); });
+  requestAnimationFrame(frame);
+}
+document.getElementById("pause").onclick = e => { paused = !paused; since = performance.now(); e.target.textContent = paused ? "Go on" : "Pause"; };
+document.getElementById("again").onclick = () => { step = 0; phase = "walking"; since = performance.now(); show(); };
+// a real run instead of the demo: city.html?state=some.json  ->  {"step": 0..8, "phase": "walking" | "working"}; &at=5w shows one moment (for a picture)
+const query = new URLSearchParams(location.search), stateFile = query.get("state"), at = query.get("at");
+if (at) { step = parseInt(at); phase = at.endsWith("w") ? "working" : "walking"; follow = "still"; }
+if (stateFile) { follow = stateFile; document.getElementById("pause").hidden = document.getElementById("again").hidden = true;
+  const read = () => fetch(stateFile + "?" + Date.now()).then(r => r.json()).then(j => { step = j.step; phase = j.phase || "working"; show(); if (j.message) document.getElementById("say").innerHTML += `<br><small style="color:var(--muted)">${j.message.replace(/</g, "&lt;")}</small>`; }).catch(() => {});
+  read(); setInterval(read, 3000); }
+show(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

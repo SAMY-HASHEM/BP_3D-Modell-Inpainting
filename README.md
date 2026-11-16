@@ -22,7 +22,7 @@ Samy Hashem
 | `scripts/server/` | where the AI runs: this PC (`inpaint_server.py`) or the uni server through Sciebo (`cloud.py`, `cloud_worker.py`) |
 | `scripts/tools/` | renders and comparisons |
 | `blender/` | the Blender add-on (`inpaint_addon.py`) and the node editor (`pipeline_nodes.py`) |
-| `web/`, `flows/`, `comfyui/` | the web app's pages, the node flows as files, the same nodes in ComfyUI |
+| `user_interface_model/`, `flows/`, `comfyui/` | the web app's pages (a chat, the data, the city), the node flows as files, the same nodes in ComfyUI |
 | `docs/` | `STRUCTURE.md` (how it works), `REQUIREMENTS.md` (progress), `HOW-TO.md` (running it, settings), `FLOWS.md` (the pipelines in detail) |
 
 Setup: `./install.sh` (TRELLIS.2) and `./install_mask.sh` (mask AI); then `source activate.sh`.
