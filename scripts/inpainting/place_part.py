@@ -22,10 +22,13 @@ model (generate.py from its picture), put where the old part is:
                      the whole, untouched model
 
     python scripts/inpainting/place_part.py model.glb book.glb --edit outputs/x/work/edit --out outputs/x/work/edit_3d --zoom 0.5
-    python scripts/server/cloud.py edit outputs/x/work/edit_3d outputs/x/work/edit_3d/before.glb --wait outputs/x/work/shape
-    python scripts/inpainting/place_part.py --finish outputs/x/work/shape/result.glb --out outputs/x/work/edit_3d --final outputs/x/book.glb
+    python scripts/pipeline/edit_check.py outputs/x/work/edit_3d --part "the toast in the hand is replaced by a book"
+    python scripts/server/cloud.py edit outputs/x/work/edit_3d outputs/x/work/edit_3d/placed.glb --details --wait outputs/x/work/details
+    python scripts/inpainting/place_part.py --finish outputs/x/work/details/result.glb --out outputs/x/work/edit_3d --final outputs/x/book.glb
 
-The model that goes to the server is <out>/before.glb (one mesh, cut to the box with --zoom).
+The model that goes to the server is <out>/placed.glb: the model (cut to the box with --zoom) and the placed part as one
+mesh; the details step keeps its voxels (docs/FIRST-SUCCESS.md). <out>/before.glb is the model without the new part,
+for the shape step from noise (cloud.py edit <out> <out>/before.glb), which did not build a thin part.
 
 --edit is the folder make_edit.py wrote for the same change with --prompt (its views, its front mask, its side).
 Writes the same files as make_edit.py (before.png, after.png, mask.png, after_1.png ..., area.npy, edit.json), so
@@ -243,6 +246,11 @@ def main():
     mesh, rest = with_pegs(mesh, low_, high_, 0.4 * voxel), with_pegs(rest, low_, high_, 0.4 * voxel)
     trimesh.Scene([mesh]).export(os.path.join(args.out, "before.glb"))
     trimesh.Scene([rest, part]).export(os.path.join(args.out, "after.glb"))
+    # the same as ONE mesh with one texture: the model for the details step, which keeps these voxels and makes only the
+    # fine shape and the join again (cloud.py edit <out> <out>/placed.glb --details). From noise a thin part came out
+    # as shards or a small plate; on the placed part's voxels it came out whole (the toaster robot's book, Nov 16)
+    from combine_parts import pack
+    trimesh.Scene([pack([part, rest])]).export(os.path.join(args.out, "placed.glb"))
 
     # the pictures: the same frame and light for BEFORE and AFTER, and both models saved the same way (a model saved
     # again by trimesh shines differently than its file did: the whole robot counted as changed), so only the change differs
