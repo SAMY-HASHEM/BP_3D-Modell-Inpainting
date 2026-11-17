@@ -87,6 +87,11 @@ SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
+# Can this computer run the AI itself? Only with an NVIDIA GPU (TRELLIS.2 needs CUDA). Without one (a laptop: its
+# graphics are in the processor) every run goes to the uni server as one job, whatever a page asks for; this computer
+# only sends the data and shows the state. flow_page.py --gpu / --no-gpu say it instead of looking for nvidia-smi.
+GPU_HERE = shutil.which("nvidia-smi") is not None
+NO_GPU = "this computer has no NVIDIA GPU: %s runs only on the uni server"
 PROMPTS = {}  # {"<flow file>/<node>": {"process", "log", "prompt", "started"}}: the picture AI painting a prompt
 SHOWN = core.PICTURE_TYPES + core.VIDEO_TYPES
 FRESH = 60  # seconds: a "running" in flow_state.json older than this is from a run that was stopped
@@ -368,12 +373,14 @@ def remote_follow(file, job):
     run = REMOTE[file]
     root = os.path.join(core.PROJECT, "outputs", "server_runs", job)
     os.makedirs(os.path.join(root, "root"), exist_ok=True)
-    have, cloud = {}, None
+    have, cloud, looks, status = {}, None, 0, {"state": "?", "message": ""}
     while run["active"]:
         try:
             cloud = cloud or Cloud()
-            status = cloud.read_status(job) or {"state": "?", "message": ""}
-            run["message"] = f"{status['state']}: {status.get('message', '')}"[:200]
+            if looks % 5 == 0 or run["state"] is None:  # the job's own status (queued, done, failed): every 10 s is enough
+                status = cloud.read_status(job) or {"state": "?", "message": ""}
+                run["message"] = f"{status['state']}: {status.get('message', '')}"[:200]
+            looks += 1
             try:
                 state = json.loads(cloud.request("GET", f"{cloud.folder}/{job}__live_state.json", tries=1))
             except urllib.error.HTTPError:
@@ -389,6 +396,8 @@ def remote_follow(file, job):
                         cloud.download(sent["name"], local + ".part")
                         os.replace(local + ".part", local)
                         have[address] = sent["stamp"]
+                if state != run["state"]:
+                    run["heard"] = time.time()  # this computer's clock: the page says how fresh what it shows is
                 run["state"] = state
                 json.dump(state, open(os.path.join(root, "state.json"), "w"))
             if status["state"] in ("done", "failed") and (state is None or not state.get("running") or status["state"] == "failed"):
@@ -396,7 +405,7 @@ def remote_follow(file, job):
         except Exception as e:  # noqa: BLE001 (the cloud comes and goes: look again)
             run["message"] = f"the cloud does not answer ({type(e).__name__}): trying again"
             cloud = None
-        time.sleep(8)
+        time.sleep(2)
 
 
 def start_remote(file):
@@ -452,15 +461,16 @@ def remote_state(file):
         return prefix + value[len("/file/"):] if isinstance(value, str) and value.startswith("/file/") else value
     answer = here({k: v for k, v in state.items() if k != "files"})
     answer.update(file=file, running=run["active"], runs="server", run={"active": run["active"]},
-                  remote={"job": run["job"], "message": run["message"], **(state.get("server") or {})})
+                  remote={"job": run["job"], "message": run["message"], **(state.get("server") or {}),
+                          "heard": round(time.time() - run["heard"], 1) if run.get("heard") else None})
     return answer
 
 
 def start_run(file, upto=None):
     """flow.py for this flow."""
     path = flow_path(file)
-    if json.load(open(path)).get("runs") == "server":  # every node on the uni server
-        return start_remote(file)
+    if json.load(open(path)).get("runs") == "server" or not GPU_HERE:  # every node on the uni server (the whole flow:
+        return start_remote(file)                                       # it has no "up to here")
     if (RUNS.get(file) or {}).get("process") and RUNS[file]["process"].poll() is None:
         raise ValueError("this flow is running already")
     nodes = [n["id"] for n in json.load(open(path))["nodes"]]
@@ -584,10 +594,10 @@ def create_flow(wanted):
     except (TypeError, ValueError):
         raise ValueError("seed and steps are whole numbers") from None
     resolution, where = str(given.get("resolution", "1024")), given.get("where", "server")
-    everything = where == "all"  # every node on the uni server: this computer only sends the data (no GPU needed here)
+    if resolution not in ("512", "1024", "1536") or where not in ["all", *CHOICES["where"]] or not 1 <= steps <= 100 or seed < 0:
+        raise ValueError("the settings don't fit: resolution 512, 1024 or 1536; runs on all, server or pc; steps 1 to 100")
+    everything = where == "all" or not GPU_HERE  # every node on the uni server: this computer only sends the data (no GPU needed here)
     where = "server" if everything else where
-    if resolution not in ("512", "1024", "1536") or where not in CHOICES["where"] or not 1 <= steps <= 100 or seed < 0:
-        raise ValueError("the settings don't fit: resolution 512, 1024 or 1536; runs on server or pc; steps 1 to 100")
     said = lambda role: {"prompts": prompts[role]} if prompts[role] else {}
     nodes = [{"id": "object", "type": "input", "label": "00 Input: the object", "files": files["object"], **said("object")}]
     if files["part"]:
@@ -634,6 +644,8 @@ def understand(wanted):
     """The chat's words and data read by the local AI (Qwen3.6-27B, Ollama): which data is the object, which the new
     part, what goes away and where the part goes. The page shows it as a plan the user can change before anything runs."""
     import urllib.request
+    if not GPU_HERE and "OLLAMA_HOST" not in os.environ:  # the page reads the plan by its simple rules then
+        raise ValueError(NO_GPU % "the local AI (Qwen3.6-27B)")
     from judge import MODEL, OLLAMA
     prompt = " ".join(str(wanted.get("prompt", "")).split())[:1500]
     items = [i for i in (wanted.get("items") or []) if isinstance(i, dict)][:12]
@@ -661,6 +673,110 @@ def understand(wanted):
     text = lambda key, most: " ".join(str(answer.get(key) or "").split())[:most]
     return {"roles": roles, "old_part": text("old_part", 80), "place": text("place", 120), "part_words": text("part_words", 400),
             "say": text("say", 300), "by": MODEL}
+
+
+# ---------------------------------------------------------------- the bridge: the Sciebo login and the connection
+# The city's bridge is the cloud folder. A click on it shows the login (never its password), saves a new one (it is
+# tested first, as cloud.py setup does) and tests the way to the uni server in two steps: 1 the cloud answers with
+# this login (seconds), 2 the worker on the server answers a check job (cloud_worker.py looks every 30 s).
+
+BRIDGE = {"state": "idle", "message": "", "found": None, "job": None, "started": None}  # the last test of step 2
+
+
+def cloud_module():
+    sys.path.insert(0, os.path.join(core.SCRIPTS, "server"))
+    import cloud
+    return cloud
+
+
+def cloud_login():
+    """GET /api/cloud: the saved login without its password, and the last test."""
+    cloud = cloud_module()
+    try:
+        config = json.load(open(cloud.CONFIG))
+    except (OSError, ValueError):
+        config = None
+    login = {"user": config.get("user"), "url": config.get("url"), "folder": config.get("folder", cloud.FOLDER)} if config else None
+    return {"login": login, "server": {k: v for k, v in BRIDGE.items() if k != "job"}, "gpu": GPU_HERE}
+
+
+def save_cloud_login(wanted):
+    """POST /api/cloud/login {"user", "password"}: tried first (the folder is made and listed), saved only if it works."""
+    cloud = cloud_module()
+    user, password = str(wanted.get("user") or "").strip(), str(wanted.get("password") or "").strip()
+    if not user or not password:
+        raise ValueError("the login name and the app password are both needed")
+    config = {"url": cloud.DEFAULT_URL, "user": user, "password": password, "folder": cloud.FOLDER}
+    try:
+        old = json.load(open(cloud.CONFIG))  # another url or folder chosen with cloud.py setup stays
+        config.update(url=old.get("url", config["url"]), folder=old.get("folder", config["folder"]))
+    except (OSError, ValueError):
+        pass
+    test_cloud(cloud.Cloud(config))
+    os.makedirs(os.path.dirname(cloud.CONFIG), exist_ok=True)
+    with open(os.open(cloud.CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:  # only its owner can read it
+        json.dump(config, f)
+    BRIDGE.update(state="idle", message="", found=None)
+
+
+def test_cloud(connection=None):
+    """Step 1: the cloud answers with this login. Gives how many files are in the jobs folder."""
+    cloud = cloud_module()
+    try:
+        connection = connection or cloud.Cloud()
+        connection.make_folder()
+        return len(connection.list())
+    except SystemExit as e:  # no login saved yet
+        raise ValueError("No Sciebo login yet: click the bridge in the city and enter it") from None
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"Sciebo refused the login ({e.code}): check the login name and the app password" if e.code in (401, 403)
+                         else f"Sciebo answered {e.code}") from None
+    except OSError as e:
+        raise ValueError(f"Sciebo can't be reached ({type(e).__name__}): is this computer online?") from None
+
+
+def test_server():
+    """Step 2, in its own thread: a check job; the worker on the uni server answers what it has (GPUs, Blender, ...)."""
+    import zipfile
+    cloud = cloud_module()
+    try:
+        connection = cloud.Cloud()
+        folder = os.path.join(core.PROJECT, "outputs", "cloud")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "check.zip")
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("job.json", json.dumps({"kind": "check"}))
+        job = BRIDGE["job"] = cloud.send_zip(connection, path)
+        BRIDGE.update(state="waiting", message="waiting for the uni server to take it (it looks every 30 s)")
+        while time.time() - BRIDGE["started"] < 300:
+            time.sleep(5)
+            status = connection.read_status(job) or {"state": "?"}
+            if status["state"] == "running":
+                BRIDGE.update(message="the uni server took it and looks what it has")
+            if status["state"] == "failed":
+                raise ValueError("the uni server answered, but the check failed: " + str(status.get("message", ""))[:200])
+            if status["state"] == "done":
+                local = os.path.join(core.PROJECT, "outputs", "server_runs", job, "check.zip")
+                os.makedirs(os.path.dirname(local), exist_ok=True)
+                connection.download(status["results"][0], local)
+                with zipfile.ZipFile(local) as z:
+                    found = json.loads(z.read("check.json"))
+                BRIDGE.update(state="done", message=f"the uni server answered in {round(time.time() - BRIDGE['started'])} s",
+                              found={"gpus": found.get("gpus", []), "code": found.get("code"), "disk_free_gb": found.get("disk_free_gb"),
+                                     "parts": [{"name": p["name"], "there": p["there"]} for p in found.get("parts", [])]})
+                return
+        raise ValueError("no answer from the uni server in 5 minutes: is cloud_worker.py running there?")
+    except (ValueError, SystemExit) as e:
+        BRIDGE.update(state="failed", message=str(e))
+    except Exception as e:  # noqa: BLE001 (the cloud comes and goes)
+        BRIDGE.update(state="failed", message=f"the cloud stopped answering ({type(e).__name__})")
+
+
+def start_server_test():
+    if BRIDGE["state"] in ("sending", "waiting"):
+        return
+    BRIDGE.update(state="sending", message="the check goes into the cloud folder", found=None, started=time.time())
+    threading.Thread(target=test_server, daemon=True).start()
 
 
 def server_jobs(only=None):
@@ -785,6 +901,8 @@ def prompt_list(folder):
 
 def start_prompt(file, wanted):
     """The local picture AI paints a prompt into the painted area of the edit's main side (about half a minute)."""
+    if not GPU_HERE:
+        raise ValueError(NO_GPU % "the picture AI" + " (describe the new part in words in the plan: it is painted there)")
     _, node, folder = edit_node(file, wanted)
     key = f"{file}/{node['id']}"
     if key in PROMPTS and PROMPTS[key]["process"].poll() is None:
@@ -906,12 +1024,14 @@ class Page(BaseHTTPRequestHandler):
                 if not name:
                     return self.answer({"error": "log in first"}, 401)
             if address.path == "/api/me":  # who is logged in; without --accounts nobody is asked
-                return self.answer({"accounts": self.accounts, "name": name if self.accounts else None})
+                return self.answer({"accounts": self.accounts, "name": name if self.accounts else None, "gpu": GPU_HERE})
             if address.path == "/":
                 return self.send(open(PAGE, "rb").read(), "text/html; charset=utf-8", extra=[("Cache-Control", "no-store")])
             if address.path in ("/app", "/old/app"):  # the main page, and the one before it
                 return self.send(open(APP if address.path == "/app" else OLD_APP, "rb").read(), "text/html; charset=utf-8",
                                  extra=[("Cache-Control", "no-store")])
+            if address.path == "/api/cloud":
+                return self.answer(cloud_login())
             if address.path == "/api/flows":
                 return self.answer(flow_list())
             if address.path == "/api/server":
@@ -930,7 +1050,7 @@ class Page(BaseHTTPRequestHandler):
                 if name not in [f["file"] for f in flow_list()]:
                     return self.answer({"error": f"no flow {name}"}, 404)
                 with self.lock:
-                    if name not in self.seen or time.time() - self.seen[name][0] > 2:
+                    if name not in self.seen or time.time() - self.seen[name][0] > 0.8:  # the page asks every second
                         self.seen[name] = (time.time(), remote_state(name) or describe(name))
                     return self.answer(self.seen[name][1])
             if address.path.startswith("/file/"):
@@ -983,6 +1103,17 @@ class Page(BaseHTTPRequestHandler):
             file = wanted.get("flow", "")
             if self.path == "/api/understand":
                 return self.answer({"ok": True, **understand(wanted)})
+            if self.path.startswith("/api/cloud/"):
+                if self.accounts:  # the login is the one of the computer the page runs on, not of whoever is logged in
+                    raise ValueError("not on a shared page: the cloud login is set on the computer the page runs on")
+                if self.path == "/api/cloud/login":
+                    save_cloud_login(wanted)
+                    return self.answer({"ok": True, **cloud_login()})
+                if self.path == "/api/cloud/test":
+                    files = test_cloud()
+                    if wanted.get("server", True):
+                        start_server_test()
+                    return self.answer({"ok": True, "cloud": f"Sciebo answers: the folder has {files} files", **cloud_login()})
             if self.path == "/api/blender":
                 if self.accounts:
                     raise ValueError("not on a shared page: it would open Blender on the computer the page runs on")
@@ -1052,7 +1183,12 @@ def main():
     parser.add_argument("--accounts", action="store_true", help="a login first; the accounts are made with accounts.py")
     parser.add_argument("--host", default="127.0.0.1", help="the address to listen on; another one than this PC's own "
                         "(0.0.0.0 = everybody who reaches this computer) only with --accounts")
+    gpu = parser.add_mutually_exclusive_group()
+    gpu.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="this computer runs the AI itself (default: if nvidia-smi is there)")
+    gpu.add_argument("--no-gpu", dest="gpu", action="store_false", help="every run on the uni server, nothing of the AI here")
     args = parser.parse_args()
+    global GPU_HERE
+    GPU_HERE = GPU_HERE if args.gpu is None else args.gpu
     if args.host not in ("127.0.0.1", "localhost") and not args.accounts:
         parser.error("--host for other computers needs --accounts: without a login everybody there could run and change everything")
     if args.accounts and not accounts.read():
@@ -1060,6 +1196,8 @@ def main():
     Page.accounts = args.accounts
     server = ThreadingHTTPServer((args.host, args.port), Page)
     address = f"http://127.0.0.1:{args.port}"
+    if not GPU_HERE:
+        print("No NVIDIA GPU here: every run goes to the uni server (the Sciebo login: click the bridge in the city).", flush=True)
     print(f"The flow page: {address}   (Ctrl+C stops it)" + (f"\nwith accounts ({len(accounts.read())}), listening on {args.host}" if args.accounts else ""), flush=True)
     if args.open:
         webbrowser.open(address)

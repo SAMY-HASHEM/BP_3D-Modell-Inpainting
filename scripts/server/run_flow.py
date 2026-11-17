@@ -4,7 +4,7 @@ and shows the state (cloud.py flow, or the web page with "everything on the uni 
 The job's folder has flow.json and files/ (the flow's input files, at their paths from the project folder). This
   1 puts the files where the flow file names them (only under pictures/uploads/)
   2 lets every node run on this computer (a base model and an inpainting are not sent anywhere: they are here)
-  3 starts flow.py, and while it runs sends the state to the cloud every 15 s: <job>__live_state.json is what the web
+  3 starts flow.py, and while it runs sends the state to the cloud every 4 s (EVERY seconds): <job>__live_state.json is what the web
     page shows (flow_page.describe: every node's state, note, minutes, pictures), and every picture it names as
     <job>__live_<hash>. The last model goes up when the flow is done
   4 stops flow.py when <job>__stop appears in the cloud (the page's Stop)
@@ -28,6 +28,8 @@ import urllib.request
 import zipfile
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+EVERY = 4  # seconds between two states sent to the cloud: the web page follows a run live with them. Each round is one
+           # small upload (and one look for Stop); a picture only when it is new. Sciebo takes that without refusing.
 
 
 def main():
@@ -78,7 +80,7 @@ def main():
             last[0] = line.strip() or last[0]
     threading.Thread(target=pump, daemon=True).start()
 
-    sent, stopped = {}, False
+    sent, stopped, rounds = {}, False, [0]
 
     def report(final=False):
         state = flow_page.describe(name, path)
@@ -117,7 +119,9 @@ def main():
                     print(f"    not sent: {os.path.basename(local)} ({type(e).__name__})", flush=True)
                     continue
             state["files"][address] = {"name": f"{job}__live_{key}", "stamp": stamp}
-        state["server"] = {"job": job, "notes": notes, "line": last[0][:200], "time": time.strftime("%H:%M:%S"), "stopped": stopped}
+        state["server"] = {"job": job, "notes": notes, "line": last[0][:200], "time": time.strftime("%H:%M:%S"), "stopped": stopped,
+                           "every": EVERY, "round": rounds[0]}
+        rounds[0] += 1
         local_state = os.path.join(args.folder, "state.json")
         json.dump(state, open(local_state, "w"))
         cloud.upload(local_state, f"{job}__live_state.json")
@@ -135,10 +139,10 @@ def main():
                 pass
         except Exception as e:  # noqa: BLE001 (the cloud was away for a moment: the flow goes on)
             print(f"    state not sent: {type(e).__name__}: {e}", flush=True)
-        for _ in range(15):
+        for _ in range(EVERY * 4):
             if process.poll() is not None:
                 break
-            time.sleep(1)
+            time.sleep(.25)
     time.sleep(1)
     for attempt in range(5):  # the last state must arrive: it says how the flow ended
         try:

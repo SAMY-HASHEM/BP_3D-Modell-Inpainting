@@ -34,7 +34,8 @@ class InTemporaryProject(unittest.TestCase):
         patches = [mock.patch.object(core, "PROJECT", root), mock.patch.object(core, "OUTPUTS", os.path.join(root, "outputs")),
                    mock.patch.object(page, "FLOWS", os.path.join(root, "flows")),
                    mock.patch.object(page, "HAND", os.path.join(root, "flows", "hand")),
-                   mock.patch.object(page, "UPLOADS", os.path.join(root, "pictures", "uploads"))]
+                   mock.patch.object(page, "UPLOADS", os.path.join(root, "pictures", "uploads")),
+                   mock.patch.object(page, "GPU_HERE", True)]  # a computer with a GPU; WithoutAGpu tests the other one
         for one in patches:
             one.start()
             self.addCleanup(one.stop)
@@ -152,6 +153,74 @@ class CreatingAFlow(InTemporaryProject):
         self.assertEqual(len(os.listdir(folder)), 2)
         self.create(parts=0)
         self.assertEqual(os.listdir(folder), [])
+
+
+class WithoutAGpu(InTemporaryProject):
+    """A laptop (no NVIDIA GPU): every run goes to the uni server, whatever the page asks for."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.object(page, "GPU_HERE", False)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_new_flow_runs_on_the_server_whatever_was_chosen(self):
+        for where in ("pc", "server", "all"):
+            item = {"path": self.upload("demo", "object", "front.png"), "role": "object"}
+            page.create_flow({"flow": "demo", "items": [item], "settings": {"where": where}})
+            self.assertEqual(self.flow("demo").get("runs"), "server", where)
+
+    def test_run_sends_any_flow_to_the_server(self):
+        page.save_flow(os.path.join(page.FLOWS, "mine.json"), {"name": "mine", "nodes": [{"id": "a", "type": "input", "files": []}]})
+        with mock.patch.object(page, "start_remote") as remote, mock.patch.object(page.subprocess, "Popen") as local:
+            page.start_run("mine", upto="a")
+        remote.assert_called_once_with("mine")
+        local.assert_not_called()
+
+    def test_no_local_ai(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OLLAMA_HOST", None)
+            with self.assertRaises(ValueError):
+                page.understand({"prompt": "a hat", "items": [{"name": "a.png"}]})
+
+
+class TheBridge(InTemporaryProject):
+    """The Sciebo login of the bridge: tried before it is saved, its password never sent back."""
+
+    def setUp(self):
+        super().setUp()
+        self.cloud = page.cloud_module()
+        self.config = os.path.join(self.root, "cloud.json")
+        for one in (mock.patch.object(self.cloud, "CONFIG", self.config), mock.patch.dict(page.BRIDGE, {"state": "idle"})):
+            one.start()
+            self.addCleanup(one.stop)
+
+    def test_no_login_yet(self):
+        self.assertIsNone(page.cloud_login()["login"])
+        with self.assertRaises(ValueError):
+            page.test_cloud()
+
+    def test_a_login_that_works_is_saved_without_showing_its_password(self):
+        with mock.patch.object(self.cloud.Cloud, "make_folder"), mock.patch.object(self.cloud.Cloud, "list", return_value=["a.zip"]):
+            page.save_cloud_login({"user": "anna", "password": "secret-app-password"})
+            self.assertEqual(page.test_cloud(), 1)
+        self.assertEqual(json.load(open(self.config))["password"], "secret-app-password")
+        shown = json.dumps(page.cloud_login())
+        self.assertIn("anna", shown)
+        self.assertNotIn("secret-app-password", shown)
+
+    def test_a_refused_login_is_not_saved(self):
+        refused = urllib.error.HTTPError("https://sciebo", 401, "Unauthorized", {}, None)
+        with mock.patch.object(self.cloud.Cloud, "make_folder", side_effect=refused):
+            with self.assertRaises(ValueError) as said:
+                page.save_cloud_login({"user": "anna", "password": "wrong"})
+        self.assertIn("refused", str(said.exception))
+        self.assertFalse(os.path.exists(self.config))
+
+    def test_both_are_needed(self):
+        for wanted in ({"user": "anna"}, {"password": "x"}, {"user": " ", "password": "x"}):
+            with self.assertRaises(ValueError):
+                page.save_cloud_login(wanted)
 
 
 class NodeSettings(InTemporaryProject):
@@ -400,7 +469,7 @@ class Accounts(WithServer):
         code, cookie = self.log_in()
         self.assertEqual(code, 200)
         self.assertEqual(json.loads(self.ask("/api/flows", headers={"Cookie": cookie})[1]), [])
-        self.assertEqual(json.loads(self.ask("/api/me", headers={"Cookie": cookie})[1]), {"accounts": True, "name": "anna"})
+        self.assertEqual(json.loads(self.ask("/api/me", headers={"Cookie": cookie})[1]), {"accounts": True, "name": "anna", "gpu": True})
         self.assertEqual(self.ask("/api/blender", b'{"model": "a.glb"}', {**self.mine, "Cookie": cookie})[0], 400)
         self.assertEqual(self.ask("/api/logout", b"{}", {**self.mine, "Cookie": cookie})[0], 200)
         self.assertEqual(self.ask("/api/flows", headers={"Cookie": cookie})[0], 401)
@@ -422,7 +491,7 @@ class Accounts(WithServer):
 
 class WithoutAccounts(WithServer):
     def test_nobody_is_asked(self):
-        self.assertEqual(json.loads(self.ask("/api/me")[1]), {"accounts": False, "name": None})
+        self.assertEqual(json.loads(self.ask("/api/me")[1]), {"accounts": False, "name": None, "gpu": True})
         self.assertEqual(self.ask("/login")[0], 404)
         self.assertEqual(self.ask("/api/login", b"{}", {"X-Flow-Page": "1"})[0], 404)
 

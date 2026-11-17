@@ -107,6 +107,18 @@
   dialog { background:var(--ink); color:var(--sand); border:2px solid var(--sand); border-radius:var(--radius); max-width:560px; padding:18px 20px; }
   dialog::backdrop { background:#000a; } dialog h2 { margin-top:0; } kbd { border:1px solid var(--line); border-radius:5px; padding:0 6px; background:var(--raised); }
   dialog li { margin-bottom:5px; }
+  /* ------------------------------------------------ the bridge: the Sciebo login and the connection */
+  .bridgeHit { cursor:pointer; } .bridgeHit .ring { opacity:0; transition:opacity .2s; } .bridgeHit:hover .ring, .bridgeHit:focus-visible .ring { opacity:1; }
+  .bridgeHit:focus { outline:none; }
+  .lamp.checking { animation:pulse 1.2s infinite ease-in-out; }
+  #bridge label { display:grid; gap:3px; font-size:13px; color:var(--dim); }
+  #bridge input { background:var(--raised); border:1.5px solid var(--line); border-radius:9px; padding:7px 10px; color:var(--sand); }
+  #bridge .form { display:grid; gap:9px; margin:10px 0; } #bridge .buttons { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .steps { display:grid; gap:8px; margin:12px 0 0; padding:0; list-style:none; }
+  .steps li { border:1.5px solid var(--line); border-radius:10px; padding:8px 11px; background:var(--raised); }
+  .steps li.ok { border-color:var(--ok); } .steps li.bad { border-color:var(--bad); } .steps li.now { border-color:var(--now); }
+  .steps b { display:block; } .steps small { color:#e9d5a4; } .steps .found { font-size:12.5px; margin-top:4px; color:#e9d5a4; }
+  .note { font-size:13px; color:var(--dim); }
 </style>
 </head>
 <body>
@@ -149,8 +161,26 @@
     <li><b>Press Run</b>. Nothing starts before that. The city shows where the work is; you can stop it at any time.</li>
   </ol>
   <p><b>Shortcuts:</b> <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>Ctrl</kbd>+<kbd>V</kbd> paste data · drop files anywhere · <kbd>Esc</kbd> close this</p>
-  <p><b>The city:</b> the left bank of the Nile is our device, the right bank is the uni server, the bridge is the cloud folder between them. A building that works glows; a finished one raises a green flag.</p>
+  <p><b>The city:</b> the narrow left bank of the Nile is our device (your data comes in, your model comes back), the right bank is the uni server where all the work is done, the bridge is the cloud folder between them: click it to enter the Sciebo login and test the connection. A building that works glows; a finished one raises a green flag.</p>
   <form method="dialog"><button class="main">Close</button></form>
+</dialog>
+<dialog id="bridge" aria-labelledby="bridgeTitle">
+  <h2 class="display" id="bridgeTitle">The bridge: Sciebo</h2>
+  <p class="note">The uni server can't be reached from home, but it and this computer both reach the Sciebo cloud: a folder there is
+    the bridge. Your data goes over it to the uni server, and the results come back.</p>
+  <p id="bridgeLogin"></p>
+  <details id="bridgeChange">
+    <summary id="bridgeChangeTitle">Enter the Sciebo login</summary>
+    <p class="note">In Sciebo: your picture (top right) &rsaquo; Persönliche Einstellungen &rsaquo; Sicherheit &rsaquo; <b>Neues App-Passwort erstellen</b>.
+      Use the login name and the app password shown there, not your uni password.</p>
+    <div class="form">
+      <label>Login name (Anmeldename)<input id="bridgeUser" autocomplete="off" spellcheck="false"></label>
+      <label>App password<input id="bridgePassword" type="password" autocomplete="new-password"></label>
+      <div><button class="main" id="bridgeSave">Save and test</button></div>
+    </div>
+  </details>
+  <ol class="steps" id="bridgeSteps"></ol>
+  <div class="buttons"><button class="main" id="bridgeTest">Test the connection</button><form method="dialog"><button>Close</button></form></div>
 </dialog>
 <dialog id="pages">
   <h2 class="display">Other pages</h2>
@@ -169,21 +199,25 @@ function h(tag, props = {}, ...kids) {
   return e;
 }
 const LIVE = location.protocol.startsWith("http");  // served by flow_page.py; as a file the page can only show its demo
+let GPU = false;  // can the computer of flow_page.py run the AI itself? Without an NVIDIA GPU everything goes to the uni server
+if (LIVE) fetch("/api/me").then(r => r.json()).then(me => { GPU = !!me.gpu; }).catch(() => {});
 const clock = s => { s = Math.max(0, Math.round(s)); return s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s} s`; };
 
 // ================================================================ the city's buildings
 // Every building: its name, what works there (a local AI, a model, or plain processing), where (our device / the uni
 // server), about how long it takes, the figure in front of it, and which nodes of a flow are its work (types).
+// where: with everything on the uni server (the default: a laptop needs no GPU), so only the gate and the gallery are on
+// our side of the Nile; split: where it works when only the models run on the uni server and the rest on this device.
 const BUILDINGS = [
-  {id: "gate",     name: "City gate",        runs: "Your data arrives and is sorted",            kind: "processing", where: "device", about: 0.2, who: "guard",    types: ["input"],              x: 75,  y: 585, c: "#c0392b", shape: "pylon",   r: 30},
-  {id: "office",   name: "House of scribes", runs: "Qwen3.6-27B reads what every picture shows", kind: "local AI",   where: "device", about: 1,   who: "clerk",    types: ["data_sheet"],         x: 120, y: 400, c: "#2f6fb5", shape: "house",   r: 36},
-  {id: "factory",  name: "The great pyramid", runs: "TRELLIS.2 builds the 3D model",             kind: "model",      where: "server", about: 15,  who: "engineer", types: ["base"],               x: 830, y: 170, c: "#2f6fb5", shape: "pyramid", r: 50},
-  {id: "studio",   name: "Painters' pavilion", runs: "Qwen-Image-Edit paints your wish",         kind: "local AI",   where: "device", about: 2,   who: "painter",  types: ["edit"],               x: 270, y: 150, c: "#c0392b", shape: "kiosk",   r: 40},
-  {id: "clinic",   name: "House of life",    runs: "UniRig finds the bones",                     kind: "model",      where: "device", about: 1,   who: "doctor",   types: ["rig"],                x: 330, y: 545, c: "#2aa58a", shape: "mastaba", r: 38},
-  {id: "workshop", name: "Builders' yard",   runs: "Puts the new part in its place",             kind: "processing", where: "device", about: 4,   who: "fitter",   types: ["place"],              x: 480, y: 150, c: "#d98a2b", shape: "yard",    r: 40},
-  {id: "forge",    name: "The forge",        runs: "TRELLIS.2 inpaints shape, details, colours", kind: "model",      where: "server", about: 90,  who: "smith",    types: ["inpaint"],            x: 845, y: 500, c: "#c0392b", shape: "step",    r: 46},
-  {id: "court",    name: "Hall of judgement", runs: "Measures, then Qwen3.6-27B looks",          kind: "local AI",   where: "device", about: 6,   who: "judge",    types: ["judge", "pick_seed"], x: 520, y: 450, c: "#8a4fc0", shape: "temple",  r: 42},
-  {id: "gallery",  name: "The gallery",      runs: "Your finished model",                        kind: "processing", where: "device", about: 0,   who: "host",     types: [],                     x: 95,  y: 215, c: "#2aa58a", shape: "obelisk", r: 36},
+  {id: "gate",     name: "City gate",        runs: "Your data arrives and is sorted",            kind: "processing", where: "device", split: "device", about: 0.2, who: "guard",    types: ["input"],              x: 90,  y: 570, c: "#c0392b", shape: "pylon",   r: 30},
+  {id: "office",   name: "House of scribes", runs: "Qwen3.6-27B reads what every picture shows", kind: "local AI",   where: "server", split: "device", about: 1,   who: "clerk",    types: ["data_sheet"],         x: 425, y: 540, c: "#2f6fb5", shape: "house",   r: 36},
+  {id: "factory",  name: "The great pyramid", runs: "TRELLIS.2 builds the 3D model",             kind: "model",      where: "server", split: "server", about: 15,  who: "engineer", types: ["base"],               x: 860, y: 180, c: "#2f6fb5", shape: "pyramid", r: 50},
+  {id: "studio",   name: "Painters' pavilion", runs: "Qwen-Image-Edit paints your wish",         kind: "local AI",   where: "server", split: "device", about: 2,   who: "painter",  types: ["edit"],               x: 450, y: 160, c: "#c0392b", shape: "kiosk",   r: 40},
+  {id: "clinic",   name: "House of life",    runs: "UniRig finds the bones",                     kind: "model",      where: "server", split: "device", about: 1,   who: "doctor",   types: ["rig"],                x: 595, y: 560, c: "#2aa58a", shape: "mastaba", r: 38},
+  {id: "workshop", name: "Builders' yard",   runs: "Puts the new part in its place",             kind: "processing", where: "server", split: "device", about: 4,   who: "fitter",   types: ["place"],              x: 650, y: 150, c: "#d98a2b", shape: "yard",    r: 40},
+  {id: "forge",    name: "The forge",        runs: "TRELLIS.2 inpaints shape, details, colours", kind: "model",      where: "server", split: "server", about: 90,  who: "smith",    types: ["inpaint"],            x: 900, y: 400, c: "#c0392b", shape: "step",    r: 46},
+  {id: "court",    name: "Hall of judgement", runs: "Measures, then Qwen3.6-27B looks",          kind: "local AI",   where: "server", split: "device", about: 6,   who: "judge",    types: ["judge", "pick_seed"], x: 765, y: 565, c: "#8a4fc0", shape: "temple",  r: 42},
+  {id: "gallery",  name: "The gallery",      runs: "Your finished model",                        kind: "processing", where: "device", split: "device", about: 0,   who: "host",     types: [],                     x: 95,  y: 215, c: "#2aa58a", shape: "obelisk", r: 36},
 ];
 const B = Object.fromEntries(BUILDINGS.map(b => [b.id, b]));
 const TYPICAL = {input: 0.2, data_sheet: 1, base: 15, pick_seed: 2, edit: 2, inpaint: 30, judge: 2, rig: 1, place: 4};  // minutes per node
@@ -192,10 +226,11 @@ const WHERE = {device: "our device", server: "uni server"};
 const NS = "http://www.w3.org/2000/svg", svg = $("city");
 const el = (tag, attrs = {}, parent = svg) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
 const shade = (hex, f) => "#" + [1, 3, 5].map(i => Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(i, i + 2), 16) * f))).toString(16).padStart(2, "0")).join("");
-const P = {...B, square: {x: 320, y: 330}, west: {x: 205, y: 485}, quay: {x: 610, y: 300}, land: {x: 760, y: 320}};
-const ROADS = [["gate", "west", 26], ["west", "office", -20], ["west", "clinic", 26], ["west", "square", -24], ["office", "square", 20], ["gallery", "square", -26],
-               ["square", "studio", 28], ["square", "workshop", -30], ["square", "court", 30], ["clinic", "court", -26], ["workshop", "quay", -34],
-               ["court", "quay", 26], ["quay", "land", 0], ["land", "factory", 30], ["land", "forge", -30]];
+// our device is the narrow west bank (the gate, the gallery); over the bridge the uni server's city with two squares
+const P = {...B, quay: {x: 165, y: 310}, land: {x: 345, y: 322}, square: {x: 560, y: 345}, east: {x: 775, y: 345}};
+const ROADS = [["gate", "quay", 30], ["gallery", "quay", -30], ["quay", "land", 0], ["land", "square", -18],
+               ["square", "office", 22], ["square", "studio", -24], ["square", "workshop", 24], ["square", "clinic", -18], ["square", "east", 0],
+               ["east", "court", 20], ["east", "factory", -24], ["east", "forge", 20]];
 const STREET = {};
 for (const [a, b, bend] of ROADS) {
   const A = P[a], Z = P[b], len = Math.hypot(Z.x - A.x, Z.y - A.y) || 1, cx = (A.x + Z.x) / 2 - (Z.y - A.y) / len * bend, cy = (A.y + Z.y) / 2 + (Z.x - A.x) / len * bend;
@@ -329,29 +364,29 @@ const parts = {};  // per building: its svg group, its bar in the map, its card
   let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   for (let gx = 0; gx < 14; gx++) for (let gy = 0; gy < 10; gy++) { const x = gx * 72, y = gy * 68, j = () => rnd() * 26 - 13;  // the desert, in facets of sand
     el("polygon", {points: [[x + j(), y + j()], [x + 72 + j(), y + j()], [x + 36 + j(), y + 68 + j()]].map(p => p.join(",")).join(" "), fill: shade("#ecd49c", .9 + rnd() * .16), opacity: .9}); }
-  for (const [x, y, w] of [[120, 90, 150], [520, 560, 190], [880, 400, 120], [400, 40, 140]]) el("path", {d: `M${x} ${y} q${w / 2} -22 ${w} 0`, fill: "none", stroke: "#d2b473", "stroke-width": 2, opacity: .7});  // dunes
-  const nile = "M650 0 C625 150 700 215 672 320 C648 420 708 500 684 640 L752 640 C776 500 716 420 742 320 C770 215 700 150 722 0 Z";
+  for (const [x, y, w] of [[20, 90, 130], [470, 630, 190], [880, 300, 90], [520, 40, 140]]) el("path", {d: `M${x} ${y} q${w / 2} -22 ${w} 0`, fill: "none", stroke: "#d2b473", "stroke-width": 2, opacity: .7});  // dunes
+  const nile = "M220 0 C195 150 270 215 242 320 C218 420 278 500 254 640 L322 640 C346 500 286 420 312 320 C340 215 270 150 292 0 Z";
   el("path", {d: nile, fill: "none", stroke: "#8fbf5a", "stroke-width": 52, "stroke-linejoin": "round", opacity: .9});  // the green land along the river
   el("path", {d: nile, fill: "none", stroke: "#6fa844", "stroke-width": 22, "stroke-linejoin": "round", opacity: .8});
   el("path", {d: nile, fill: "url(#water)"});
-  for (let i = 0; i < 16; i++) { const y = 20 + i * 40, x = 690 + Math.sin(i * 1.7) * 20; el("path", {d: `M${x} ${y} q8 -5 16 0 q8 5 16 0`, fill: "none", stroke: "#fff", "stroke-width": 1.4, opacity: .35}); }
-  for (const [x, y] of [[700, 120], [706, 470], [716, 580]]) {  // boats on the Nile
+  for (let i = 0; i < 16; i++) { const y = 20 + i * 40, x = 260 + Math.sin(i * 1.7) * 20; el("path", {d: `M${x} ${y} q8 -5 16 0 q8 5 16 0`, fill: "none", stroke: "#fff", "stroke-width": 1.4, opacity: .35}); }
+  for (const [x, y] of [[270, 120], [276, 470], [286, 580]]) {  // boats on the Nile
     const boat = el("g", {}); el("path", {d: `M${x - 20} ${y} Q${x} ${y + 12} ${x + 20} ${y} L${x + 26} ${y - 7} L${x + 14} ${y - 2} L${x - 14} ${y - 2} L${x - 26} ${y - 7} Z`, fill: "#b9834a", stroke: "#74502a"}, boat);
     el("line", {x1: x, y1: y - 2, x2: x, y2: y - 30, stroke: "#5b3d1f", "stroke-width": 1.6}, boat); el("path", {d: `M${x + 1} ${y - 29} L${x + 17} ${y - 20} L${x + 1} ${y - 9} Z`, fill: "#fbf7ea", stroke: "#8a6a3a", "stroke-width": .7}, boat);
     boat.innerHTML += `<animateTransform attributeName="transform" type="translate" values="0 0; 0 3; 0 0" dur="${3.5 + x % 3}s" repeatCount="indefinite"/>`; }
   el("text", {x: 20, y: 28, class: "bank"}).textContent = "OUR DEVICE";
   el("text", {x: 846, y: 626, class: "bank"}).textContent = "UNI SERVER";
-  el("text", {x: 711, y: 22, class: "what", transform: "rotate(84 711 22)", "text-anchor": "start", style: "fill:#fff; stroke:none; opacity:.8; letter-spacing:.2em"}).textContent = "THE NILE";
+  el("text", {x: 281, y: 22, class: "what", transform: "rotate(84 281 22)", "text-anchor": "start", style: "fill:#fff; stroke:none; opacity:.8; letter-spacing:.2em"}).textContent = "THE NILE";
   const drawn = new Set();
   for (const k in STREET) { const [a, b] = k.split(">"); if (drawn.has(b + ">" + a)) continue; drawn.add(k); const d = "M" + STREET[k].map(p => p.join(" ")).join(" L");  // roads of stone
     el("path", {d, fill: "none", stroke: "#a5834d", "stroke-width": 19, "stroke-linecap": "round"}); el("path", {d, fill: "none", stroke: "#f6e7c1", "stroke-width": 14, "stroke-linecap": "round"});
     el("path", {d, fill: "none", stroke: "#d9bf86", "stroke-width": 14, "stroke-dasharray": "1.5 12", opacity: .9}); }
-  el("polygon", {points: "640,290 760,296 760,340 640,332", fill: "#dcbd7c", stroke: "#8a6a3a", "stroke-width": 2});  // the bridge of stone
-  for (const x of [662, 700, 738]) el("path", {d: `M${x - 12} 338 q12 -16 24 0`, fill: "#2b7fc4", stroke: "#8a6a3a", "stroke-width": 1.2});
+  el("polygon", {points: "200,292 325,298 325,342 200,334", fill: "#dcbd7c", stroke: "#8a6a3a", "stroke-width": 2});  // the bridge of stone
+  for (const x of [225, 262, 300]) el("path", {d: `M${x - 12} 340 q12 -16 24 0`, fill: "#2b7fc4", stroke: "#8a6a3a", "stroke-width": 1.2});
   el("path", {d: "M" + STREET["quay>land"].map(p => p.join(" ")).join(" L"), fill: "none", stroke: "#f6e7c1", "stroke-width": 12});
-  el("text", {x: 700, y: 282, class: "what"}).textContent = "the bridge: the cloud folder";
-  for (const k of ["square", "west", "quay", "land"]) { el("circle", {cx: P[k].x, cy: P[k].y, r: 15, fill: "#f6e7c1", stroke: "#a5834d", "stroke-width": 2.5}); el("circle", {cx: P[k].x, cy: P[k].y, r: 5, fill: "#e8b923"}); }
-  for (const [x, y, s] of [[395, 255, .9], [600, 125, 1.05], [40, 490, .85], [250, 612, 1], [440, 600, .9], [598, 575, 1.05], [930, 335, 1], [775, 70, .9], [930, 590, .85], [205, 300, .85], [425, 392, .8], [940, 70, 1], [30, 300, .85], [636, 430, .8], [770, 230, .85]]) {  // palm trees
+  el("text", {x: 262, y: 270, class: "what"}).textContent = "the bridge: the cloud folder (click it)";
+  for (const k of ["square", "east", "quay", "land"]) { el("circle", {cx: P[k].x, cy: P[k].y, r: 15, fill: "#f6e7c1", stroke: "#a5834d", "stroke-width": 2.5}); el("circle", {cx: P[k].x, cy: P[k].y, r: 5, fill: "#e8b923"}); }
+  for (const [x, y, s] of [[30, 420, .85], [160, 470, .9], [150, 100, .85], [30, 330, .8], [390, 250, 1], [555, 225, .85], [735, 250, .85], [965, 255, .9], [505, 610, .9], [690, 470, .8], [960, 590, .9], [370, 610, .9], [690, 625, .85], [950, 70, 1], [160, 620, .85]]) {  // palm trees
     el("path", {d: `M${x} ${y + 8 * s} q${3 * s} ${-14 * s} ${-1 * s} ${-26 * s}`, fill: "none", stroke: "#8a6a3a", "stroke-width": 3 * s, "stroke-linecap": "round"});
     for (const a of [-150, -110, -70, -30, 200, 160]) { const r2 = a * Math.PI / 180, ex = x - s + Math.cos(r2) * 15 * s, ey = y - 18 * s + Math.sin(r2) * 9 * s + 6 * s;
       el("path", {d: `M${x - s} ${y - 18 * s} Q${(x - s + ex) / 2} ${y - 26 * s} ${ex} ${ey}`, fill: "none", stroke: a % 40 ? "#3f8f4f" : "#2f7a43", "stroke-width": 2.6 * s, "stroke-linecap": "round"}); } }
@@ -390,8 +425,8 @@ function sendCourier(to) { if (to && to !== walk.at) { walk = {at: to, pts: rout
   folk.forEach((f, k) => { const u = ((now / (30000 + k * 7000)) + k * .37) % 2, [fx, fy] = along(f.pts, u > 1 ? 2 - u : u); f.g.setAttribute("transform", `translate(${fx - 10},${fy + 8}) scale(.8)`); });
   requestAnimationFrame(frame);
 })(performance.now());
-function places(allOnServer) {  // a run with everything on the uni server: the buildings say so (the gate and the gallery are here)
-  for (const b of BUILDINGS) { const where = allOnServer && !["gate", "gallery"].includes(b.id) ? "server" : b.where;
+function places(allOnServer) {  // everything on the uni server (as the map is drawn), or only the models there: the buildings say so
+  for (const b of BUILDINGS) { const where = allOnServer ? b.where : b.split;
     parts[b.id].tag.textContent = WHERE[where]; parts[b.id].tag.className = "tag " + where; parts[b.id].sub.textContent = `${b.kind} · ${WHERE[where]}`; }
 }
 const WORD = {idle: "waiting", waiting: "next", running: "working", done: "done", failed: "did not work", unused: "not in this run"};
@@ -518,8 +553,8 @@ function showPlan(text, plan) {
   const first = (data.find(i => i.role === "object") || data[0]).name.replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30) || "my_project";
   const name = h("input", {value: first, maxlength: 40, "aria-label": "Project name"}), old = h("input", {value: plan.old_part || "", placeholder: "nothing"}),
         place = h("input", {value: plan.place || "", placeholder: "the page finds the place"}), words = h("input", {value: plan.part_words || "", placeholder: "e.g. a wide wizard hat"}),
-        where = h("select", {}, h("option", {value: "all"}, "everything on the uni server (this device needs no GPU)"),
-                  h("option", {value: "server"}, "the models on the uni server, the rest on this device"), h("option", {value: "pc"}, "everything on this device (it needs a strong GPU)")),
+        where = h("select", {}, h("option", {value: "all"}, "everything on the uni server (this device needs no GPU)"),  // without a GPU here the only choice
+                  ...(GPU ? [h("option", {value: "server"}, "the models on the uni server, the rest on this device"), h("option", {value: "pc"}, "everything on this device (it needs a strong GPU)")] : [])),
         why = h("div", {class: "why"}), run = h("button", {class: "main"}, "Run"), wordsRow = h("label", {}, "The new part in words (no data shows it)", words);
   const rows = data.map(item => { const role = h("select", {"aria-label": "What " + item.name + " is"}, h("option", {value: "object"}, "the model to change"), h("option", {value: "part"}, "the new part"), h("option", {value: "unused"}, "don't use"));
     role.value = item.role; role.onchange = () => { item.role = role.value; check(); };
@@ -569,6 +604,26 @@ async function start(plan) {
   }
 }
 const seenRunning = {};
+// Live between two words from the server: a step's note ends in the sampler's line, "12/25 [00:14<00:15, 1.18s/it]". From
+// it the page knows the step, the seconds per step and when it last changed, so the bar and the time left move every
+// second and are set right again by the next word (the server sends one every 4 s, this computer fetches it every 2 s).
+const TRACK = {};  // per node: {i, n, perStep, at}
+function liveStep(n) {
+  const note = n.note || "", count = note.match(/(\d+)\s*\/\s*(\d+)(?!.*\d+\s*\/\s*\d+)/), rate = note.match(/([\d.]+)\s*(s\/it|it\/s)/);
+  if (!count || !+count[2]) { delete TRACK[n.id]; return null; }
+  const i = +count[1], total = +count[2], perStep = rate ? (rate[2] === "s/it" ? +rate[1] : 1 / Math.max(+rate[1], 1e-3)) : null;
+  const was = TRACK[n.id];
+  if (!was || was.i !== i || was.n !== total) TRACK[n.id] = {i, n: total, perStep: perStep || (was && was.perStep), at: Date.now(), shown: was && was.n === total ? was.shown : 0};
+  const t = TRACK[n.id], since = (Date.now() - t.at) / 1000;
+  // the sampler goes on between two words: steps are counted on for up to 8 s (two words that did not come), then it waits
+  const ahead = t.perStep ? Math.min(since, 8) / t.perStep : 0, done = Math.max(t.i, Math.min(t.n - .01, t.i + ahead));
+  const within = done - t.i, left = t.perStep ? Math.max(0, (t.n - done) * t.perStep) : null;
+  const what = note.replace(/\s*\d+%\|[^|]*\|\s*/, " ").replace(/\s*\[[^\]]*\]\s*$/, "").replace(/\s*\d+\s*\/\s*\d+\s*$/, "").replace(/:\s*$/, "").trim();
+  const step = Math.min(t.n, Math.floor(t.i + within) + 1);
+  t.shown = Math.max(was && was.n === t.n ? was.shown || 0 : 0, Math.min(.99, (t.i + within) / t.n));  // a bar never goes back
+  return {share: t.shown, step, total: t.n, left,
+          text: t.i >= t.n ? `${what} · finishing` : `${what} · step ${step} of ${t.n}` + (left != null ? ` · about ${clock(left)} left` : "")};
+}
 function cityOf(flow) {  // a flow's nodes as the buildings' states
   const states = {}; let active = null;
   for (const b of BUILDINGS) {
@@ -579,8 +634,9 @@ function cityOf(flow) {  // a flow's nodes as the buildings' states
       const busy = n.status === "running" || n.status === "starting";
       if (busy) seenRunning[n.id] = seenRunning[n.id] || Date.now(); else delete seenRunning[n.id];
       if (n.status === "done") { sum += 1; seconds += (n.minutes || 0) * 60; }
-      else if (busy) { const spent = (Date.now() - seenRunning[n.id]) / 1000, said = (n.note || "").match(/(\d+)\s*\/\s*(\d+)(?!.*\d+\s*\/\s*\d+)/);
-        sum += said && +said[2] ? Math.min(.98, said[1] / said[2]) : Math.min(.95, spent / ((TYPICAL[n.type] || 2) * 60)); seconds += spent; note = `${n.label}: ${n.note || "working"}`.slice(0, 90); active = active || b.id; }
+      else if (busy) { const spent = (Date.now() - seenRunning[n.id]) / 1000, live = liveStep(n);
+        sum += live ? live.share : Math.min(.95, spent / ((TYPICAL[n.type] || 2) * 60)); seconds += spent;
+        note = live ? `${n.label}: ${live.text}`.slice(0, 120) : `${n.label}: ${n.note || "working"}`.slice(0, 90); active = active || b.id; }
     }
     const status = nodes.some(n => n.status === "failed") ? "failed" : nodes.every(n => n.status === "done") ? "done" : note ? "running" : sum ? "waiting" : "idle";
     states[b.id] = {status, progress: sum / nodes.length, seconds, note};
@@ -595,7 +651,7 @@ function follow(name, fresh) {
   running = {name, last: null, began: Date.now(), wasBusy: fresh}; ready();
   const tick = async () => {
     if (!running || running.name !== name) return;
-    let flow; try { flow = await get("/api/flow?name=" + encodeURIComponent(name)); } catch (error) { line.textContent = "The page's server does not answer: " + error.message; return setTimeout(tick, 5000); }
+    let flow, fetched = Date.now(); try { flow = await get("/api/flow?name=" + encodeURIComponent(name)); fetched = Date.now(); } catch (error) { line.textContent = "The page's server does not answer: " + error.message; return setTimeout(tick, 5000); }
     places(flow.runs === "server");
     const {states, active} = cityOf(flow), all = flow.nodes.length, done = flow.nodes.filter(n => n.status === "done").length, failed = flow.nodes.find(n => n.status === "failed");
     const busy = flow.running || (flow.run && flow.run.active);
@@ -603,12 +659,14 @@ function follow(name, fresh) {
     if (done === all) states.gallery = {status: "done", progress: 1, seconds: 0};
     showCity(states, done === all ? "gallery" : active, busy ? `running: ${name}, step ${Math.min(done + 1, all)} of ${all}` : null);
     bar.style.width = (done / all * 100) + "%";
-    const remote = flow.remote ? ` The uni server says: ${flow.remote.line || flow.remote.message || "…"}` : "";
+    const heard = flow.remote && flow.remote.heard != null ? flow.remote.heard + (Date.now() - fetched) / 1000 : null;
+    const fresh = heard == null ? "" : heard < 15 ? ` Live from the uni server (its last word ${Math.round(heard)} s ago).` : ` No word from the uni server for ${clock(heard)}: the cloud may be slow, it goes on by itself.`;
+    const remote = flow.remote ? (heard == null ? ` The uni server says: ${flow.remote.line || flow.remote.message || "…"}` : fresh) : "";
     line.textContent = (active ? `${B[active].name} is working: ${states[active].note || B[active].runs}. ` : busy ? (flow.remote ? "Your data is on its way to the uni server. " : "Getting ready … ") : "") + (busy ? `${clock((Date.now() - running.began) / 1000)} so far.` : "") + (busy ? remote : "");
     if (flow.remote && (flow.remote.notes || []).length && !note.dataset.told) { note.dataset.told = 1; note.append(p(h("small", {}, "Note from the server: " + flow.remote.notes.join("; ")))); }
     if (active && active !== running.last) running.last = active;
     if (done === all || failed || (!busy && running.wasBusy && Date.now() - running.began > 8000)) return finish(flow, note, stop, failed);
-    setTimeout(tick, 3000);
+    setTimeout(tick, 1000);  // every second: the bars and the times move live (liveStep)
   };
   tick();
 }
@@ -655,6 +713,73 @@ addEventListener("dragleave", () => { if (--over <= 0) { over = 0; document.body
 addEventListener("dragover", e => e.preventDefault());
 addEventListener("drop", e => { e.preventDefault(); over = 0; document.body.classList.remove("dropping"); if (e.dataTransfer.files.length) take(e.dataTransfer.files); });
 $("helpButton").onclick = () => $("help").showModal();
+
+// ================================================================ the bridge: the Sciebo login and the connection
+// A click on the bridge opens its window: the saved login (never its password), a new one, and the test in two steps,
+// 1 Sciebo answers with this login, 2 the uni server's worker answers a check job. The lamp on the bridge shows the last test.
+const bridgeHit = el("g", {class: "bridgeHit", tabindex: 0, role: "button", "aria-label": "The bridge: the Sciebo login and the connection to the uni server"});
+el("rect", {class: "ring", x: 190, y: 268, width: 146, height: 84, rx: 12, fill: "#fff3", stroke: "#fff", "stroke-width": 2, "stroke-dasharray": "5 4"}, bridgeHit);
+el("rect", {x: 190, y: 268, width: 146, height: 84, fill: "transparent"}, bridgeHit);
+el("line", {x1: 262, y1: 316, x2: 262, y2: 298, stroke: "#5b3d1f", "stroke-width": 2}, bridgeHit);  // a lamp on a post in the middle
+const lamp = el("circle", {class: "lamp", cx: 262, cy: 293, r: 7, fill: "#9a8f7a", stroke: "#3a2a14", "stroke-width": 1.5}, bridgeHit);
+const lampTitle = el("title", {}, bridgeHit);
+const LAMP = {unknown: ["#9a8f7a", "not tested yet"], checking: ["#f08c2e", "being tested"], ok: ["#27a567", "connected"],
+              cloud: ["#e8b923", "Sciebo answers, the uni server not tested"], bad: ["#e2574c", "not connected"]};
+let bridge = {login: null, server: {state: "idle"}}, cloudLine = null, bridgeTimer = null;
+function setLamp(kind) { lamp.setAttribute("fill", LAMP[kind][0]); lamp.setAttribute("class", "lamp " + kind); lampTitle.textContent = `The bridge: ${LAMP[kind][1]}. Click for the Sciebo login and a test.`; }
+function showBridge() {
+  const login = bridge.login, server = bridge.server || {state: "idle"}, busy = ["sending", "waiting"].includes(server.state);
+  $("bridgeLogin").replaceChildren(!LIVE ? h("span", {}, "This page was opened as a file: start it with flow_page.py to set the login.")
+    : login ? h("span", {}, "Saved login: ", h("b", {}, login.user), h("span", {class: "note"}, ` · folder ${login.folder}/`))
+    : h("span", {}, h("b", {}, "No Sciebo login yet."), " Enter it below, then the page tests it."));
+  $("bridgeChangeTitle").textContent = login ? "Use another login" : "Enter the Sciebo login";
+  if (!login && LIVE) $("bridgeChange").open = true;
+  const step = (cls, title, text, extra) => h("li", {class: cls}, h("b", {}, title), h("small", {}, text), extra || null);
+  const one = cloudLine ? step(cloudLine.ok ? "ok" : "bad", "1 · Sciebo", cloudLine.text) : step("", "1 · Sciebo", "not tested yet");
+  const STATE = {idle: "", sending: "now", waiting: "now", done: "ok", failed: "bad"};
+  let found = null;
+  if (server.state === "done" && server.found) {
+    const f = server.found, missing = (f.parts || []).filter(p => !p.there).map(p => p.name);
+    found = h("div", {class: "found"}, (f.gpus || []).length ? "GPU: " + f.gpus.join(" · ") : "no GPU listed",
+      f.disk_free_gb != null ? h("br") : null, f.disk_free_gb != null ? `${f.disk_free_gb} GB free` : "",
+      h("br"), missing.length ? "Missing there: " + missing.join(", ") : "It has everything the pipeline needs.");
+  }
+  const waited = server.started && busy ? ` (${clock(Date.now() / 1000 - server.started)})` : "";
+  $("bridgeSteps").replaceChildren(one, step(STATE[server.state] || "", "2 · The uni server", (server.message || "not tested yet") + waited, found));
+  setLamp(busy ? "checking" : server.state === "done" ? "ok" : server.state === "failed" || (cloudLine && !cloudLine.ok) ? "bad" : cloudLine ? "cloud" : "unknown");
+  $("bridgeTest").disabled = !LIVE || !login || busy;
+}
+async function readBridge() {
+  if (!LIVE) return showBridge();
+  try { bridge = await answerOf(await fetch("/api/cloud")); }
+  catch (e) { if (/not here/.test(e.message)) cloudLine = {ok: false, text: OLD_SERVER}; /* else the page's server is away: as it was */ }
+  showBridge();
+  clearTimeout(bridgeTimer);
+  if (["sending", "waiting"].includes((bridge.server || {}).state)) bridgeTimer = setTimeout(readBridge, 3000);
+}
+// an older flow_page.py (started before the bridge was added) answers "not here": say what to do instead
+const OLD_SERVER = "The page's server is older than this page: stop flow_page.py in its window (Ctrl+C), start it again, then reload this page.";
+const bridgeError = e => /not here/.test(e.message) ? OLD_SERVER : e.message;
+async function testBridge() {
+  cloudLine = {ok: true, text: "asking Sciebo …"}; bridge.server = {state: "sending", message: "waits for step 1", started: Date.now() / 1000}; showBridge();
+  try { const answer = await post("/api/cloud/test", {server: true}); bridge = answer; cloudLine = {ok: true, text: answer.cloud}; }
+  catch (e) { cloudLine = {ok: false, text: bridgeError(e)}; bridge.server = {state: "idle", message: "not tested: Sciebo has to answer first"}; return showBridge(); }
+  readBridge();
+}
+$("bridgeSave").onclick = async () => {
+  const user = $("bridgeUser").value.trim(), password = $("bridgePassword").value.trim();
+  if (!user || !password) { cloudLine = {ok: false, text: "Both the login name and the app password are needed."}; return showBridge(); }
+  $("bridgeSave").disabled = true; cloudLine = {ok: true, text: "trying the login …"}; showBridge();
+  try { bridge = await post("/api/cloud/login", {user, password}); $("bridgePassword").value = ""; $("bridgeChange").open = false; testBridge(); }
+  catch (e) { cloudLine = {ok: false, text: bridgeError(e)}; showBridge(); }
+  finally { $("bridgeSave").disabled = false; }
+};
+$("bridgePassword").addEventListener("keydown", e => { if (e.key === "Enter") $("bridgeSave").click(); });
+$("bridgeTest").onclick = testBridge;
+const openBridge = () => { $("bridge").showModal(); readBridge(); };
+bridgeHit.addEventListener("click", openBridge);
+bridgeHit.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBridge(); } });
+readBridge();
 $("menuOld").onclick = () => $("pages").showModal();
 $("demoButton").onclick = demo;
 $("clearButton").onclick = () => {  // (rule 6) starting over can be undone

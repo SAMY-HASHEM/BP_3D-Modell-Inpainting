@@ -174,8 +174,8 @@ class Flow:
             process = subprocess.Popen([sys.executable if command[0] == "python" else command[0], *map(str, command[1:])],
                                        cwd=core.PROJECT, env=env, stdout=out, stderr=subprocess.STDOUT)
             while process.poll() is None:
-                time.sleep(5)
-                try:  # the last line of the log is the node's progress
+                time.sleep(2)
+                try:  # the last line of the log is the node's progress (read often: the web page follows it live)
                     tail = open(log, errors="replace").read()[-400:].replace("\r", "\n").strip().splitlines()[-1]
                 except IndexError:
                     tail = ""

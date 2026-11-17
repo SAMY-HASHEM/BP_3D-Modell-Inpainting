@@ -415,6 +415,17 @@ The project as one web page: add data, say what you want, press Run, see the 3D 
   `"runs": "server"`; Run sends the flow and its files as ONE job (`cloud.py flow`), the server runs every node
   itself (`scripts/server/run_flow.py`) and sends the state back every 15 s; the page shows it like a run of its own,
   and every building then says "uni server". See [HOW-TO.md](HOW-TO.md#a-computer-without-a-gpu-everything-on-the-uni-server).
+  On a computer without an NVIDIA GPU (no `nvidia-smi`, e.g. a laptop whose graphics are in the processor) this is
+  not a choice but the rule: `flow_page.py` sends **every** run there (any flow, *Run up to here* runs the whole flow),
+  the plan offers nothing else, the local AI and the picture AI are not asked on this computer (the plan is read by
+  the simple rules). `--gpu` / `--no-gpu` say it instead of looking. The map is drawn that way: only the gate and the
+  gallery are on our side of the Nile.
+- **The bridge can be clicked** (the Sciebo login and the connection): it shows the saved login (never its password),
+  takes a new one (login name + Sciebo app password; tried first, saved like `cloud.py setup` does, readable only by its
+  owner) and tests the way in two steps: 1 Sciebo answers with this login (seconds), 2 the worker on the uni server
+  answers a check job (up to a minute; it says the server's GPUs and what is missing there). The lamp on the bridge is
+  grey (not tested), orange (testing), green (connected), red (not connected). `GET /api/cloud`, `POST /api/cloud/login`,
+  `POST /api/cloud/test`; refused on a shared page (`--accounts`): the login belongs to the computer the page runs on.
 
 - **Made after Shneiderman's eight golden rules**; where each is in the page is marked in its code with `(rule N)`:
   one look and the same words everywhere (1), Enter / paste / drop (2), every action answered by a chat line, a bar or
