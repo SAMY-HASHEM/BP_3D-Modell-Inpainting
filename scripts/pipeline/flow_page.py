@@ -82,7 +82,7 @@ OPEN = ("outputs", "pictures", "flows")  # the only folders the page gets files 
 ENV_PYTHON = os.path.join(core.PROJECT, "conda", "envs", "inpainting-3d-modelling", "bin", "python")  # activate.sh's Python
 RUNS = {}  # {flow file: {"process", "upto", "log", "started"}}: the flow.py this page started
 # what can be set on the page per node type, with the value a node has when the flow file doesn't say (as flow.py's TYPES)
-SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8, "ai": True, "what": ""},
+SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8, "ai": True, "what": "", "sides": ""},
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25}, "pick_seed": {},
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70}}

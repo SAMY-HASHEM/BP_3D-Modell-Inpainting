@@ -832,7 +832,9 @@ function welcome() {
 }
 welcome(); ready();
 if (new URLSearchParams(location.search).has("demo")) demo();  // app?demo plays the demo at once
-if (LIVE) { const name = localStorage.getItem("ui_project");  // (rule 8) a run that is going on is picked up again after a reload
+const asked = new URLSearchParams(location.search).get("follow");  // app?follow=<project>: follow a run started elsewhere
+if (LIVE && asked && /^[A-Za-z0-9_-]{1,40}$/.test(asked)) follow(asked, false);
+else if (LIVE) { const name = localStorage.getItem("ui_project");  // (rule 8) a run that is going on is picked up again after a reload
   if (name) get("/api/flow?name=" + encodeURIComponent(name)).then(flow => { if (flow.running || (flow.run && flow.run.active)) follow(name, false); else localStorage.removeItem("ui_project"); }).catch(() => localStorage.removeItem("ui_project")); }
 </script>
 </body>
