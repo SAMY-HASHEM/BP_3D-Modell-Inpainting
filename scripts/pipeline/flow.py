@@ -59,6 +59,13 @@ TYPES = {
              lambda i, s, name: (core.edit(i["model"]["model"], (i.get("part") or {}).get("data"), i["object"]["data"], s.get("replace", False),
                                            s.get("width", 0.75), s.get("sink", 0.15), s.get("head", 0.12), s.get("fit", "between"),
                                            s.get("place"), s.get("side"), s.get("hand"), s.get("after"), s.get("prompt"), s.get("prompt_seed", 1), s.get("at")), None)),
+    "place": ("03b Place the part", ["part_model", "edit"], "this PC: measured",
+              lambda i, s, name: (core.place(i["part_model"]["model"], i["edit"]["edit"], s.get("zoom", 0.25), s.get("size", 0.8),
+                                             s.get("sides", 4), s.get("behind", 4)), None)),
+    "check": ("03c Judge the plan", ["edit"], "this PC: measured + local AI",
+              lambda i, s, name: (core.plan_check(i["edit"]["edit"], s.get("ai", True)), None)),
+    "finish": ("06 Into the whole", ["model", "edit"], "this PC: measured",
+               lambda i, s, name: (core.finish(i["model"]["model"], i["edit"]["edit"]), None)),
     "inpaint": ("04 Inpaint", ["model", "edit"], "TRELLIS.2",
                 lambda i, s, name: (core.inpaint_step(i["model"]["model"], i["edit"]["edit"], s.get("step", "shape"),
                                                       s.get("seeds", [1]), s.get("where", "server")), None)),
@@ -66,9 +73,9 @@ TYPES = {
               lambda i, s, name: (core.edit_judge(models_of(i["candidates"]), i["edit"]["edit"], s.get("step", "shape"),
                                                   s.get("ai", True), s.get("keep_min", 85), s.get("part_min", 70)), None)),
 }
-LOCAL_GPU = {"data_sheet", "pick_seed", "edit", "judge"}  # one after another on this PC's GPU
+LOCAL_GPU = {"data_sheet", "pick_seed", "edit", "place", "check", "judge", "finish"}  # one after another on this PC's GPU
 COLOURS = {"input": "#4a7a9c", "data_sheet": "#8a8ab0", "base": "#b58c2a", "pick_seed": "#5f9c6a", "edit": "#a8623c",
-           "inpaint": "#b58c2a", "judge": "#5f9c6a"}
+           "inpaint": "#b58c2a", "judge": "#5f9c6a", "place": "#a8623c", "check": "#5f9c6a", "finish": "#4a7a9c"}
 
 
 def links(node):

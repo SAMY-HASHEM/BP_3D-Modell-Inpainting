@@ -157,8 +157,21 @@ def main():
     parser.add_argument("--object", default="an object")
     parser.add_argument("--part", default="a new part", help="what the change is, in words")
     parser.add_argument("--no-ai", action="store_true", help="only what is measured")
+    parser.add_argument("--out", help="also write check.json (and check.jpg) here, and passed.json only on pass: a flow "
+                        "node's folder, so a plan judged redo is judged again next time and not taken as done")
     args = parser.parse_args()
     result = check(args.edit, args.object, args.part, not args.no_ai)
+    if args.out:
+        import shutil
+        os.makedirs(args.out, exist_ok=True)
+        for name in ("check.json", "check.jpg"):
+            if os.path.isfile(os.path.join(args.edit, name)):
+                shutil.copy(os.path.join(args.edit, name), os.path.join(args.out, name))
+        passed = os.path.join(args.out, "passed.json")
+        if result["verdict"] == "pass":
+            json.dump({"verdict": "pass"}, open(passed, "w"))
+        elif os.path.exists(passed):
+            os.remove(passed)
     m = result["measured"]
     print(f"the 3D area: {m['voxels']} voxels, {m['wide']:.0f} wide x {m['high']:.0f} high x {m['deep']:.0f} deep"
           + (f"; the new part is {' x '.join(f'{v:.0f}' for v in m['part_voxels'])} voxels" if m.get("part_voxels") else ""), flush=True)

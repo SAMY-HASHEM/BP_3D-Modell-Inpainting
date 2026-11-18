@@ -385,6 +385,49 @@ def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit=
                         "sheet": os.path.join(folder, "three.jpg"), "area_map": os.path.join(folder, "area_map.jpg")}}
 
 
+def place(part_model, edit_, zoom=0.25, size=0.8, sides=4, behind=4):
+    """03b: the part's own 3D model put where the old part is (place_part.py, docs/FIRST-SUCCESS.md): the edit's front
+    mask says where and how big, the old part's plane how it lies. Only a box around the two parts goes on (zoom), and
+    the four sides' pictures all show the same part. Its folder is the edit for every step after it; the model the
+    inpainting starts from is placed.glb (the details step keeps its voxels), the judges compare with before.glb."""
+    model = edit_["original"]
+    folder = node_folder(edit_["name"], "03b_place", {"model": stamp(model["glb"]), "part": stamp(part_model["glb"]),
+                                                      "edit": stamp(os.path.join(edit_["folder"], "edit.json")),
+                                                      "zoom": zoom, "size": size, "sides": sides, "behind": behind,
+                                                      "facing": "by colour"})  # a flat part's side to the camera: measured (Nov 19)
+    out = os.path.join(folder, "placed.glb")
+    done = os.path.join(folder, "edit.json")  # place_part.py writes it last: a run stopped halfway is not taken as done
+    command = py("inpainting/place_part.py", model["glb"], part_model["glb"], "--edit", edit_["folder"], "--out", folder,
+                 "--zoom", zoom, "--size", size, "--sides", sides, "--behind", behind)
+    placed = {"name": edit_["name"], "kind": "placed", "label": "the part placed"}
+    return {"folder": folder, "steps": [(command, "03b place the part in 3D", done)],
+            "outputs": {"edit": {**edit_, "folder": folder, "original": {**placed, "label": "before", "glb": os.path.join(folder, "before.glb")},
+                                 "whole": model},
+                        "model": {**placed, "glb": out}, "sheet": os.path.join(folder, "three.jpg"),
+                        "area_map": os.path.join(folder, "area_map.jpg")}}
+
+
+def plan_check(edit_, ai=True):
+    """03c: the judge before the inpainting (edit_check.py): are the pictures and the 3D area fit to be sent? A plan
+    judged redo stops the flow here, before it costs GPU time; passed.json is only written on pass."""
+    folder = node_folder(edit_["name"], "03c_check", {"edit": stamp(os.path.join(edit_["folder"], "edit.json")), "ai": ai})
+    out = os.path.join(folder, "passed.json")
+    command = py("pipeline/edit_check.py", edit_["folder"], "--object", edit_["object"], "--part", edit_["part"],
+                 "--out", folder, *([] if ai else ["--no-ai"]))
+    return {"folder": folder, "steps": [(command, "03c judge the plan", out)],
+            "outputs": {"edit": edit_, "verdict": "pass", "sheet": os.path.join(folder, "check.jpg")}}
+
+
+def finish(result, edit_):
+    """06: the inpainted part back into the whole, untouched model (place_part.py --finish): only the box went through
+    TRELLIS.2, everything else is the model's own mesh."""
+    folder = node_folder(edit_["name"], "06_finish", {"result": stamp(result["glb"]), "edit": stamp(os.path.join(edit_["folder"], "edit.json"))})
+    out = os.path.join(folder, f"{edit_['name']}_finished.glb")
+    command = py("inpainting/place_part.py", "--finish", result["glb"], "--out", edit_["folder"], "--final", out)
+    return {"folder": folder, "steps": [(command, "06 back into the whole model", out)],
+            "outputs": {"model": {"name": edit_["name"], "kind": "finished", "label": "finished", "glb": out}}}
+
+
 def inpaint_step(model, edit_, step="shape", seeds=(1,), where="server"):
     """04: one step of the inpainting, always in the order shape -> details -> colours, each from the result of the
     one before. Several seeds give several candidates in one server job (TRELLIS.2 is loaded once)."""

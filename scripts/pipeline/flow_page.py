@@ -85,7 +85,8 @@ RUNS = {}  # {flow file: {"process", "upto", "log", "started"}}: the flow.py thi
 SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8, "ai": True, "what": "", "sides": ""},
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25, "given": ""}, "pick_seed": {},
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
-            "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70}}
+            "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70},
+            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4}, "check": {"ai": True}, "finish": {}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
 # Can this computer run the AI itself? Only with an NVIDIA GPU (TRELLIS.2 needs CUDA). Without one (a laptop: its
 # graphics are in the processor) every run goes to the uni server as one job, whatever a page asks for; this computer
@@ -639,14 +640,23 @@ def create_flow(wanted):
         nodes.append({"id": "edit", "type": "edit", **({"at": at} if at else {}), **({"replace": True} if wanted.get("replace") else {}),
                       "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}} if files["part"]
                      else {"id": "edit", "type": "edit", "prompt": words, "in": {"model": "base", "object": "object_sheet"}})
-        before = "base"
-        for step in ("shape", "details", "colours"):
-            nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "where": where, "in": {"model": before, "edit": "edit"}})
-            nodes.append({"id": f"judge_{step}", "type": "judge", "step": step, "in": {"candidates": step, "edit": "edit"}})
+        if files["part"]:  # the structure of docs/FIRST-SUCCESS.md: the part as its own model, placed, details + colours only
+            nodes.append({"id": "part_model", "type": "base", "label": "02 The part's own model", "seed": seed, "where": where,
+                          "resolution": "1024", "steps": steps, "in": {"data": "part_sheet"}})
+            nodes.append({"id": "place", "type": "place", "zoom": 0.25, "size": 0.8, "in": {"part_model": "part_model", "edit": "edit"}})
+            nodes.append({"id": "check", "type": "check", "in": {"edit": "place"}})
+            before, steps_, edit_ = "place", ("details", "colours"), "check"
+        else:  # only words: the part grows out of the model (a crown on a head), its shape from noise
+            before, steps_, edit_ = "base", ("shape", "details", "colours"), "edit"
+        for step in steps_:
+            nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "where": where, "in": {"model": before, "edit": edit_}})
+            nodes.append({"id": f"judge_{step}", "type": "judge", "step": step, "in": {"candidates": step, "edit": edit_}})
             before = f"judge_{step}"
+        if files["part"]:
+            nodes.append({"id": "finish", "type": "finish", "in": {"model": before, "edit": edit_}})
     if not everything and not vision_ai_here():  # no vision AI where the nodes run: the data sheets and judges measure alone
         for node in nodes:
-            if node["type"] in ("data_sheet", "judge"):
+            if node["type"] in ("data_sheet", "judge", "check"):
                 node["ai"] = False
     prompt = " ".join(str(wanted.get("prompt", "")).split())
     os.makedirs(FLOWS, exist_ok=True)

@@ -92,13 +92,19 @@ class CreatingAFlow(InTemporaryProject):
         self.assertEqual(made["nodes"][1]["what"], "the front")  # the row's prompt is what the object is called
         self.assertEqual(made["made_by"], "app")
 
-    def test_a_part_gives_the_edit_and_the_three_steps(self):
+    def test_a_part_gives_the_structure_of_the_first_success(self):
+        # docs/FIRST-SUCCESS.md: the part as its own model, placed in 3D, the plan judged, details and colours only
         made = self.create(parts=1)
         ids = [n["id"] for n in made["nodes"]]
-        self.assertEqual(ids, ["object", "part", "object_sheet", "part_sheet", "base", "edit", "shape", "judge_shape", "details",
-                               "judge_details", "colours", "judge_colours"])
-        edit = next(n for n in made["nodes"] if n["id"] == "edit")
-        self.assertEqual(edit["in"], {"model": "base", "part": "part_sheet", "object": "object_sheet"})
+        self.assertEqual(ids, ["object", "part", "object_sheet", "part_sheet", "base", "edit", "part_model", "place", "check",
+                               "details", "judge_details", "colours", "judge_colours", "finish"])
+        node = {n["id"]: n for n in made["nodes"]}
+        self.assertEqual(node["edit"]["in"], {"model": "base", "part": "part_sheet", "object": "object_sheet"})
+        self.assertEqual(node["part_model"]["in"], {"data": "part_sheet"})
+        self.assertEqual(node["place"]["in"], {"part_model": "part_model", "edit": "edit"})
+        self.assertEqual(node["details"]["in"], {"model": "place", "edit": "check"})  # waits for the plan's pass
+        self.assertEqual(node["finish"]["in"], {"model": "judge_colours", "edit": "check"})
+        edit = node["edit"]
         self.assertNotIn("prompt", edit)
         self.assertNotIn("what", next(n for n in made["nodes"] if n["id"] == "part_sheet"))  # no prompt: the local AI says what it is
 
@@ -370,7 +376,7 @@ class OneSetOfDefaults(unittest.TestCase):
     def test_the_pages_defaults_are_the_nodes_defaults(self):
         import inspect
         nodes = {"data_sheet": core.data_sheet, "base": core.base_model, "edit": core.edit, "inpaint": core.inpaint_step,
-                 "judge": core.edit_judge}
+                 "judge": core.edit_judge, "place": core.place, "check": core.plan_check}
         same = lambda value: list(value) if isinstance(value, (list, tuple)) else "" if value is None else value
         for kind, function in nodes.items():
             real = {name: p.default for name, p in inspect.signature(function).parameters.items() if p.default is not p.empty}

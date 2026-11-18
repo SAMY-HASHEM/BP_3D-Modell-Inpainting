@@ -80,6 +80,18 @@ runs; `flow.py` runs them in order (a node whose result is there is not run agai
             local AI)                         local AI)        2D mask, area)             local AI)
 ```
 
+A part with its own pictures (the web app makes this flow by itself since Nov 19; the structure of
+[FIRST-SUCCESS.md](FIRST-SUCCESS.md), until then run by hand):
+
+```
+03 Edit ─► 02 The part's own model ─► 03b Place ─► 03c Judge the plan ─► 04 details ─► 05 Judge ─► 04 colours ─► 05 Judge ─► 06 Into the whole
+make_edit   generate.py (its sheet)    place_part.py  edit_check.py          (placed.glb  edit_judge   inpaint.py   edit_judge   place_part.py --finish
+(front      the part as a 3D model     zoomed box,    redo stops the flow    keeps its                                          the rest stays the
+ picture)                              4 sides        before the GPU work    voxels)                                            model's own mesh
+```
+
+A part from words only (a crown growing out of a head) keeps 04 shape ─► details ─► colours from the edit.
+
 Front ends of the same flows: the terminal (`flow.py flows/x.json`), the web app (`user_interface_model/app.html`: a chat, the
 data and the city that shows the run, + `flow_page.py`, see [FLOWS.md](FLOWS.md#3-web-app); its earlier pages in `old/`). Details: [FLOWS.md](FLOWS.md#1-inpainting-flow).
 

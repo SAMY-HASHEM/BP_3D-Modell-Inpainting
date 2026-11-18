@@ -269,14 +269,40 @@ def axes_of(points):
     return directions[order], reach[order]
 
 
-def placed(part, old_points, mask, origin, right, toward, size, per_pixel, factor=1.0):
-    """The new part moved, turned and scaled to its place: the 4 x 4 matrix. factor: bigger or smaller than painted."""
+def side_colours(part, thin, count=60_000):
+    """The mean colour (RGB 0-255) of a flat part's two big sides: the one thin points to, and the other one."""
+    try:
+        coloured = part.copy()
+        coloured.visual.material = coloured.visual.material.to_simple()  # a PBR material: its base colour texture
+        points, _, colours = trimesh.sample.sample_surface(coloured, count, seed=0, sample_color=True)
+    except Exception:  # noqa: BLE001 (no texture: the side is not known by colour)
+        return None
+    depth = (points - points.mean(0)) @ thin
+    front, back = depth > 0.3 * depth.max(), depth < 0.3 * depth.min()
+    if front.sum() < 100 or back.sum() < 100:
+        return None
+    return colours[front, :3].mean(0), colours[back, :3].mean(0)
+
+
+def placed(part, old_points, mask, origin, right, toward, size, per_pixel, factor=1.0, wanted=None):
+    """The new part moved, turned and scaled to its place: the 4 x 4 matrix. factor: bigger or smaller than painted.
+    wanted: the colour the AFTER picture shows inside the mask (RGB): a flat part turns the side of that colour to the camera."""
     up = np.array([0.0, 1.0, 0.0])
     cloud = trimesh.sample.sample_surface(part, 200_000, seed=0)[0]
     directions, reach = axes_of(cloud)
     flat = reach[2] < 0.35 * reach[1]  # a book, a shield, a plate: its thin direction decides how it lies
     if flat:
         thin = directions[2] * (1 if directions[2][2] >= 0 else -1)  # the side the part's picture shows looks at the camera
+        # which side that is, is measured when the colours tell: TRELLIS.2 does not always turn the picture's side to +Z.
+        # The red book of Nov 19 had its red cover at -Z and a guessed grey-blue back at +Z, and was placed back to front.
+        sides = side_colours(part, thin) if wanted is not None else None
+        if sides is not None:
+            near, far = (float(np.linalg.norm(c - np.asarray(wanted, float))) for c in sides)
+            if far < 0.8 * near:
+                thin = -thin
+            print(f"    the side that looks at the camera: by colour (wanted {np.round(wanted).astype(int).tolist()}, "
+                  f"this side {np.round(sides[0 if far >= 0.8 * near else 1]).astype(int).tolist()}, "
+                  f"{'turned round' if far < 0.8 * near else 'as it was'})", flush=True)
         long = max(directions[:2], key=lambda d: abs(d[1]))
         long = long * (1 if long[1] >= 0 else -1)
     else:  # TRELLIS.2's own pose: Y up, the front towards +Z
@@ -399,7 +425,10 @@ def main():
         part.apply_transform(placed_in_hand(part, old_points, trimesh.sample.sample_surface(rest, 400_000, seed=0)[0], joint,
                                             np.ptp(mesh.vertices, 0).max() / GRID, args.size))
     else:
-        part.apply_transform(placed(part, old_points, front_mask, origin, right, toward, size, per_pixel, args.size))
+        after = np.asarray(Image.open(os.path.join(args.edit, "after.png")).convert("RGB"), float)
+        inside = ndimage.binary_erosion(front_mask, iterations=3) if front_mask.shape == after.shape[:2] else None
+        wanted = after[inside].mean(0) if inside is not None and inside.sum() > 50 else None  # the painted part's colour
+        part.apply_transform(placed(part, old_points, front_mask, origin, right, toward, size, per_pixel, args.size, wanted))
     new_points = trimesh.sample.sample_surface(part, 300_000, seed=0)[0]
     both = np.concatenate([new_points, old_points])
     rest.export(os.path.join(args.out, "rest_whole.glb"))
