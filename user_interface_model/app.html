@@ -119,6 +119,8 @@
   .steps li.ok { border-color:var(--ok); } .steps li.bad { border-color:var(--bad); } .steps li.now { border-color:var(--now); }
   .steps b { display:block; } .steps small { color:#e9d5a4; } .steps .found { font-size:12.5px; margin-top:4px; color:#e9d5a4; }
   .note { font-size:13px; color:var(--dim); }
+  .direct { border:1.5px solid var(--ok); border-radius:10px; padding:9px 12px; margin:10px 0; background:#27a56718; }
+  .direct.off { border-color:var(--line); background:none; } .direct a.main { display:inline-block; margin-top:7px; text-decoration:none; padding:6px 13px; border-radius:10px; background:var(--sand); color:var(--ink); font-weight:600; }
 </style>
 </head>
 <body>
@@ -168,6 +170,7 @@
   <h2 class="display" id="bridgeTitle">The bridge: Sciebo</h2>
   <p class="note">The uni server can't be reached from home, but it and this computer both reach the Sciebo cloud: a folder there is
     the bridge. Your data goes over it to the uni server, and the results come back.</p>
+  <div id="bridgeDirect"></div>
   <p id="bridgeLogin"></p>
   <details id="bridgeChange">
     <summary id="bridgeChangeTitle">Enter the Sciebo login</summary>
@@ -727,8 +730,19 @@ const LAMP = {unknown: ["#9a8f7a", "not tested yet"], checking: ["#f08c2e", "bei
               cloud: ["#e8b923", "Sciebo answers, the uni server not tested"], bad: ["#e2574c", "not connected"]};
 let bridge = {login: null, server: {state: "idle"}}, cloudLine = null, bridgeTimer = null;
 function setLamp(kind) { lamp.setAttribute("fill", LAMP[kind][0]); lamp.setAttribute("class", "lamp " + kind); lampTitle.textContent = `The bridge: ${LAMP[kind][1]}. Click for the Sciebo login and a test.`; }
+function directBlock() {  // inside the uni network the server's own page answers: work there, live, with nothing in between
+  const d = bridge.direct;
+  if (!d) return null;
+  if (d.reachable && d.broken) return h("div", {class: "direct off note"}, h("b", {}, "You are inside the uni network, "),
+    "but the page on the uni server answers with an error: it was started before its code was updated. Restart it there (flow_page.py), then this turns green.");
+  return d.reachable
+    ? h("div", {class: "direct"}, h("b", {}, "You are inside the uni network. "), "The uni server's own page answers directly: there every step runs on its GPUs, the city follows each second, nothing goes over Sciebo.",
+        h("br"), h("a", {class: "main", href: d.url, target: "_blank", rel: "noopener"}, "Open the page on the uni server"))
+    : h("div", {class: "direct off note"}, "Direct way: the uni server's page doesn't answer from here (outside the uni network or its VPN), so the work goes over Sciebo.");
+}
 function showBridge() {
   const login = bridge.login, server = bridge.server || {state: "idle"}, busy = ["sending", "waiting"].includes(server.state);
+  $("bridgeDirect").replaceChildren(...[directBlock()].filter(Boolean));
   $("bridgeLogin").replaceChildren(!LIVE ? h("span", {}, "This page was opened as a file: start it with flow_page.py to set the login.")
     : login ? h("span", {}, "Saved login: ", h("b", {}, login.user), h("span", {class: "note"}, ` · folder ${login.folder}/`))
     : h("span", {}, h("b", {}, "No Sciebo login yet."), " Enter it below, then the page tests it."));
@@ -749,9 +763,13 @@ function showBridge() {
   setLamp(busy ? "checking" : server.state === "done" ? "ok" : server.state === "failed" || (cloudLine && !cloudLine.ok) ? "bad" : cloudLine ? "cloud" : "unknown");
   $("bridgeTest").disabled = !LIVE || !login || busy;
 }
+let toldDirect = false;
 async function readBridge() {
   if (!LIVE) return showBridge();
-  try { bridge = await answerOf(await fetch("/api/cloud")); }
+  try { bridge = await answerOf(await fetch("/api/cloud"));
+    if (bridge.direct && bridge.direct.reachable && !bridge.direct.broken && !toldDirect) { toldDirect = true;
+      say("guide", p(h("b", {}, "You are inside the uni network. "), "The uni server's own page answers directly: work there and every step runs on its GPUs, followed second by second, with nothing over Sciebo."),
+        p(h("a", {href: bridge.direct.url, target: "_blank", rel: "noopener", style: "color:inherit; font-weight:600"}, "Open the page on the uni server →"))); } }
   catch (e) { if (/not here/.test(e.message)) cloudLine = {ok: false, text: OLD_SERVER}; /* else the page's server is away: as it was */ }
   showBridge();
   clearTimeout(bridgeTimer);

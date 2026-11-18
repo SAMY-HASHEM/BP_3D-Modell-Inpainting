@@ -682,6 +682,31 @@ def understand(wanted):
 
 BRIDGE = {"state": "idle", "message": "", "found": None, "job": None, "started": None}  # the last test of step 2
 
+# The direct way: inside the uni network (on campus, or the uni VPN) the page that runs on the uni server itself
+# answers. There everything runs on its GPUs with nothing in between, so a computer without a GPU opens that page
+# instead of sending over Sciebo. INPAINTING_SERVER_PAGE names it; asked at most every 30 s, never through a proxy.
+SERVER_PAGE = os.environ.get("INPAINTING_SERVER_PAGE", "http://nc.hcigroup.de:8777").rstrip("/")
+DIRECT = {"checked": 0.0, "reachable": False, "broken": False}
+
+
+def direct_server():
+    """{"url", "reachable", "broken"}: does the uni server's own page answer from here, and does it work (a page started
+    before a git pull that moved its files answers with errors)? None on the server itself (it has a GPU)."""
+    if GPU_HERE:
+        return None
+    if time.time() - DIRECT["checked"] > 30:
+        import urllib.request
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            opener.open(SERVER_PAGE + "/login", timeout=2).close()
+            reachable, broken = True, False
+        except urllib.error.HTTPError as e:  # it answered: a page with no login sends /login on, a failing one says 500
+            reachable, broken = True, e.code >= 500
+        except Exception:  # noqa: BLE001 (outside the uni network: nothing answers)
+            reachable, broken = False, False
+        DIRECT.update(checked=time.time(), reachable=reachable, broken=broken)
+    return {"url": SERVER_PAGE + "/app", "reachable": DIRECT["reachable"], "broken": DIRECT["broken"]}
+
 
 def cloud_module():
     sys.path.insert(0, os.path.join(core.SCRIPTS, "server"))
@@ -697,7 +722,7 @@ def cloud_login():
     except (OSError, ValueError):
         config = None
     login = {"user": config.get("user"), "url": config.get("url"), "folder": config.get("folder", cloud.FOLDER)} if config else None
-    return {"login": login, "server": {k: v for k, v in BRIDGE.items() if k != "job"}, "gpu": GPU_HERE}
+    return {"login": login, "server": {k: v for k, v in BRIDGE.items() if k != "job"}, "gpu": GPU_HERE, "direct": direct_server()}
 
 
 def save_cloud_login(wanted):
