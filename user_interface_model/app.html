@@ -76,7 +76,9 @@
   .compose .hint { font-size:11.5px; color:var(--dim); }
   model-viewer { width:100%; height:300px; background:#0007; border-radius:10px; margin-top:6px; }
   /* the 3D view of a result fills the screen: its button, a double click, or F; Esc goes back */
-  .viewer { position:relative; } .viewer .full { position:absolute; top:12px; right:6px; z-index:2; padding:4px 10px; font-size:12.5px; background:#14100Acc; }
+  .viewer { position:relative; } .viewer model-viewer { background:radial-gradient(#4a3f2c, #1c160e); }
+  .viewer .loading { position:absolute; inset:auto 0 0 0; margin:0 10px 10px; padding:6px 10px; border-radius:8px; background:#14100Acc; font-size:12.5px; pointer-events:none; }
+  .viewer .loading i { display:block; height:4px; margin-top:5px; border-radius:2px; background:var(--gold); width:0; transition:width .2s; } .viewer .full { position:absolute; top:12px; right:6px; z-index:2; padding:4px 10px; font-size:12.5px; background:#14100Acc; }
   .viewer:fullscreen { background:#1a140c; display:flex; } .viewer:fullscreen model-viewer { height:100vh; margin:0; border-radius:0; }
   .viewer:fullscreen .full { top:16px; right:16px; font-size:14px; }
   /* ------------------------------------------------ the city */
@@ -717,7 +719,12 @@ function follow(name, fresh) {
     line.textContent = (active ? `${B[active].name} is working: ${states[active].note || B[active].runs}. ` : busy ? (flow.remote ? "Your data is on its way to the uni server. " : "Getting ready … ") : "") + (busy ? `${clock((Date.now() - running.began) / 1000)} so far.` : "") + (busy ? remote : "");
     if (flow.remote && (flow.remote.notes || []).length && !note.dataset.told) { note.dataset.told = 1; note.append(p(h("small", {}, "Note from the server: " + flow.remote.notes.join("; ")))); }
     if (active && active !== running.last) running.last = active;
-    if (done === all || failed || (!busy && running.wasBusy && Date.now() - running.began > 8000)) return finish(flow, note, stop, failed);
+    if (done === all || failed || (!busy && running.wasBusy && Date.now() - running.began > 8000)) {  // (rule 4) it says how it ended
+      line.textContent = failed ? `Stopped at ${failed.label}.` : done === all ? `Done: every step of ${name} has its result.` : `Stopped after ${done} of ${all} steps.`;
+      bar.style.width = (done / all * 100) + "%";
+      $("townState").textContent = failed ? `stopped: ${name}` : done === all ? `finished: ${name}` : `stopped: ${name}`;
+      return finish(flow, note, stop, failed);
+    }
     setTimeout(tick, 1000);  // every second: the bars and the times move live (liveStep)
   };
   tick();
@@ -811,7 +818,12 @@ $("house").addEventListener("close", () => { openId = null; });
 // the 3D view of a result, with a button that makes it fill the screen (a double click or F does too, Esc goes back)
 function viewer(src) {
   const view = h("model-viewer", {src, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "0.6", alt: "The result in 3D", tabindex: 0});
-  const button = h("button", {class: "full", title: "Fill the screen (F); Esc goes back"}, "⛶ Full screen"), box = h("div", {class: "viewer"}, view, button);
+  const button = h("button", {class: "full", title: "Fill the screen (F); Esc goes back"}, "⛶ Full screen");
+  const bar = h("i"), said = h("span", {}, "Loading the model … 0 %"), loading = h("div", {class: "loading"}, said, bar);  // (rule 3) a big model takes a while
+  const box = h("div", {class: "viewer"}, view, button, loading);
+  view.addEventListener("progress", e => { const share = Math.round((e.detail.totalProgress || 0) * 100); said.textContent = `Loading the model … ${share} %`; bar.style.width = share + "%"; });
+  view.addEventListener("load", () => loading.remove());
+  view.addEventListener("error", () => { said.textContent = "The model could not be shown: open its file in Blender instead."; bar.remove(); });
   const toggle = () => document.fullscreenElement === box ? document.exitFullscreen() : box.requestFullscreen().catch(() => toast("This browser can't show it full screen."));
   button.onclick = toggle; view.addEventListener("dblclick", toggle);
   view.addEventListener("keydown", e => { if (e.key === "f" || e.key === "F") toggle(); });
