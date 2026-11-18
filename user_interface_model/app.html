@@ -203,7 +203,8 @@ function h(tag, props = {}, ...kids) {
 }
 const LIVE = location.protocol.startsWith("http");  // served by flow_page.py; as a file the page can only show its demo
 let GPU = false;  // can the computer of flow_page.py run the AI itself? Without an NVIDIA GPU everything goes to the uni server
-if (LIVE) fetch("/api/me").then(r => r.json()).then(me => { GPU = !!me.gpu; }).catch(() => {});
+let ON_SERVER = false;  // the page runs on the uni server itself (--on-server): every step works there, nothing goes over Sciebo
+if (LIVE) fetch("/api/me").then(r => r.json()).then(me => { GPU = !!me.gpu; ON_SERVER = !!me.on_server; if (ON_SERVER) places(true); }).catch(() => {});
 const clock = s => { s = Math.max(0, Math.round(s)); return s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s} s`; };
 
 // ================================================================ the city's buildings
@@ -556,7 +557,8 @@ function showPlan(text, plan) {
   const first = (data.find(i => i.role === "object") || data[0]).name.replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30) || "my_project";
   const name = h("input", {value: first, maxlength: 40, "aria-label": "Project name"}), old = h("input", {value: plan.old_part || "", placeholder: "nothing"}),
         place = h("input", {value: plan.place || "", placeholder: "the page finds the place"}), words = h("input", {value: plan.part_words || "", placeholder: "e.g. a wide wizard hat"}),
-        where = h("select", {}, h("option", {value: "all"}, "everything on the uni server (this device needs no GPU)"),  // without a GPU here the only choice
+        where = ON_SERVER ? h("select", {}, h("option", {value: "pc"}, "here, on the uni server's GPUs (this page runs there)"))
+              : h("select", {}, h("option", {value: "all"}, "everything on the uni server (this device needs no GPU)"),  // without a GPU here the only choice
                   ...(GPU ? [h("option", {value: "server"}, "the models on the uni server, the rest on this device"), h("option", {value: "pc"}, "everything on this device (it needs a strong GPU)")] : [])),
         why = h("div", {class: "why"}), run = h("button", {class: "main"}, "Run"), wordsRow = h("label", {}, "The new part in words (no data shows it)", words);
   const rows = data.map(item => { const role = h("select", {"aria-label": "What " + item.name + " is"}, h("option", {value: "object"}, "the model to change"), h("option", {value: "part"}, "the new part"), h("option", {value: "unused"}, "don't use"));
@@ -655,7 +657,7 @@ function follow(name, fresh) {
   const tick = async () => {
     if (!running || running.name !== name) return;
     let flow, fetched = Date.now(); try { flow = await get("/api/flow?name=" + encodeURIComponent(name)); fetched = Date.now(); } catch (error) { line.textContent = "The page's server does not answer: " + error.message; return setTimeout(tick, 5000); }
-    places(flow.runs === "server");
+    places(flow.runs === "server" || ON_SERVER);
     const {states, active} = cityOf(flow), all = flow.nodes.length, done = flow.nodes.filter(n => n.status === "done").length, failed = flow.nodes.find(n => n.status === "failed");
     const busy = flow.running || (flow.run && flow.run.active);
     if (busy) running.wasBusy = true;

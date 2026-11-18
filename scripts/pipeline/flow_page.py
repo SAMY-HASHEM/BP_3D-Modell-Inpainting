@@ -91,6 +91,9 @@ CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["betwe
 # graphics are in the processor) every run goes to the uni server as one job, whatever a page asks for; this computer
 # only sends the data and shows the state. flow_page.py --gpu / --no-gpu say it instead of looking for nvidia-smi.
 GPU_HERE = shutil.which("nvidia-smi") is not None
+# The page runs on the uni server itself (flow_page.py --on-server, or INPAINTING_ON_SERVER=1): "the uni server" is
+# this computer, so every node runs here on its GPUs, nothing goes over Sciebo, and the city says "uni server".
+ON_SERVER = os.environ.get("INPAINTING_ON_SERVER") == "1"
 NO_GPU = "this computer has no NVIDIA GPU: %s runs only on the uni server"
 PROMPTS = {}  # {"<flow file>/<node>": {"process", "log", "prompt", "started"}}: the picture AI painting a prompt
 SHOWN = core.PICTURE_TYPES + core.VIDEO_TYPES
@@ -598,6 +601,8 @@ def create_flow(wanted):
         raise ValueError("the settings don't fit: resolution 512, 1024 or 1536; runs on all, server or pc; steps 1 to 100")
     everything = where == "all" or not GPU_HERE  # every node on the uni server: this computer only sends the data (no GPU needed here)
     where = "server" if everything else where
+    if ON_SERVER:  # this computer is the uni server: every node runs right here, nothing is sent anywhere
+        everything, where = False, "pc"
     said = lambda role: {"prompts": prompts[role]} if prompts[role] else {}
     nodes = [{"id": "object", "type": "input", "label": "00 Input: the object", "files": files["object"], **said("object")}]
     if files["part"]:
@@ -1049,7 +1054,8 @@ class Page(BaseHTTPRequestHandler):
                 if not name:
                     return self.answer({"error": "log in first"}, 401)
             if address.path == "/api/me":  # who is logged in; without --accounts nobody is asked
-                return self.answer({"accounts": self.accounts, "name": name if self.accounts else None, "gpu": GPU_HERE})
+                return self.answer({"accounts": self.accounts, "name": name if self.accounts else None, "gpu": GPU_HERE,
+                                    "on_server": ON_SERVER})
             if address.path == "/":
                 return self.send(open(PAGE, "rb").read(), "text/html; charset=utf-8", extra=[("Cache-Control", "no-store")])
             if address.path in ("/app", "/old/app"):  # the main page, and the one before it
@@ -1211,9 +1217,13 @@ def main():
     gpu = parser.add_mutually_exclusive_group()
     gpu.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="this computer runs the AI itself (default: if nvidia-smi is there)")
     gpu.add_argument("--no-gpu", dest="gpu", action="store_false", help="every run on the uni server, nothing of the AI here")
+    parser.add_argument("--on-server", action="store_true", help="this computer IS the uni server: every node runs here")
     args = parser.parse_args()
-    global GPU_HERE
+    global GPU_HERE, ON_SERVER
     GPU_HERE = GPU_HERE if args.gpu is None else args.gpu
+    ON_SERVER = ON_SERVER or args.on_server
+    if ON_SERVER and not GPU_HERE:
+        parser.error("--on-server needs the server's GPUs (nvidia-smi was not found)")
     if args.host not in ("127.0.0.1", "localhost") and not args.accounts:
         parser.error("--host for other computers needs --accounts: without a login everybody there could run and change everything")
     if args.accounts and not accounts.read():
@@ -1221,7 +1231,9 @@ def main():
     Page.accounts = args.accounts
     server = ThreadingHTTPServer((args.host, args.port), Page)
     address = f"http://127.0.0.1:{args.port}"
-    if not GPU_HERE:
+    if ON_SERVER:
+        print("On the uni server: every node of a run works here, on its GPUs.", flush=True)
+    elif not GPU_HERE:
         print("No NVIDIA GPU here: every run goes to the uni server (the Sciebo login: click the bridge in the city).", flush=True)
     print(f"The flow page: {address}   (Ctrl+C stops it)" + (f"\nwith accounts ({len(accounts.read())}), listening on {args.host}" if args.accounts else ""), flush=True)
     if args.open:

@@ -184,6 +184,19 @@ class WithoutAGpu(InTemporaryProject):
                 page.understand({"prompt": "a hat", "items": [{"name": "a.png"}]})
 
 
+class OnTheServer(InTemporaryProject):
+    """flow_page.py --on-server: the page runs on the uni server itself, so every node runs there, nothing over Sciebo."""
+
+    def test_every_node_runs_here_whatever_was_chosen(self):
+        with mock.patch.object(page, "ON_SERVER", True):
+            for where in ("all", "server", "pc"):
+                item = {"path": self.upload("demo", "object", "front.png"), "role": "object"}
+                page.create_flow({"flow": "demo", "items": [item], "settings": {"where": where}})
+                flow = self.flow("demo")
+                self.assertNotIn("runs", flow, where)
+                self.assertEqual(next(n for n in flow["nodes"] if n["type"] == "base")["where"], "pc", where)
+
+
 class TheBridge(InTemporaryProject):
     """The Sciebo login of the bridge: tried before it is saved, its password never sent back."""
 
@@ -469,7 +482,7 @@ class Accounts(WithServer):
         code, cookie = self.log_in()
         self.assertEqual(code, 200)
         self.assertEqual(json.loads(self.ask("/api/flows", headers={"Cookie": cookie})[1]), [])
-        self.assertEqual(json.loads(self.ask("/api/me", headers={"Cookie": cookie})[1]), {"accounts": True, "name": "anna", "gpu": True})
+        self.assertEqual(json.loads(self.ask("/api/me", headers={"Cookie": cookie})[1]), {"accounts": True, "name": "anna", "gpu": True, "on_server": False})
         self.assertEqual(self.ask("/api/blender", b'{"model": "a.glb"}', {**self.mine, "Cookie": cookie})[0], 400)
         self.assertEqual(self.ask("/api/logout", b"{}", {**self.mine, "Cookie": cookie})[0], 200)
         self.assertEqual(self.ask("/api/flows", headers={"Cookie": cookie})[0], 401)
@@ -491,7 +504,7 @@ class Accounts(WithServer):
 
 class WithoutAccounts(WithServer):
     def test_nobody_is_asked(self):
-        self.assertEqual(json.loads(self.ask("/api/me")[1]), {"accounts": False, "name": None, "gpu": True})
+        self.assertEqual(json.loads(self.ask("/api/me")[1]), {"accounts": False, "name": None, "gpu": True, "on_server": False})
         self.assertEqual(self.ask("/login")[0], 404)
         self.assertEqual(self.ask("/api/login", b"{}", {"X-Flow-Page": "1"})[0], 404)
 
