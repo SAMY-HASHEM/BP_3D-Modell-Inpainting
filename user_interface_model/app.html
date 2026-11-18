@@ -27,7 +27,7 @@
 <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
 <style>
   /* (rule 1) the site's two colours, sand gold and black; the city keeps its own colours because they mean something */
-  :root { --sand:#D4A853; --ink:#14100A; --raised:#231c11; --line:#6f5a2f; --dim:#b39048; --ok:#27a567; --now:#f08c2e; --bad:#e2574c; --radius:14px; }
+  :root { --sand:#D4A853; --ink:#14100A; --raised:#231c11; --line:#6f5a2f; --dim:#b39048; --ok:#27a567; --now:#f08c2e; --gold:#f5c518; --bad:#e2574c; --radius:14px; }
   * { box-sizing:border-box; scrollbar-color:var(--line) transparent; }
   [hidden] { display:none !important; }
   html, body { margin:0; height:100%; }
@@ -82,7 +82,14 @@
   .label { font:700 13px Cinzel, Georgia, serif; fill:#3a2a14; text-anchor:middle; paint-order:stroke; stroke:#fff7e0e6; stroke-width:4px; }
   .what { font:11px Inter, sans-serif; fill:#4a3a1e; text-anchor:middle; paint-order:stroke; stroke:#fff7e0e6; stroke-width:3.5px; }
   .bank { font:700 14px Cinzel, Georgia, serif; letter-spacing:.14em; fill:#6b4a1c; }
-  .glow { opacity:0; transition:opacity .5s; } .b.running .glow { opacity:.9; animation:pulse 1.6s infinite ease-in-out; }
+  .glow { opacity:0; transition:opacity .5s; } .b.running .glow { opacity:1; animation:pulse 1.4s infinite ease-in-out; }
+  /* the building that works on the data lights up in gold, with lightning flickering over it */
+  .b.running .build { animation:gold 1.4s infinite ease-in-out; }
+  @keyframes gold { 0%,100% { filter:drop-shadow(0 0 5px #ffd23f) drop-shadow(0 0 14px #f5b800) brightness(1.08); } 50% { filter:drop-shadow(0 0 10px #ffe680) drop-shadow(0 0 30px #f5b800) brightness(1.2); } }
+  .plate { transition:fill .4s, stroke .4s; } .b.running .plate { fill:#ffe9a0; stroke:#f5b800; stroke-width:3; }
+  .bolt { opacity:0; } .b.running .bolt { animation:flash 1.7s infinite steps(1, end); } .b.running .bolt.k2 { animation-delay:.55s; } .b.running .bolt.k3 { animation-delay:1.1s; }
+  @keyframes flash { 0% { opacity:1; } 9% { opacity:.15; } 15% { opacity:1; } 26%, 100% { opacity:0; } }
+  .chest { transition:filter .4s; } .carrying .chest { filter:drop-shadow(0 0 4px #ffd23f) drop-shadow(0 0 8px #f5b800); }
   .flag { opacity:0; transition:opacity .4s; } .b.done .flag { opacity:1; } .b.unused { opacity:.45; } .b.failed .build { filter:grayscale(1); }
   @keyframes pulse { 0%,100% { opacity:.35; } 50% { opacity:.95; } }
   .b.running .worker { animation:work .7s infinite ease-in-out; }
@@ -91,14 +98,14 @@
   @keyframes spark { 0% { opacity:1; transform:translate(0,0) scale(.6); } 100% { opacity:0; transform:translate(var(--dx),-30px) scale(1.3); } }
   .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:10px; }
   .card { border:1.5px solid var(--line); border-radius:12px; padding:9px 11px; background:var(--raised); display:grid; gap:5px; }
-  .card.running { border-color:var(--now); box-shadow:0 0 0 2px #f08c2e44; } .card.done { border-color:var(--ok); } .card.failed { border-color:var(--bad); } .card.unused { opacity:.5; }
+  .card.running { border-color:var(--gold); box-shadow:0 0 0 2px #f5b80055, 0 0 18px #f5b80033; } .card.done { border-color:var(--ok); } .card.failed { border-color:var(--bad); } .card.unused { opacity:.5; }
   .card .top { display:flex; justify-content:space-between; gap:6px; align-items:baseline; } .card b { font-size:14px; }
-  .card .state { font-size:11.5px; font-weight:600; } .card.running .state { color:var(--now); } .card.done .state { color:var(--ok); } .card.failed .state { color:var(--bad); }
+  .card .state { font-size:11.5px; font-weight:600; } .card.running .state { color:var(--gold); } .card.done .state { color:var(--ok); } .card.failed .state { color:var(--bad); }
   .card .runs { font-size:12px; color:#e9d5a4; min-height:34px; }
   .tags { display:flex; gap:5px; flex-wrap:wrap; } .tag { font-size:10.5px; font-weight:600; padding:1px 7px; border-radius:99px; border:1px solid var(--line); }
   .tag.device { background:#f2b44133; } .tag.server { background:#4f8fe044; border-color:#4f8fe0; color:#b9d6ff; }
   .card .time { display:flex; justify-content:space-between; font-size:11.5px; color:var(--dim); font-variant-numeric:tabular-nums; }
-  .card.running .bar i { background:var(--now); } .card.done .bar i { background:var(--ok); }
+  .card.running .bar i { background:linear-gradient(90deg, #f5b800, #ffe680); } .card.done .bar i { background:var(--ok); }
   /* ------------------------------------------------ small things */
   #toast { position:fixed; left:50%; bottom:22px; transform:translate(-50%, 80px); background:var(--sand); color:var(--ink); padding:9px 14px; border-radius:10px; font-weight:600; transition:transform .25s; display:flex; gap:12px; align-items:center; z-index:9; }
   #toast.show { transform:translate(-50%, 0); } #toast button { border-color:var(--ink); padding:3px 10px; }
@@ -204,7 +211,8 @@ function h(tag, props = {}, ...kids) {
 const LIVE = location.protocol.startsWith("http");  // served by flow_page.py; as a file the page can only show its demo
 let GPU = false;  // can the computer of flow_page.py run the AI itself? Without an NVIDIA GPU everything goes to the uni server
 let ON_SERVER = false;  // the page runs on the uni server itself (--on-server): every step works there, nothing goes over Sciebo
-if (LIVE) fetch("/api/me").then(r => r.json()).then(me => { GPU = !!me.gpu; ON_SERVER = !!me.on_server; if (ON_SERVER) places(true); }).catch(() => {});
+if (LIVE) fetch("/api/me").then(r => r.json()).then(me => { GPU = !!me.gpu; ON_SERVER = !!me.on_server;
+  if (ON_SERVER) { places(true); $("bridgeLabel").textContent = "the bridge: your direct connection (click it)"; setLamp("ok"); } }).catch(() => {});
 const clock = s => { s = Math.max(0, Math.round(s)); return s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s} s`; };
 
 // ================================================================ the city's buildings
@@ -362,7 +370,7 @@ const SHAPES = {
 const parts = {};  // per building: its svg group, its bar in the map, its card
 (function drawCity() {
   el("defs").innerHTML = `<linearGradient id="water" x1="0" x2="1"><stop offset="0" stop-color="#3f9bd9"/><stop offset=".5" stop-color="#2b7fc4"/><stop offset="1" stop-color="#4aa8de"/></linearGradient>
-    <radialGradient id="halo"><stop offset="0" stop-color="#ffe08a"/><stop offset="1" stop-color="#ffe08a" stop-opacity="0"/></radialGradient>
+    <radialGradient id="halo"><stop offset="0" stop-color="#ffd23f" stop-opacity=".95"/><stop offset=".55" stop-color="#f5b800" stop-opacity=".45"/><stop offset="1" stop-color="#f5b800" stop-opacity="0"/></radialGradient>
     <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="5"/></filter>`;
   el("rect", {width: 980, height: 640, fill: "#ecd49c"});
   let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -388,7 +396,7 @@ const parts = {};  // per building: its svg group, its bar in the map, its card
   el("polygon", {points: "200,292 325,298 325,342 200,334", fill: "#dcbd7c", stroke: "#8a6a3a", "stroke-width": 2});  // the bridge of stone
   for (const x of [225, 262, 300]) el("path", {d: `M${x - 12} 340 q12 -16 24 0`, fill: "#2b7fc4", stroke: "#8a6a3a", "stroke-width": 1.2});
   el("path", {d: "M" + STREET["quay>land"].map(p => p.join(" ")).join(" L"), fill: "none", stroke: "#f6e7c1", "stroke-width": 12});
-  el("text", {x: 262, y: 270, class: "what"}).textContent = "the bridge: the cloud folder (click it)";
+  el("text", {x: 262, y: 270, class: "what", id: "bridgeLabel"}).textContent = "the bridge: the cloud folder (click it)";
   for (const k of ["square", "east", "quay", "land"]) { el("circle", {cx: P[k].x, cy: P[k].y, r: 15, fill: "#f6e7c1", stroke: "#a5834d", "stroke-width": 2.5}); el("circle", {cx: P[k].x, cy: P[k].y, r: 5, fill: "#e8b923"}); }
   for (const [x, y, s] of [[30, 420, .85], [160, 470, .9], [150, 100, .85], [30, 330, .8], [390, 250, 1], [555, 225, .85], [735, 250, .85], [965, 255, .9], [505, 610, .9], [690, 470, .8], [960, 590, .9], [370, 610, .9], [690, 625, .85], [950, 70, 1], [160, 620, .85]]) {  // palm trees
     el("path", {d: `M${x} ${y + 8 * s} q${3 * s} ${-14 * s} ${-1 * s} ${-26 * s}`, fill: "none", stroke: "#8a6a3a", "stroke-width": 3 * s, "stroke-linecap": "round"});
@@ -397,18 +405,24 @@ const parts = {};  // per building: its svg group, its bar in the map, its card
   for (const b of BUILDINGS) {
     const bx = b.x, by = b.y - b.r - 22, g = el("g", {class: "b", tabindex: 0, role: "img", "aria-label": b.name});
     g.addEventListener("click", () => parts[b.id].card.scrollIntoView({behavior: "smooth", block: "nearest"}));
-    el("ellipse", {cx: bx, cy: by + 8, rx: b.r * 1.6, ry: b.r * 1.35, fill: "url(#halo)", class: "glow"}, g);
+    el("ellipse", {cx: bx, cy: by + 4, rx: b.r * 2.2, ry: b.r * 1.8, fill: "url(#halo)", class: "glow"}, g);
     el("ellipse", {cx: bx + 8, cy: by + b.r * .7, rx: b.r * 1.25, ry: b.r * .3, fill: "#0003", filter: "url(#soft)"}, g);
     SHAPES[b.shape](el("g", {class: "build"}, g), bx, by, b.r, b.c);
-    for (const [k, dx] of [["", "-10px"], [" s2", "6px"], [" s3", "16px"]]) el("polygon", {points: `${bx},${by - 18} ${bx + 4},${by - 12} ${bx},${by - 6} ${bx - 4},${by - 12}`, fill: "#fff3b0", class: "spark" + k, style: `--dx:${dx}; transform-origin:${bx}px ${by - 12}px`}, g);
+    for (const [k, dx] of [["", "-10px"], [" s2", "6px"], [" s3", "16px"]]) el("polygon", {points: `${bx},${by - 18} ${bx + 4},${by - 12} ${bx},${by - 6} ${bx - 4},${by - 12}`, fill: "#ffd700", class: "spark" + k, style: `--dx:${dx}; transform-origin:${bx}px ${by - 12}px`}, g);
+    // three bolts of gold lightning around the roof, flickering one after another while the building works
+    for (const [k, dx, tall] of [["", -b.r * .75, 1], [" k2", b.r * .7, .85], [" k3", -b.r * .1, 1.15]]) {
+      const x0 = bx + dx, y0 = by - b.r * 1.05 - 4, s = 10 * tall;
+      el("polyline", {points: `${x0},${y0 - 2.6 * s} ${x0 - s * .55},${y0 - 1.3 * s} ${x0 + s * .25},${y0 - 1.15 * s} ${x0 - s * .45},${y0}`,
+        fill: "none", stroke: "#ffe14d", "stroke-width": 3.4, "stroke-linejoin": "round", "stroke-linecap": "round", class: "bolt" + k, style: "filter:drop-shadow(0 0 4px #f5b800) drop-shadow(0 0 8px #ffd23f)"}, g);
+    }
     const flag = el("g", {class: "flag"}, g); el("line", {x1: bx + b.r * 1.05, y1: by + b.r * .6, x2: bx + b.r * 1.05, y2: by - b.r * .5, stroke: "#5b3d1f", "stroke-width": 2}, flag);
     el("polygon", {points: `${bx + b.r * 1.05},${by - b.r * .5} ${bx + b.r * 1.05 + 15},${by - b.r * .5 + 5} ${bx + b.r * 1.05},${by - b.r * .5 + 10}`, fill: "#27a567"}, flag);
-    el("ellipse", {cx: b.x, cy: b.y, rx: 30, ry: 13, fill: "#f6e7c1", stroke: "#a5834d", "stroke-width": 2}, g);
+    el("ellipse", {cx: b.x, cy: b.y, rx: 30, ry: 13, fill: "#f6e7c1", stroke: "#a5834d", "stroke-width": 2, class: "plate"}, g);
     const w = el("g", {transform: `translate(${b.x - 12},${b.y + 2})`}, g); WORKERS[b.who](el("g", {class: "worker"}, w));
     el("text", {x: bx, y: by - b.r * 1.25 - 16, class: "label"}, g).textContent = b.name;
     el("text", {x: bx, y: by - b.r * 1.25 - 3, class: "what"}, g).textContent = `${b.kind} · ${WHERE[b.where]}`;
     el("rect", {x: b.x - 30, y: b.y + 17, width: 60, height: 7, rx: 3.5, fill: "#3a2a14", opacity: .85}, g);  // the loading bar in the map
-    const fill = el("rect", {x: b.x - 29, y: b.y + 18, width: 0, height: 5, rx: 2.5, fill: "#f08c2e"}, g);
+    const fill = el("rect", {x: b.x - 29, y: b.y + 18, width: 0, height: 5, rx: 2.5, fill: "#f5b800"}, g);
     // the same building as a card under the map: name, what works there, where, time, loading bar
     const card = h("div", {class: "card"}, h("div", {class: "top"}, h("b", {}, b.name), h("span", {class: "state"}, "waiting")),
       h("div", {class: "runs"}, b.runs), h("div", {class: "tags"}, h("span", {class: "tag"}, b.kind), h("span", {class: "tag " + b.where}, WHERE[b.where])),
@@ -417,16 +431,18 @@ const parts = {};  // per building: its svg group, its bar in the map, its card
     parts[b.id] = {g, fill, card, tag: card.querySelector(".tags .tag:last-child"), sub: g.querySelector(".what")};
   }
 })();
-const courier = el("g"), courierIn = el("g", {}, courier); WORKERS.courier(courierIn);  // the runner carries a chest
-el("rect", {x: 8, y: -19, width: 13, height: 9, rx: 1, fill: "#e8b923", stroke: "#8a6a3a", "stroke-width": .8}, courierIn); el("rect", {x: 8, y: -21.5, width: 13, height: 3.5, rx: 1, fill: "#c0392b", stroke: "#8a6a3a", "stroke-width": .6}, courierIn);
-const folk = [["#2aa58a", "gallery", "clinic"], ["#c0392b", "studio", "court"], ["#2f6fb5", "factory", "forge"]].map(([c, a, b]) => { const g = el("g", {opacity: .9}); egy(g, c); return {g, pts: route(a, b)}; });
+// One person carries the data: the courier with the golden chest is the only one on the streets. He walks the data to
+// the building that works on it and waits there; its chest shines while the work goes on, at the gallery the run ends.
+const courier = el("g"), courierIn = el("g", {}, courier); WORKERS.courier(courierIn);
+const chest = el("g", {class: "chest"}, courierIn);
+el("rect", {x: 8, y: -19, width: 13, height: 9, rx: 1, fill: "#e8b923", stroke: "#8a6a3a", "stroke-width": .8}, chest); el("rect", {x: 8, y: -21.5, width: 13, height: 3.5, rx: 1, fill: "#c0392b", stroke: "#8a6a3a", "stroke-width": .6}, chest);
+el("rect", {x: 13.3, y: -16.5, width: 2.4, height: 3, rx: .5, fill: "#8a6a3a"}, chest);  // its lock
 let walk = {at: "gate", pts: [[P.gate.x, P.gate.y]], start: 0};
 function sendCourier(to) { if (to && to !== walk.at) { walk = {at: to, pts: route(walk.at, to), start: performance.now()}; } }
 (function frame(now) {
   const t = Math.min(1, (now - walk.start) / 4000), [x, y] = along(walk.pts, t);
   courier.setAttribute("transform", `translate(${x + 14},${y + 4})`);
   courierIn.setAttribute("transform", t < 1 ? `translate(0,${-Math.abs(Math.sin(now / 110)) * 2.5})` : "");
-  folk.forEach((f, k) => { const u = ((now / (30000 + k * 7000)) + k * .37) % 2, [fx, fy] = along(f.pts, u > 1 ? 2 - u : u); f.g.setAttribute("transform", `translate(${fx - 10},${fy + 8}) scale(.8)`); });
   requestAnimationFrame(frame);
 })(performance.now());
 function places(allOnServer) {  // everything on the uni server (as the map is drawn), or only the models there: the buildings say so
@@ -438,7 +454,7 @@ const WORD = {idle: "waiting", waiting: "next", running: "working", done: "done"
 function showCity(states, active, headline) {
   for (const b of BUILDINGS) {
     const s = states[b.id] || {status: "idle", progress: 0, seconds: 0}, p = parts[b.id], share = Math.max(0, Math.min(1, s.progress || 0));
-    p.g.setAttribute("class", "b " + s.status); p.fill.setAttribute("width", 58 * share); p.fill.setAttribute("fill", s.status === "done" ? "#27a567" : "#f08c2e");
+    p.g.setAttribute("class", "b " + s.status); p.fill.setAttribute("width", 58 * share); p.fill.setAttribute("fill", s.status === "done" ? "#27a567" : "#f5b800");
     p.card.className = "card " + s.status;
     p.card.querySelector(".state").textContent = WORD[s.status] + (s.status === "running" ? ` ${Math.round(share * 100)} %` : "");
     p.card.querySelector(".bar i").style.width = share * 100 + "%";
@@ -446,6 +462,7 @@ function showCity(states, active, headline) {
     p.card.querySelector(".runs").textContent = s.status === "running" && s.note ? s.note : b.runs;
   }
   sendCourier(active);
+  courier.setAttribute("class", active && states[active] && states[active].status === "running" ? "carrying" : "");
   $("townState").textContent = headline || "nothing is running";
 }
 showCity({}, null);
@@ -733,6 +750,7 @@ const LAMP = {unknown: ["#9a8f7a", "not tested yet"], checking: ["#f08c2e", "bei
 let bridge = {login: null, server: {state: "idle"}}, cloudLine = null, bridgeTimer = null;
 function setLamp(kind) { lamp.setAttribute("fill", LAMP[kind][0]); lamp.setAttribute("class", "lamp " + kind); lampTitle.textContent = `The bridge: ${LAMP[kind][1]}. Click for the Sciebo login and a test.`; }
 function directBlock() {  // inside the uni network the server's own page answers: work there, live, with nothing in between
+  if (ON_SERVER) return h("div", {class: "direct"}, h("b", {}, "Connected directly. "), "This page runs on the uni server itself: your browser talks to it straight (uni network or SSH tunnel), every step works on its GPUs, and the city follows each second. Nothing goes over Sciebo; the login below is only for the other ways in (Blender, a computer outside the network).");
   const d = bridge.direct;
   if (!d) return null;
   if (d.reachable && d.broken) return h("div", {class: "direct off note"}, h("b", {}, "You are inside the uni network, "),
@@ -762,7 +780,7 @@ function showBridge() {
   }
   const waited = server.started && busy ? ` (${clock(Date.now() / 1000 - server.started)})` : "";
   $("bridgeSteps").replaceChildren(one, step(STATE[server.state] || "", "2 · The uni server", (server.message || "not tested yet") + waited, found));
-  setLamp(busy ? "checking" : server.state === "done" ? "ok" : server.state === "failed" || (cloudLine && !cloudLine.ok) ? "bad" : cloudLine ? "cloud" : "unknown");
+  setLamp(ON_SERVER || (!busy && server.state === "done") ? "ok" : busy ? "checking" : server.state === "failed" || (cloudLine && !cloudLine.ok) ? "bad" : cloudLine ? "cloud" : "unknown");
   $("bridgeTest").disabled = !LIVE || !login || busy;
 }
 let toldDirect = false;
