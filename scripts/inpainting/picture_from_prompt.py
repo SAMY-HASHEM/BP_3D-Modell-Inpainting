@@ -81,6 +81,19 @@ def comfy(path, data=None, raw=None, headers=None, timeout=30):
     return json.loads(content) if content[:1] in (b"{", b"[") else content
 
 
+def model_paths(folder):
+    """comfyui_paths.yaml with its base_path made absolute: ComfyUI reads a relative one from its own folder, not from
+    the file's, and then finds none of this project's models (on the uni server, Nov 18: other models were listed)."""
+    import yaml
+    paths = yaml.safe_load(open(MODEL_PATHS))
+    here = os.path.dirname(os.path.abspath(MODEL_PATHS))
+    for entry in paths.values():
+        entry["base_path"] = os.path.normpath(os.path.join(here, entry["base_path"]))
+    out = os.path.join(folder, "comfyui_paths.yaml")
+    yaml.safe_dump(paths, open(out, "w"))
+    return out
+
+
 def start_comfyui(report=print):
     """Starts ComfyUI if it isn't running; returns the process if this function started it."""
     try:
@@ -89,9 +102,11 @@ def start_comfyui(report=print):
     except OSError:
         pass
     report("Starting ComfyUI...")
-    log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs", "comfyui.log"), "w")
+    outputs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs")
+    os.makedirs(outputs, exist_ok=True)
+    log = open(os.path.join(outputs, "comfyui.log"), "w")
     process = subprocess.Popen([os.path.join(COMFYUI_DIR, ".venv", "bin", "python"), "main.py", "--listen", "127.0.0.1",
-                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", MODEL_PATHS],
+                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", model_paths(outputs)],
                                cwd=COMFYUI_DIR, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(120):
         time.sleep(2)
