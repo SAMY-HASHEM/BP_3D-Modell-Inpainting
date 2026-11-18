@@ -289,10 +289,18 @@ def sheet_views(data, which):
     return [project_path(paths[name]) for name in sheet["lists"][which]]
 
 
-def base_model(data, where="server", mode="multidiffusion", resolution="1024", steps=25, seed=42, colours="all", view=None):
+def base_model(data, where="server", mode="multidiffusion", resolution="1024", steps=25, seed=42, colours="all", view=None,
+               given=None):
     """02: the object's model from the views its data sheet chose (the main view first).
     colours = "main": only the main view gives the colours, the other views the shape only (every extra view makes
-    the colours softer, multidiffusion averages them); "all": every view gives both."""
+    the colours softer, multidiffusion averages them); "all": every view gives both.
+    given: the person's own model (a .glb, from the project folder): it is the base, nothing is generated."""
+    if given:
+        model = project_path(given)
+        if not os.path.isfile(model):
+            raise ValueError(f"the given model is not there: {given}")
+        folder = node_folder(data["name"], "02_base", {"given": stamp(model)})
+        return {"folder": folder, "steps": [], "outputs": {"model": {"name": data["name"], "kind": "base", "label": "your model", "glb": model}}}
     views = sheet_views(data, "base")
     if view is not None:  # only this one of the sheet's views (1 = the main view): free renders from any angle don't
         views = views[int(view) - 1:int(view)]  # fit together, mixed they doubled a robot arm's tool head (Nov 15)

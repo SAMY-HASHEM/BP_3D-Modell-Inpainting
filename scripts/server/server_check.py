@@ -38,7 +38,8 @@ def reachable(address, timeout=8):
 
 
 def blender():
-    for path in (os.environ.get("BLENDER"), os.path.expanduser("~/Applications/blender/blender"), shutil.which("blender")):
+    for path in (os.environ.get("BLENDER"), os.path.expanduser("~/Applications/blender/blender"), os.path.join(PROJECT, "blender", "blender"),
+                 shutil.which("blender")):
         if path and os.path.isfile(path):
             return path, run(path, "--version").splitlines()[0][:60]
     return None, ""

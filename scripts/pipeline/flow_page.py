@@ -83,7 +83,7 @@ ENV_PYTHON = os.path.join(core.PROJECT, "conda", "envs", "inpainting-3d-modellin
 RUNS = {}  # {flow file: {"process", "upto", "log", "started"}}: the flow.py this page started
 # what can be set on the page per node type, with the value a node has when the flow file doesn't say (as flow.py's TYPES)
 SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8, "ai": True, "what": "", "sides": ""},
-            "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25}, "pick_seed": {},
+            "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25, "given": ""}, "pick_seed": {},
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
@@ -526,6 +526,20 @@ def save_flow(path, data):
 
 # ---------------------------------------------------------------- the main page: uploads become a flow
 
+MODEL_TYPES = (".glb",)  # a 3D model the run can start from (the object's, in place of the base model TRELLIS.2 builds)
+
+
+def vision_ai_here():
+    """Does the local vision AI (Ollama) answer on this computer? Without it the data sheet and the judges measure alone."""
+    import urllib.request
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    try:
+        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(host + "/api/tags", timeout=2).close()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def save_upload(address, stream, length):
     """A picture or a video the main page sends as the request's body: into pictures/uploads/<flow>/<role>/.
     Gives back its path from the project folder (with /, as the flow files have it)."""
@@ -534,9 +548,10 @@ def save_upload(address, stream, length):
     if not re.fullmatch(NAME, flow) or role not in ("object", "part"):
         raise ValueError("an upload needs a project name (letters, numbers, _ and -) and a role (object or part)")
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(name.replace("\\", "/"))).lstrip(".")[-80:]
-    if not name.lower().endswith(core.PICTURE_TYPES + core.VIDEO_TYPES):
+    model = role == "object" and name.lower().endswith(MODEL_TYPES)  # the object's own 3D model: the run starts from it
+    if not (name.lower().endswith(core.PICTURE_TYPES + core.VIDEO_TYPES) or model):
         raise ValueError(f"{name or 'this file'} is no picture or video the pipeline reads "
-                         f"({', '.join(core.PICTURE_TYPES + core.VIDEO_TYPES)})")
+                         f"({', '.join(core.PICTURE_TYPES + core.VIDEO_TYPES)}, or a .glb model of the object)")
     if not 0 < length <= 2_000_000_000:
         raise ValueError("an upload is at most 2 GB")
     folder = os.path.join(UPLOADS, flow, role)
@@ -583,10 +598,16 @@ def create_flow(wanted):
             called.setdefault(role, text[:200])
     if not files["object"]:
         raise ValueError("one of your data must be the object: the model is built from it")
+    models = [f for f in files["object"] if f.lower().endswith(MODEL_TYPES)]  # the object's own model: the base, not built
+    files["object"] = [f for f in files["object"] if f not in models]
+    if len(models) > 1:
+        raise ValueError("one 3D model of the object at most")
+    if models and not files["object"]:
+        raise ValueError("with a 3D model, add one picture of it too (its front): the data sheet and the judges compare with it")
     words = " ".join(str(wanted.get("part_prompt") or "").split())[:400]
     if words and files["part"]:
         raise ValueError("a project has one part: its pictures or its words, not both")
-    for role, kept in files.items():  # what was taken off the page again is taken out of the upload folder too
+    for role, kept in {**files, "object": files["object"] + models}.items():  # what was taken off the page leaves the upload folder too
         folder = os.path.join(UPLOADS, file, role)
         for name in os.listdir(folder) if os.path.isdir(folder) else []:
             if f"pictures/uploads/{file}/{role}/{name}" not in kept:
@@ -612,7 +633,7 @@ def create_flow(wanted):
     if files["part"]:
         nodes.append({"id": "part_sheet", "type": "data_sheet", "role": "part", **name("part"), "in": {"pictures": "part"}})
     nodes.append({"id": "base", "type": "base", "seed": seed, "where": where, "resolution": resolution, "steps": steps,
-                  "in": {"data": "object_sheet"}})
+                  **({"given": models[0], "label": "02 Base model: yours"} if models else {}), "in": {"data": "object_sheet"}})
     if files["part"] or words:
         at = " ".join(str(wanted.get("at") or "").split())[:120]  # where the part goes, in words ("in the right hand")
         nodes.append({"id": "edit", "type": "edit", **({"at": at} if at else {}), **({"replace": True} if wanted.get("replace") else {}),
@@ -623,6 +644,10 @@ def create_flow(wanted):
             nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "in": {"model": before, "edit": "edit"}})
             nodes.append({"id": f"judge_{step}", "type": "judge", "step": step, "in": {"candidates": step, "edit": "edit"}})
             before = f"judge_{step}"
+    if not everything and not vision_ai_here():  # no vision AI where the nodes run: the data sheets and judges measure alone
+        for node in nodes:
+            if node["type"] in ("data_sheet", "judge"):
+                node["ai"] = False
     prompt = " ".join(str(wanted.get("prompt", "")).split())
     os.makedirs(FLOWS, exist_ok=True)
     save_flow(path, {"name": file, "about": prompt or "Made on the main page.", "prompt": prompt, "made_by": "app",

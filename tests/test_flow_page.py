@@ -35,7 +35,8 @@ class InTemporaryProject(unittest.TestCase):
                    mock.patch.object(page, "FLOWS", os.path.join(root, "flows")),
                    mock.patch.object(page, "HAND", os.path.join(root, "flows", "hand")),
                    mock.patch.object(page, "UPLOADS", os.path.join(root, "pictures", "uploads")),
-                   mock.patch.object(page, "GPU_HERE", True)]  # a computer with a GPU; WithoutAGpu tests the other one
+                   mock.patch.object(page, "GPU_HERE", True),  # a computer with a GPU; WithoutAGpu tests the other one
+                   mock.patch.object(page, "vision_ai_here", lambda: True)]  # nothing is asked: the vision AI counts as there
         for one in patches:
             one.start()
             self.addCleanup(one.stop)
@@ -62,10 +63,11 @@ class Uploads(InTemporaryProject):
         self.assertTrue(path.startswith("pictures/uploads/demo/part/"))
         self.assertNotIn("..", path)
 
-    def test_only_pictures_and_videos(self):
-        for name in ("model.glb", "script.py", "noending"):
+    def test_only_pictures_and_videos(self):  # and a .glb of the object (the run starts from it), never of the part
+        for role, name in (("object", "script.py"), ("object", "noending"), ("part", "model.glb")):
             with self.assertRaises(ValueError):
-                self.upload("demo", "object", name)
+                self.upload("demo", role, name)
+        self.assertEqual(self.upload("demo", "object", "model.glb"), "pictures/uploads/demo/object/model.glb")
 
     def test_project_name_and_role_are_checked(self):
         with self.assertRaises(ValueError):
@@ -182,6 +184,36 @@ class WithoutAGpu(InTemporaryProject):
             os.environ.pop("OLLAMA_HOST", None)
             with self.assertRaises(ValueError):
                 page.understand({"prompt": "a hat", "items": [{"name": "a.png"}]})
+
+
+class YourOwnModel(InTemporaryProject):
+    """A .glb of the object: the run starts from it (the base node takes it), its picture still makes the data sheet."""
+
+    def test_the_model_is_the_base_and_the_picture_the_sheet(self):
+        model = self.upload("demo", "object", "robot.glb", b"glTF model")
+        front = self.upload("demo", "object", "front.png")
+        sword = self.upload("demo", "part", "sword.png")
+        page.create_flow({"flow": "demo", "items": [{"path": model, "role": "object"}, {"path": front, "role": "object"},
+                                                     {"path": sword, "role": "part"}]})
+        nodes = {n["id"]: n for n in self.flow("demo")["nodes"]}
+        self.assertEqual(nodes["base"]["given"], model)
+        self.assertEqual(nodes["object"]["files"], [front])
+        self.assertTrue(os.path.isfile(os.path.join(self.root, model)))  # kept in the upload folder
+
+    def test_a_model_needs_a_picture_and_is_never_the_part(self):
+        model = self.upload("demo", "object", "robot.glb", b"glTF model")
+        with self.assertRaises(ValueError):
+            page.create_flow({"flow": "demo", "items": [{"path": model, "role": "object"}]})
+        with self.assertRaises(ValueError):
+            self.upload("demo", "part", "sword.glb", b"glTF model")
+
+    def test_the_base_node_takes_the_given_model(self):
+        glb = os.path.join(self.root, "pictures", "uploads", "demo", "object", "robot.glb")
+        os.makedirs(os.path.dirname(glb), exist_ok=True)
+        open(glb, "wb").write(b"glTF model")
+        job = core.base_model({"name": "demo", "path": ""}, given="pictures/uploads/demo/object/robot.glb")
+        self.assertEqual(job["steps"], [])
+        self.assertEqual(os.path.normpath(job["outputs"]["model"]["glb"]), os.path.normpath(glb))
 
 
 class OnTheServer(InTemporaryProject):
@@ -430,7 +462,7 @@ class OverHttp(WithServer):
         self.assertEqual((code, json.loads(answer)), (200, {"ok": True}))
         listed = json.loads(self.ask("/api/flows")[1])
         self.assertEqual([(f["file"], f["nodes"], f["app"]) for f in listed], [("demo", 10, True)])
-        code, answer = self.ask("/api/upload?flow=demo&role=object&name=model.glb", b"x", mine)
+        code, answer = self.ask("/api/upload?flow=demo&role=part&name=model.glb", b"x", mine)
         self.assertEqual(code, 400)
         self.assertIn("no picture or video", json.loads(answer)["error"])
 

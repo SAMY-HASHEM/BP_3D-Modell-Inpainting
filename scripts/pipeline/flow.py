@@ -30,7 +30,9 @@ import time
 
 import nodes_core as core
 
-BLENDER = os.environ.get("BLENDER", os.path.expanduser("~/Applications/blender/blender"))
+BLENDER = os.environ.get("BLENDER") or next(  # the usual place, or a portable Blender unpacked into the project's blender/
+    (p for p in (os.path.expanduser("~/Applications/blender/blender"), os.path.join(core.PROJECT, "blender", "blender")) if os.path.isfile(p)),
+    os.path.expanduser("~/Applications/blender/blender"))
 
 
 def models_of(results):
@@ -49,7 +51,8 @@ TYPES = {
                                                        s.get("ai", True), s.get("what", ""), s.get("sides", "")), None)),
     "base": ("02 Base model", ["data"], "TRELLIS.2",
              lambda i, s, name: (core.base_model(i["data"]["data"], s.get("where", "server"), s.get("mode", "multidiffusion"),
-                                                 str(s.get("resolution", "1024")), s.get("steps", 25), s.get("seed", 42), s.get("colours", "all"), s.get("view")), None)),
+                                                 str(s.get("resolution", "1024")), s.get("steps", 25), s.get("seed", 42), s.get("colours", "all"), s.get("view"),
+                                                 s.get("given")), None)),
     "pick_seed": ("02b Pick seed", ["data", "candidates"], "this PC: measured",
                   lambda i, s, name: (core.pick_seed(i["data"]["data"], models_of(i["candidates"])), None)),
     "edit": ("03 Edit", ["model", "part", "object"], "this PC: measured",

@@ -130,6 +130,21 @@
   .steps li.ok { border-color:var(--ok); } .steps li.bad { border-color:var(--bad); } .steps li.now { border-color:var(--now); }
   .steps b { display:block; } .steps small { color:#e9d5a4; } .steps .found { font-size:12.5px; margin-top:4px; color:#e9d5a4; }
   .note { font-size:13px; color:var(--dim); }
+  /* ------------------------------------------------ a building's window: what works there, what it did in this run */
+  #house { max-width:min(1040px, 96vw); width:100%; } #house h2 { margin-bottom:2px; } .b { cursor:pointer; } .card { cursor:pointer; }
+  #house .lead { color:#e9d5a4; margin:6px 0 10px; } #house .how { font-size:13.5px; color:#e9d5a4; } #house .how li { margin-bottom:3px; }
+  #house section { border:1.5px solid var(--line); border-radius:12px; padding:10px 12px; margin-top:12px; background:var(--raised); }
+  #house section.running { border-color:var(--gold); box-shadow:0 0 0 2px #f5b80044; } #house section.done { border-color:var(--ok); } #house section.failed { border-color:var(--bad); }
+  #house h3 { margin:0 0 4px; font-size:15px; display:flex; justify-content:space-between; gap:8px; } #house h3 small { font-weight:500; color:var(--dim); }
+  #house .views { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; margin-top:8px; }
+  #house figure { margin:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#0005; }
+  #house figure.used { border-color:var(--ok); box-shadow:0 0 0 1px var(--ok); } #house figure.unused { opacity:.6; }
+  #house figure img { width:100%; height:170px; object-fit:contain; display:block; background:#d9d6cf22; cursor:zoom-in; }
+  #house figcaption { padding:5px 7px; font-size:12px; line-height:1.4; } #house figcaption b { display:block; font-size:12.5px; }
+  #house .wide { width:100%; border-radius:10px; margin-top:8px; cursor:zoom-in; background:#0005; }
+  #house .sides { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:6px; } #house .sides img { height:150px; }
+  #house table { border-collapse:collapse; font-size:12.5px; margin-top:6px; width:100%; } #house td, #house th { border-bottom:1px solid var(--line); padding:3px 6px; text-align:left; }
+  #house .why { margin:6px 0 0; padding-left:18px; font-size:12.5px; color:#e9d5a4; }
   .direct { border:1.5px solid var(--ok); border-radius:10px; padding:9px 12px; margin:10px 0; background:#27a56718; }
   .direct.off { border-color:var(--line); background:none; } .direct a.main { display:inline-block; margin-top:7px; text-decoration:none; padding:6px 13px; border-radius:10px; background:var(--sand); color:var(--ink); font-weight:600; }
 </style>
@@ -195,6 +210,11 @@
   </details>
   <ol class="steps" id="bridgeSteps"></ol>
   <div class="buttons"><button class="main" id="bridgeTest">Test the connection</button><form method="dialog"><button>Close</button></form></div>
+</dialog>
+<dialog id="house" aria-labelledby="houseTitle">
+  <h2 class="display" id="houseTitle"></h2>
+  <div id="houseBody"></div>
+  <form method="dialog" style="margin-top:12px"><button class="main">Close</button></form>
 </dialog>
 <dialog id="pages">
   <h2 class="display">Other pages</h2>
@@ -408,7 +428,8 @@ const parts = {};  // per building: its svg group, its bar in the map, its card
       el("path", {d: `M${x - s} ${y - 18 * s} Q${(x - s + ex) / 2} ${y - 26 * s} ${ex} ${ey}`, fill: "none", stroke: a % 40 ? "#3f8f4f" : "#2f7a43", "stroke-width": 2.6 * s, "stroke-linecap": "round"}); } }
   for (const b of BUILDINGS) {
     const bx = b.x, by = b.y - b.r - 22, g = el("g", {class: "b", tabindex: 0, role: "img", "aria-label": b.name});
-    g.addEventListener("click", () => parts[b.id].card.scrollIntoView({behavior: "smooth", block: "nearest"}));
+    g.addEventListener("click", () => openHouse(b.id));
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openHouse(b.id); } });
     el("ellipse", {cx: bx, cy: by + 4, rx: b.r * 2.2, ry: b.r * 1.8, fill: "url(#halo)", class: "glow"}, g);
     el("ellipse", {cx: bx + 8, cy: by + b.r * .7, rx: b.r * 1.25, ry: b.r * .3, fill: "#0003", filter: "url(#soft)"}, g);
     SHAPES[b.shape](el("g", {class: "build"}, g), bx, by, b.r, b.c);
@@ -431,6 +452,7 @@ const parts = {};  // per building: its svg group, its bar in the map, its card
     const card = h("div", {class: "card"}, h("div", {class: "top"}, h("b", {}, b.name), h("span", {class: "state"}, "waiting")),
       h("div", {class: "runs"}, b.runs), h("div", {class: "tags"}, h("span", {class: "tag"}, b.kind), h("span", {class: "tag " + b.where}, WHERE[b.where])),
       h("div", {class: "bar"}, h("i")), h("div", {class: "time"}, h("span", {}, "0 s"), h("span", {}, b.about ? "about " + clock(b.about * 60) : "")));
+    card.addEventListener("click", () => openHouse(b.id)); card.title = "What works here, and what it did in this run";
     $("cards").append(card);
     parts[b.id] = {g, fill, card, tag: card.querySelector(".tags .tag:last-child"), sub: g.querySelector(".what")};
   }
@@ -590,12 +612,15 @@ function showPlan(text, plan) {
     wordsRow.hidden = newParts.length > 0;
     let stop = "";
     if (!objects.length) stop = "One of your data must be the model to change.";
-    else if (used.some(i => i.kind === "model")) stop = "A 3D model as data is shown here, but the run can't start from one yet: it builds the model from pictures or a video. Set it to “don't use”, or add pictures of it.";
+    else if (newParts.some(i => i.kind === "model")) stop = "A 3D model can only be the model to change (the run starts from it), not the new part: give the new part as pictures or a video.";
+    else if (objects.filter(i => i.kind === "model").length > 1) stop = "One 3D model of the thing to change at most.";
+    else if (objects.some(i => i.kind === "model") && !objects.some(i => i.kind === "picture" || i.kind === "video")) stop = "With your 3D model, add one picture of it too (its front): the data sheet and the judges compare with it.";
     else if (used.some(i => i.kind === "other")) stop = "One of the files is no picture, video or 3D model: set it to “don't use”.";
     else if (!/^[A-Za-z0-9_-]{1,40}$/.test(name.value)) stop = "The project name has only letters, numbers, _ and -.";
     else if (!LIVE) stop = "This page was opened as a file, so it can't run anything. Start it with flow_page.py, or watch the demo.";
     run.disabled = !!stop; why.className = "why " + (stop ? "stop" : "go");
-    const minutes = TYPICAL.base + (newParts.length || words.value.trim() ? 3 * TYPICAL.inpaint + 10 : 2);
+    const given = objects.some(i => i.kind === "model");  // your own model is the base: TRELLIS.2 doesn't build one
+    const minutes = (given ? 0 : TYPICAL.base) + (newParts.length || words.value.trim() ? 3 * TYPICAL.inpaint + 10 : 2);
     why.textContent = stop || `Ready. This takes about ${clock(minutes * 60)}. Nothing is sent before you press Run.`;
   }
   [name, words].forEach(input => input.oninput = check);
@@ -679,6 +704,7 @@ function follow(name, fresh) {
     if (!running || running.name !== name) return;
     let flow, fetched = Date.now(); try { flow = await get("/api/flow?name=" + encodeURIComponent(name)); fetched = Date.now(); } catch (error) { line.textContent = "The page's server does not answer: " + error.message; return setTimeout(tick, 5000); }
     places(flow.runs === "server" || ON_SERVER);
+    lastFlow = flow; refreshHouse();
     const {states, active} = cityOf(flow), all = flow.nodes.length, done = flow.nodes.filter(n => n.status === "done").length, failed = flow.nodes.find(n => n.status === "failed");
     const busy = flow.running || (flow.run && flow.run.active);
     if (busy) running.wasBusy = true;
@@ -696,6 +722,92 @@ function follow(name, fresh) {
   };
   tick();
 }
+// ================================================================ a building's window
+// What works there in plain words (ABOUT), and what it did in the run the page follows or followed last (lastFlow):
+// the gate the files, the scribes the data sheet, the pyramid and the forge their models, the pavilion its plan from
+// every side, the hall its judgement. It is drawn again while the run goes on, whenever one of its steps changed.
+let lastFlow = null, openId = null, openKey = "";
+const ABOUT = {
+  gate: ["Your data comes in here and is sorted: every picture, video or 3D model goes to the object (what is changed) or to the new part.",
+         ["The files are saved for this project on the computer the work runs on.", "Nothing is judged here yet: that is the scribes' work."]],
+  office: ["The scribes write the data sheet: they look at every picture and write down what it is good for.",
+           ["A sheet with several views side by side is cut into single views.", "Each view is measured: its size, its sharpness, grey (a clay render) or colour, cut off at a border or complete.",
+            "Each view gets its side: front, three-quarter, side or back (the vision AI says it, or you do).",
+            "The rules pick the views the model is built from: the most frontal complete one first, then one per other side."]],
+  factory: ["TRELLIS.2 builds the 3D model from the views the scribes chose, in three stages, each finer than the one before.",
+            ["1 Structure: a rough block model on a 64 × 64 × 64 grid of small cubes: where is something.", "2 Shape: the fine surface inside those cubes: face, hair strands, folds.",
+             "3 Colours: the colours and materials painted onto that surface.", "With several views (multidiffusion) every step looks at all of them and mixes what they say. Your own model, when you give one, is taken as it is."]],
+  studio: ["The painters make the plan of the change: how the model should look afterwards, from every side.",
+           ["BEFORE: a picture of the model as it is.", "AFTER: the same picture with the old part gone and the new part put in.", "MASK: everything that changes. The 3D area says which small cubes may change."]],
+  clinic: ["The House of life gives the model a skeleton: named bones such as head or hand_left, so a new part can be put exactly into a hand.",
+           ["UniRig finds the bones.", "Not in the runs of this page yet."]],
+  workshop: ["The builders put the new part in its place in 3D: the old part out, the new one where it belongs, then pictures of the plan from 4 or 8 sides.",
+             ["Not in the runs of this page yet: the way of the first success (place_part.py)."]],
+  forge: ["In the forge TRELLIS.2 makes only the marked area new: shape, then details, then colours. Everything outside stays exactly as it was.",
+          ["The rewind: the original model is followed back to noise, and outside the area it stays on that path.", "The new area looks at the original around it (key-value injection), so it grows into what is kept."]],
+  court: ["The judges look at every result before it goes on: is the rest of the model kept, is the new part there, do the colours fit.",
+          ["Measured first: the model's pictures against the plan, side by side.", "Then the vision AI looks at it too, where it is installed.", "A result that is not good enough is refused."]],
+  gallery: ["The finished model, shown to you in 3D.", ["Drag to turn it, double click for the full screen."]],
+};
+const zoom = src => h("img", {src, loading: "lazy", onclick: () => window.open(src, "_blank")});
+const cleanNote = note => String(note || "").replace(/[▀-▟]+/g, "").replace(/\s+/g, " ").trim();
+function stepBody(n) {  // what one step of the flow shows: its pictures, its data sheet, its model, its judgement
+  const out = [];
+  if (n.type === "input" && n.files) out.push(h("div", {class: "views"}, n.files.map(f => h("figure", {}, f.video ? h("video", {src: f.url, controls: true, style: "width:100%"}) : zoom(f.url), h("figcaption", {}, f.name)))));
+  if (n.type === "data_sheet" && n.sheet) {
+    const s = n.sheet, order = {};
+    (s.why || []).forEach(line => { const m = line.match(/(in\d+_view\d+)/); if (m && !(m[1] in order)) order[m[1]] = Object.keys(order).length + 1; });
+    if (s.what) out.push(p(h("b", {}, "What it shows: "), s.what));
+    out.push(h("div", {class: "views"}, s.views.map(v => h("figure", {class: v.base || v.sides ? "used" : "unused"}, zoom(v.url),
+      h("figcaption", {}, h("b", {}, v.base ? `used for the model${order[v.name] ? " · " + ["main view", "second", "third", "fourth", "fifth"][order[v.name] - 1] : ""}` : v.sides ? "one of the part's sides" : "not used"),
+        `side: ${v.side || "?"} · ${v.colour === "grey" ? "grey (shape only)" : "colour"}`, (v.cut_off || []).length ? h("br") : null,
+        (v.cut_off || []).length ? `cut off at the ${v.cut_off.join(", ")}` : "")))));
+    if ((s.why || []).length) out.push(h("ul", {class: "why"}, s.why.map(w => h("li", {}, w))));
+    if (n.picture) out.push(p(h("small", {class: "note"}, "The whole sheet at a glance (click a picture to see it big):")), h("img", {class: "wide", src: n.picture, onclick: () => window.open(n.picture, "_blank")}));
+  }
+  if (["base", "inpaint"].includes(n.type) && n.model_url) out.push(viewer(n.model_url));
+  if (n.type === "base" && n.picture) out.push(p(h("small", {class: "note"}, "The model next to the views it was built from:")), h("img", {class: "wide", src: n.picture, onclick: () => window.open(n.picture, "_blank")}));
+  if (n.compare) {
+    const c = n.compare;
+    if (c.verdict || c.why) out.push(p(h("b", {}, c.verdict ? `Verdict: ${c.verdict}. ` : ""), c.why || ""));
+    for (const g of c.groups || []) {
+      out.push(p(h("b", {}, g.name + (g.best ? " · the best" : ""))));
+      if (g.scores) out.push(h("table", {}, h("tr", {}, Object.keys(g.scores).filter(k => g.scores[k] != null).map(k => h("th", {}, k))),
+        h("tr", {}, Object.keys(g.scores).filter(k => g.scores[k] != null).map(k => h("td", {}, typeof g.scores[k] === "number" ? g.scores[k].toFixed(1) : String(g.scores[k]))))));
+      if (g.ai && g.ai.why) out.push(p(h("small", {}, `The vision AI: ${g.ai.score != null ? g.ai.score + " · " : ""}${g.ai.why}`)));
+      for (const side of g.sides || []) out.push(p(h("small", {class: "note"}, side.name)),
+        h("div", {class: "sides"}, [[c.left || "Before", side.before], [c.right || "After", side.after], ["Mask", side.mask]].filter(([, src]) => src).map(([t, src]) => h("figure", {}, zoom(src), h("figcaption", {}, t)))));
+    }
+  }
+  if (n.type === "edit" && n.area_map) out.push(p(h("small", {class: "note"}, "The 3D area: red goes, blue may grow, green is kept.")), h("img", {class: "wide", src: n.area_map, onclick: () => window.open(n.area_map, "_blank")}));
+  return out;
+}
+function houseBody(id) {
+  const b = B[id], [lead, how] = ABOUT[id];
+  const items = [h("p", {class: "lead"}, lead), h("ul", {class: "how"}, how.map(x => h("li", {}, x))),
+                 h("div", {class: "tags"}, h("span", {class: "tag"}, b.kind), h("span", {class: "tag " + b.where}, WHERE[ON_SERVER ? "server" : b.where]), h("span", {class: "tag"}, b.runs))];
+  const nodes = lastFlow ? lastFlow.nodes.filter(n => b.types.includes(n.type)) : [];
+  if (id === "gallery" && lastFlow) { const last = [...lastFlow.nodes].reverse().find(n => n.model_url); if (last) nodes.push({...last, label: "Your finished model", type: "base", picture: null}); }
+  if (!lastFlow) items.push(p(h("small", {class: "note"}, "No run yet: start one in the chat, and what this building does with your data shows here.")));
+  else if (!nodes.length) items.push(p(h("small", {class: "note"}, `Not in the run of ${lastFlow.name}: this run does not need this building.`)));
+  for (const n of nodes) items.push(h("section", {class: n.status}, h("h3", {}, h("span", {}, n.label), h("small", {}, WORD[n.status] || n.status, n.minutes ? ` · ${n.minutes} min` : "")),
+    cleanNote(n.note) ? p(h("small", {}, cleanNote(n.note))) : null, ...(n.status === "done" ? stepBody(n) : [p(h("small", {class: "note"}, n.status === "running" ? "Working on it now: what it makes shows here as soon as it is done." : "Its turn has not come yet."))])));
+  return items;
+}
+function openHouse(id) {
+  openId = id; openKey = "";
+  $("houseTitle").textContent = B[id].name; refreshHouse(true);
+  if (!$("house").open) $("house").showModal();
+}
+function refreshHouse(now) {  // drawn again only when one of its steps changed: a 3D view is not started over every second
+  if (!openId || (!now && !$("house").open)) return;
+  const nodes = lastFlow ? lastFlow.nodes.filter(n => B[openId].types.includes(n.type)) : [];
+  const key = JSON.stringify(nodes.map(n => [n.id, n.status, n.minutes, n.status === "running" ? "" : cleanNote(n.note)])) + (lastFlow ? lastFlow.name : "");
+  if (key === openKey && !now) return;
+  openKey = key; $("houseBody").replaceChildren(...houseBody(openId));
+}
+$("house").addEventListener("close", () => { openId = null; });
+
 // the 3D view of a result, with a button that makes it fill the screen (a double click or F does too, Esc goes back)
 function viewer(src) {
   const view = h("model-viewer", {src, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "0.6", alt: "The result in 3D", tabindex: 0});
@@ -707,6 +819,7 @@ function viewer(src) {
   return box;
 }
 function finish(flow, note, stop, failed) {  // (rule 4) a run ends with one clear message
+  lastFlow = flow; refreshHouse();
   stop.remove(); running = null; localStorage.removeItem("ui_project"); ready();
   const last = [...flow.nodes].reverse().find(n => n.model_url), all = flow.nodes.every(n => n.status === "done");
   if (failed) return say("problem", p(h("b", {}, `${failed.label} did not work. `), (failed.note || "").slice(0, 300)), p("What is done so far is kept. You can look at every step on ", h("a", {href: "/old/app", style: "color:inherit"}, "the detailed page"), ", or send your message again to try once more."));
