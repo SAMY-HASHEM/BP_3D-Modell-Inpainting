@@ -75,6 +75,10 @@
   .compose textarea { resize:none; min-height:42px; max-height:140px; background:var(--ink); border:1.5px solid var(--line); border-radius:10px; padding:9px 11px; }
   .compose .hint { font-size:11.5px; color:var(--dim); }
   model-viewer { width:100%; height:300px; background:#0007; border-radius:10px; margin-top:6px; }
+  /* the 3D view of a result fills the screen: its button, a double click, or F; Esc goes back */
+  .viewer { position:relative; } .viewer .full { position:absolute; top:12px; right:6px; z-index:2; padding:4px 10px; font-size:12.5px; background:#14100Acc; }
+  .viewer:fullscreen { background:#1a140c; display:flex; } .viewer:fullscreen model-viewer { height:100vh; margin:0; border-radius:0; }
+  .viewer:fullscreen .full { top:16px; right:16px; font-size:14px; }
   /* ------------------------------------------------ the city */
   .town { display:flex; flex-direction:column; overflow:hidden; }
   .town .scroll { overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
@@ -692,12 +696,22 @@ function follow(name, fresh) {
   };
   tick();
 }
+// the 3D view of a result, with a button that makes it fill the screen (a double click or F does too, Esc goes back)
+function viewer(src) {
+  const view = h("model-viewer", {src, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "0.6", alt: "The result in 3D", tabindex: 0});
+  const button = h("button", {class: "full", title: "Fill the screen (F); Esc goes back"}, "⛶ Full screen"), box = h("div", {class: "viewer"}, view, button);
+  const toggle = () => document.fullscreenElement === box ? document.exitFullscreen() : box.requestFullscreen().catch(() => toast("This browser can't show it full screen."));
+  button.onclick = toggle; view.addEventListener("dblclick", toggle);
+  view.addEventListener("keydown", e => { if (e.key === "f" || e.key === "F") toggle(); });
+  document.addEventListener("fullscreenchange", () => { button.textContent = document.fullscreenElement === box ? "✕ Back" : "⛶ Full screen"; });
+  return box;
+}
 function finish(flow, note, stop, failed) {  // (rule 4) a run ends with one clear message
   stop.remove(); running = null; localStorage.removeItem("ui_project"); ready();
   const last = [...flow.nodes].reverse().find(n => n.model_url), all = flow.nodes.every(n => n.status === "done");
   if (failed) return say("problem", p(h("b", {}, `${failed.label} did not work. `), (failed.note || "").slice(0, 300)), p("What is done so far is kept. You can look at every step on ", h("a", {href: "/old/app", style: "color:inherit"}, "the detailed page"), ", or send your message again to try once more."));
   const done = say("guide", p(h("b", {}, all ? "Finished. " : "Stopped. "), all ? "Your model is in the gallery." : "The steps that were done are kept; Run again goes on from there."));
-  if (last) done.append(h("model-viewer", {src: last.model_url, "camera-controls": true, "auto-rotate": true, "shadow-intensity": "0.6", alt: "The result in 3D"}), p(h("small", {}, "Drag to turn it. The file: " + last.model)));
+  if (last) done.append(viewer(last.model_url), p(h("small", {}, "Drag to turn it, double click for the full screen. The file: " + last.model)));
 }
 
 // ---------------------------------------------------------------- a demo: the first run that worked, played in a minute
