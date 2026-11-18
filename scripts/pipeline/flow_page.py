@@ -641,7 +641,7 @@ def create_flow(wanted):
                      else {"id": "edit", "type": "edit", "prompt": words, "in": {"model": "base", "object": "object_sheet"}})
         before = "base"
         for step in ("shape", "details", "colours"):
-            nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "in": {"model": before, "edit": "edit"}})
+            nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "where": where, "in": {"model": before, "edit": "edit"}})
             nodes.append({"id": f"judge_{step}", "type": "judge", "step": step, "in": {"candidates": step, "edit": "edit"}})
             before = f"judge_{step}"
     if not everything and not vision_ai_here():  # no vision AI where the nodes run: the data sheets and judges measure alone

@@ -227,6 +227,9 @@ class OnTheServer(InTemporaryProject):
                 flow = self.flow("demo")
                 self.assertNotIn("runs", flow, where)
                 self.assertEqual(next(n for n in flow["nodes"] if n["type"] == "base")["where"], "pc", where)
+                part = self.upload("demo", "part", "crown.png")
+                page.create_flow({"flow": "demo", "items": [item, {"path": part, "role": "part"}], "settings": {"where": where}})
+                self.assertEqual({n["where"] for n in self.flow("demo")["nodes"] if n["type"] == "inpaint"}, {"pc"}, where)  # the forge too
 
 
 class TheBridge(InTemporaryProject):

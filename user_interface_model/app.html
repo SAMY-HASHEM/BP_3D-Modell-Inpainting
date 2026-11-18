@@ -791,7 +791,7 @@ function houseBody(id) {
   if (!lastFlow) items.push(p(h("small", {class: "note"}, "No run yet: start one in the chat, and what this building does with your data shows here.")));
   else if (!nodes.length) items.push(p(h("small", {class: "note"}, `Not in the run of ${lastFlow.name}: this run does not need this building.`)));
   for (const n of nodes) items.push(h("section", {class: n.status}, h("h3", {}, h("span", {}, n.label), h("small", {}, WORD[n.status] || n.status, n.minutes ? ` · ${n.minutes} min` : "")),
-    cleanNote(n.note) ? p(h("small", {}, cleanNote(n.note))) : null, ...(n.status === "done" ? stepBody(n) : [p(h("small", {class: "note"}, n.status === "running" ? "Working on it now: what it makes shows here as soon as it is done." : "Its turn has not come yet."))])));
+    cleanNote(n.note) ? p(h("small", {}, cleanNote(n.note))) : null, ...(n.status === "done" ? stepBody(n) : [p(h("small", {class: "note"}, n.status === "running" ? "Working on it now: what it makes shows here as soon as it is done." : n.status === "failed" ? "This step stopped: the reason is above. The steps after it wait until it is run again." : n.status === "unused" ? "Not needed in this run." : "Its turn has not come yet."))])));
   return items;
 }
 function openHouse(id) {
