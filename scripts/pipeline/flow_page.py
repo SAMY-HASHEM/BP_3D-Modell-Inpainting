@@ -86,7 +86,7 @@ SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25, "given": ""}, "pick_seed": {},
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70},
-            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4}, "check": {"ai": True}, "finish": {}}
+            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4}, "check": {"ai": True}, "finish": {}, "part_views": {"way": "angles", "seed": 1}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
 # Can this computer run the AI itself? Only with an NVIDIA GPU (TRELLIS.2 needs CUDA). Without one (a laptop: its
 # graphics are in the processor) every run goes to the uni server as one job, whatever a page asks for; this computer
@@ -641,8 +641,14 @@ def create_flow(wanted):
                       "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}} if files["part"]
                      else {"id": "edit", "type": "edit", "prompt": words, "in": {"model": "base", "object": "object_sheet"}})
         if files["part"]:  # the structure of docs/FIRST-SUCCESS.md: the part as its own model, placed, details + colours only
+            sheet = "part_sheet"
+            if len(files["part"]) == 1 and files["part"][0].lower().endswith(core.PICTURE_TYPES):  # one picture: its back is guessed
+                edit_at = next(k for k, n in enumerate(nodes) if n["id"] == "edit")  # a node comes after the ones it needs
+                nodes.insert(edit_at, {"id": "part_views", "type": "part_views", "in": {"data": "part_sheet"}})
+                sheet = "part_views"
+                nodes[edit_at + 1]["in"]["part"] = sheet
             nodes.append({"id": "part_model", "type": "base", "label": "02 The part's own model", "seed": seed, "where": where,
-                          "resolution": "1024", "steps": steps, "in": {"data": "part_sheet"}})
+                          "resolution": "1024", "steps": steps, "in": {"data": sheet}})
             nodes.append({"id": "place", "type": "place", "zoom": 0.25, "size": 0.8, "in": {"part_model": "part_model", "edit": "edit"}})
             nodes.append({"id": "check", "type": "check", "in": {"edit": "place"}})
             before, steps_, edit_ = "place", ("details", "colours"), "check"

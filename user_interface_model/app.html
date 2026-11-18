@@ -250,7 +250,7 @@ const BUILDINGS = [
   {id: "gate",     name: "City gate",        runs: "Your data arrives and is sorted",            kind: "processing", where: "device", split: "device", about: 0.2, who: "guard",    types: ["input"],              x: 90,  y: 570, c: "#c0392b", shape: "pylon",   r: 30},
   {id: "office",   name: "House of scribes", runs: "The local vision AI reads what every picture shows", kind: "local AI",   where: "server", split: "device", about: 1,   who: "clerk",    types: ["data_sheet"],         x: 425, y: 540, c: "#2f6fb5", shape: "house",   r: 36},
   {id: "factory",  name: "The great pyramid", runs: "TRELLIS.2 builds the 3D model",             kind: "model",      where: "server", split: "server", about: 15,  who: "engineer", types: ["base"],               x: 860, y: 180, c: "#2f6fb5", shape: "pyramid", r: 50},
-  {id: "studio",   name: "Painters' pavilion", runs: "Qwen-Image-Edit paints your wish",         kind: "local AI",   where: "server", split: "device", about: 2,   who: "painter",  types: ["edit"],               x: 450, y: 160, c: "#c0392b", shape: "kiosk",   r: 40},
+  {id: "studio",   name: "Painters' pavilion", runs: "Qwen-Image-Edit paints your wish",         kind: "local AI",   where: "server", split: "device", about: 2,   who: "painter",  types: ["edit", "part_views"], x: 450, y: 160, c: "#c0392b", shape: "kiosk",   r: 40},
   {id: "clinic",   name: "House of life",    runs: "UniRig finds the bones",                     kind: "model",      where: "server", split: "device", about: 1,   who: "doctor",   types: ["rig"],                x: 595, y: 560, c: "#2aa58a", shape: "mastaba", r: 38},
   {id: "workshop", name: "Builders' yard",   runs: "Puts the new part in its place, and the result back into the whole",             kind: "processing", where: "server", split: "device", about: 4,   who: "fitter",   types: ["place", "finish"],    x: 650, y: 150, c: "#d98a2b", shape: "yard",    r: 40},
   {id: "forge",    name: "The forge",        runs: "TRELLIS.2 inpaints shape, details, colours", kind: "model",      where: "server", split: "server", about: 90,  who: "smith",    types: ["inpaint"],            x: 900, y: 400, c: "#c0392b", shape: "step",    r: 46},
@@ -258,7 +258,7 @@ const BUILDINGS = [
   {id: "gallery",  name: "The gallery",      runs: "Your finished model",                        kind: "processing", where: "device", split: "device", about: 0,   who: "host",     types: [],                     x: 95,  y: 215, c: "#2aa58a", shape: "obelisk", r: 36},
 ];
 const B = Object.fromEntries(BUILDINGS.map(b => [b.id, b]));
-const TYPICAL = {input: 0.2, data_sheet: 1, base: 15, pick_seed: 2, edit: 2, inpaint: 30, judge: 2, rig: 1, place: 4, check: 1, finish: 0.5};  // minutes per node
+const TYPICAL = {input: 0.2, data_sheet: 1, base: 15, pick_seed: 2, edit: 2, inpaint: 30, judge: 2, rig: 1, place: 4, check: 1, finish: 0.5, part_views: 3};  // minutes per node
 const WHERE = {device: "our device", server: "uni server"};
 
 const NS = "http://www.w3.org/2000/svg", svg = $("city");

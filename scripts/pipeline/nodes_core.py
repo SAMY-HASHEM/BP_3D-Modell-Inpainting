@@ -289,6 +289,19 @@ def sheet_views(data, which):
     return [project_path(paths[name]) for name in sheet["lists"][which]]
 
 
+def part_views(data, way="angles", seed=1):
+    """01b: a part with one picture only gets its missing sides from the picture AI (views_from_picture.py): from one
+    picture TRELLIS.2 guesses the back, and the red book of Nov 19 got a grey-blue painting as its back cover. Writes a
+    data sheet of its own (the four views in turning order, the front first), which the part's model and the edit read."""
+    front = sheet_views(data, "base")[0]
+    what = json.load(open(data["path"])).get("what") or ""
+    folder = node_folder(data["name"], "01b_part_views", {"front": stamp(front), "way": way, "seed": seed})
+    out = os.path.join(folder, "sheet.json")
+    command = py("generation/views_from_picture.py", front, "--way", way, "--seed", seed, "--out", folder, "--sheet", what)
+    return {"folder": folder, "steps": [(command, "01b the part's missing sides (picture AI)", out)],
+            "outputs": {"data": {**data, "path": out}, "sheet": os.path.join(folder, "overview.jpg")}}
+
+
 def base_model(data, where="server", mode="multidiffusion", resolution="1024", steps=25, seed=42, colours="all", view=None,
                given=None):
     """02: the object's model from the views its data sheet chose (the main view first).

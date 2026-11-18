@@ -96,17 +96,26 @@ class CreatingAFlow(InTemporaryProject):
         # docs/FIRST-SUCCESS.md: the part as its own model, placed in 3D, the plan judged, details and colours only
         made = self.create(parts=1)
         ids = [n["id"] for n in made["nodes"]]
-        self.assertEqual(ids, ["object", "part", "object_sheet", "part_sheet", "base", "edit", "part_model", "place", "check",
-                               "details", "judge_details", "colours", "judge_colours", "finish"])
+        self.assertEqual(ids, ["object", "part", "object_sheet", "part_sheet", "base", "part_views", "edit", "part_model", "place",
+                               "check", "details", "judge_details", "colours", "judge_colours", "finish"])
         node = {n["id"]: n for n in made["nodes"]}
-        self.assertEqual(node["edit"]["in"], {"model": "base", "part": "part_sheet", "object": "object_sheet"})
-        self.assertEqual(node["part_model"]["in"], {"data": "part_sheet"})
+        # one picture of the part: the picture AI makes its other sides first (its back is not guessed by TRELLIS.2)
+        self.assertEqual(node["part_views"]["in"], {"data": "part_sheet"})
+        self.assertEqual(node["edit"]["in"], {"model": "base", "part": "part_views", "object": "object_sheet"})
+        self.assertEqual(node["part_model"]["in"], {"data": "part_views"})
         self.assertEqual(node["place"]["in"], {"part_model": "part_model", "edit": "edit"})
         self.assertEqual(node["details"]["in"], {"model": "place", "edit": "check"})  # waits for the plan's pass
         self.assertEqual(node["finish"]["in"], {"model": "judge_colours", "edit": "check"})
         edit = node["edit"]
         self.assertNotIn("prompt", edit)
         self.assertNotIn("what", next(n for n in made["nodes"] if n["id"] == "part_sheet"))  # no prompt: the local AI says what it is
+
+    def test_a_part_with_several_pictures_gets_no_made_sides(self):
+        made = self.create(parts=2)
+        node = {n["id"]: n for n in made["nodes"]}
+        self.assertNotIn("part_views", node)
+        self.assertEqual(node["part_model"]["in"], {"data": "part_sheet"})
+        self.assertEqual(node["edit"]["in"]["part"], "part_sheet")
 
     def test_a_part_from_words_needs_no_part_input(self):
         made = self.create(part_prompt="  a wide   pointed hat on the head ")

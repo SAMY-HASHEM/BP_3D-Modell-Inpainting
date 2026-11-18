@@ -164,6 +164,9 @@ def main():
     parser.add_argument("--way", choices=["angles", "sheet"], default="angles")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--megapixels", type=float, default=1.6, help="size of the whole sheet (--way sheet)")
+    parser.add_argument("--out", help="the folder to write (a flow node's); default outputs/views/<front picture>_<way>")
+    parser.add_argument("--sheet", metavar="WHAT", help="also write sheet.json, a data sheet as data_sheet.py writes one: "
+                        "the four views in turning order (the front first) are the base and the sides; WHAT = what they show")
     args = parser.parse_args()
     if not args.pictures and not args.prompt:
         parser.error("give pictures, or a --prompt")
@@ -172,7 +175,7 @@ def main():
     missing = [a for a in ANGLES if a not in given]
     name = picture_name(sort_pictures(args.pictures)[0]) if args.pictures else \
         re.sub(r"[^a-z0-9]+", "-", args.prompt.lower()).strip("-")[:40]
-    folder = os.path.join(OUTPUT_DIR, "views", f"{name}_{args.way}")
+    folder = args.out or os.path.join(OUTPUT_DIR, "views", f"{name}_{args.way}")
     os.makedirs(folder, exist_ok=True)
     print(f"Given: {', '.join(ANGLES[a] for a in given) or 'nothing'}; "
           f"missing: {', '.join(ANGLES[a] for a in missing) or 'nothing'}", flush=True)
@@ -212,6 +215,13 @@ def main():
         overview.paste(t, (x, 0))
         x += t.width
     overview.save(os.path.join(folder, "overview.jpg"), quality=90)
+    if args.sheet is not None:  # the sides are known here (made at these angles): no local AI has to guess them
+        import json
+        names = [f"view_{k:02d}_{angle:03d}deg" for k, angle in enumerate(views)]
+        json.dump({"what": args.sheet, "views": [{"name": n, "path": os.path.abspath(os.path.join(folder, n + ".png")),
+                                                  "side": ANGLES[a].split()[0], "made": a in made} for n, a in zip(names, views)],
+                   "lists": {"base": names, "sides": names, "why": [f"the front and {len(made)} side(s) made by Qwen-Image-Edit ({args.way}), in turning order"]}},
+                  open(os.path.join(folder, "sheet.json"), "w"), indent=1)
     print(f"Done in {time.time() - start:.0f} s ({len(made)} made): {folder}")
 
 
