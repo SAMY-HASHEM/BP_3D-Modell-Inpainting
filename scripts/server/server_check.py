@@ -78,7 +78,9 @@ def main():
         models = [m["name"] for m in json.load(urllib.request.urlopen(host + "/api/tags", timeout=5)).get("models", [])]
     except Exception:  # noqa: BLE001
         models = None
-    part("Ollama with qwen3.6:27b", models is not None and any(m.startswith("qwen3.6:27b") for m in models),
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pipeline"))
+    from judge import MODEL
+    part(f"Ollama with {MODEL}", models is not None and any(m.startswith(MODEL) for m in models),
          "the vision AI: the data sheet's sides, the judges' look, understanding a request",
          "bash install_server_extras.sh ollama   (without it the measured numbers decide alone, and all pictures count as front views)",
          f"program: {ollama}, answering: {models}")

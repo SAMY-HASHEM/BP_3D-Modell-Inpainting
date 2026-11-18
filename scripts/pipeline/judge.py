@@ -21,7 +21,10 @@ import urllib.request
 from PIL import Image, ImageDraw
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-MODEL = "qwen3.6:27b"
+# The local vision AI of every judge (also grid_judge, data_sheet, pick_seed, edit_judge, picture_check, the web page).
+# qwen3.6:27b is the one meant; the uni server's Ollama (0.13.0) can't pull it yet, so qwen3-vl:30b stands in.
+# Another one for a single run: JUDGE_MODEL=qwen3.6:27b python ...
+MODEL = os.environ.get("JUDGE_MODEL", "qwen3-vl:30b")
 
 # One candidate at a time (the artist's picture + its front and side render): with all candidates in one question
 # (9 pictures) the AI mixed up the numbers and picked the worst one.

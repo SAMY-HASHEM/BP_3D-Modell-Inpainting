@@ -36,7 +36,7 @@ from PIL import Image, ImageDraw
 from project_texture import fit_camera, load_meshes, object_masks, render_meshes, to_clip
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-JUDGE = "qwen3.6:27b"
+from judge import MODEL as JUDGE  # noqa: E402  (one setting for every judge: judge.py)
 MIN_PIXELS = 600  # a block needs at least this many visible pixels in a picture to be judged there
 MIN_OVERLAP = 0.8  # a picture only judges if its camera fits this well (the model's pose; action poses fit 0.4-0.6)
 
