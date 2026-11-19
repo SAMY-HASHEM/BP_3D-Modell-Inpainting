@@ -1224,9 +1224,12 @@ class Page(BaseHTTPRequestHandler):
 
     def file(self, relative):
         """A picture or a video out of outputs/ or pictures/; a video also in pieces (the browser asks for a Range)."""
-        path = os.path.realpath(os.path.join(core.PROJECT, relative))
-        inside = any(path.startswith(os.path.realpath(os.path.join(core.PROJECT, top)) + os.sep) for top in OPEN)
-        model = path.lower().endswith(".glb") and path.startswith(os.path.realpath(os.path.join(core.PROJECT, "outputs")) + os.sep)
+        # the path as written (.. taken out, links not followed): a folder the user linked into outputs/ is served too
+        # (Nov 19: /home was full, the runs' work folders were moved to /tmp and linked back, and the page showed none
+        # of their pictures). Only pictures, videos and models under outputs/, pictures/ and flows/, as before
+        path = os.path.normpath(os.path.join(os.path.abspath(core.PROJECT), relative))
+        inside = any(path.startswith(os.path.join(os.path.abspath(core.PROJECT), top) + os.sep) for top in OPEN)
+        model = path.lower().endswith(".glb") and path.startswith(os.path.join(os.path.abspath(core.PROJECT), "outputs") + os.sep)
         if not inside or not (path.lower().endswith(SHOWN) or model) or not os.path.isfile(path):
             return self.answer({"error": "no such picture"}, 404)
         size = os.path.getsize(path)

@@ -493,6 +493,15 @@ class OverHttp(WithServer):
         for path in ("/file/secret.png", "/file/pictures/../secret.png", "/file/pictures/notes.txt", "/file/pictures/%2e%2e/secret.png"):
             self.assertEqual(self.ask(path)[0], 404, path)
 
+    def test_a_folder_linked_into_outputs_is_shown(self):
+        # /home full: a run's work folder moved elsewhere and linked back (Nov 19)
+        elsewhere = tempfile.mkdtemp()
+        open(os.path.join(elsewhere, "b.png"), "wb").write(b"x")
+        os.makedirs(os.path.join(self.root, "outputs"), exist_ok=True)
+        os.symlink(elsewhere, os.path.join(self.root, "outputs", "moved"))
+        self.assertEqual(self.ask("/file/outputs/moved/b.png")[0], 200)
+        self.assertEqual(self.ask("/file/outputs/moved/../../secret.png")[0], 404)
+
     def test_upload_then_create_as_the_page_does(self):
         mine = {"X-Flow-Page": "1", "Content-Type": "application/octet-stream"}
         code, answer = self.ask("/api/upload?flow=demo&role=object&name=front.png", b"\x89PNG", mine)
