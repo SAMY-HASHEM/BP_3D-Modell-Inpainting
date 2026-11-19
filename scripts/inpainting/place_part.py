@@ -44,7 +44,7 @@ import subprocess
 
 import numpy as np
 import trimesh
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
@@ -386,15 +386,21 @@ def part_colours(args):
     part.visual.material = part.visual.material.to_simple()  # a PBR material: its base colour texture
     points, _, colours = trimesh.sample.sample_surface(part, 2_000_000, seed=0, sample_color=True)
     result = one_mesh(args.part_colours)
-    result.visual.material = result.visual.material.to_simple()
-    own = result.visual.to_color().vertex_colors.copy()
-    distance, nearest = cKDTree(points).query(result.vertices, distance_upper_bound=args.reach * voxel)
-    near = np.isfinite(distance)
-    own[near, :3] = colours[nearest[near], :3]
-    srgb = own[:, :3] / 255.0  # glTF's vertex colours are linear: sRGB stored as it is came out pale (kept 71 instead of 98)
-    own[:, :3] = np.round(255 * np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)).astype(np.uint8)
-    trimesh.Trimesh(result.vertices, result.faces, vertex_colors=own, process=False).export(args.final)
-    print(f"    {args.final}: {near.sum():,} of {len(near):,} vertices coloured from the part's own model", flush=True)
+    # the colours are painted into a copy of the result's own texture, face by face, so its material stays: written
+    # as vertex colours, the metallic and roughness texture went and cora's hair shone differently (kept 89; painted 99)
+    texture = result.visual.material.baseColorTexture.convert("RGB")
+    width, height = texture.size
+    distance, nearest = cKDTree(points).query(result.triangles_center, distance_upper_bound=args.reach * voxel)
+    near = np.nonzero(np.isfinite(distance))[0]
+    uv = result.visual.uv[result.faces[near]]
+    corners = np.stack([uv[..., 0] * (width - 1), (1 - uv[..., 1]) * (height - 1)], -1)
+    painted = texture.copy()
+    draw = ImageDraw.Draw(painted)
+    for face, colour in zip(corners, colours[nearest[near], :3]):
+        draw.polygon([tuple(c) for c in face], fill=tuple(int(v) for v in colour))
+    result.visual.material.baseColorTexture = painted
+    trimesh.Scene([result]).export(args.final)
+    print(f"    {args.final}: {len(near):,} of {len(result.faces):,} faces coloured from the part's own model", flush=True)
 
 
 def finish(args):
