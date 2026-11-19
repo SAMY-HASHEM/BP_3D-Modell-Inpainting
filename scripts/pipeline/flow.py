@@ -49,6 +49,8 @@ TYPES = {
     "data_sheet": ("01 Data sheet", ["pictures"], "this PC: local AI",
                    lambda i, s, name: (core.data_sheet(i["pictures"]["pictures"], s.get("role", "object"), s.get("frames", 8),
                                                        s.get("ai", True), s.get("what", ""), s.get("sides", "")), None)),
+    "cut_part": ("03a The painted part", ["edit"], "this PC: measured",
+                 lambda i, s, name: (core.cut_part(i["edit"]["edit"]), None)),
     "part_views": ("01b The part's sides", ["data"], "this PC: picture AI",
                    lambda i, s, name: (core.part_views(i["data"]["data"], s.get("way", "angles"), s.get("seed", 1)), None)),
     "base": ("02 Base model", ["data"], "TRELLIS.2",
@@ -77,9 +79,9 @@ TYPES = {
               lambda i, s, name: (core.edit_judge(models_of(i["candidates"]), i["edit"]["edit"], s.get("step", "shape"),
                                                   s.get("ai", True), s.get("keep_min", 85), s.get("part_min", 70)), None)),
 }
-LOCAL_GPU = {"data_sheet", "part_views", "pick_seed", "edit", "place", "check", "judge", "part_colours", "finish"}  # one after another on this PC's GPU
+LOCAL_GPU = {"data_sheet", "part_views", "pick_seed", "edit", "place", "check", "judge", "part_colours", "finish", "cut_part"}  # one after another on this PC's GPU
 COLOURS = {"input": "#4a7a9c", "data_sheet": "#8a8ab0", "base": "#b58c2a", "pick_seed": "#5f9c6a", "edit": "#a8623c",
-           "inpaint": "#b58c2a", "judge": "#5f9c6a", "place": "#a8623c", "check": "#5f9c6a", "finish": "#4a7a9c", "part_views": "#a8623c", "part_colours": "#a8623c"}
+           "inpaint": "#b58c2a", "judge": "#5f9c6a", "place": "#a8623c", "check": "#5f9c6a", "finish": "#4a7a9c", "part_views": "#a8623c", "part_colours": "#a8623c", "cut_part": "#a8623c"}
 
 
 def links(node):

@@ -128,13 +128,22 @@ class CreatingAFlow(InTemporaryProject):
         self.assertEqual(node["edit"]["in"]["part"], "part_sheet")
 
     def test_a_part_from_words_needs_no_part_input(self):
+        # Nov 19: the painted part is cut out and gets its own model, as a part with pictures (from noise: a thin ring)
         made = self.create(part_prompt="  a wide   pointed hat on the head ")
         ids = [n["id"] for n in made["nodes"]]
         self.assertNotIn("part", ids)
-        self.assertNotIn("part_sheet", ids)
-        edit = next(n for n in made["nodes"] if n["id"] == "edit")
-        self.assertEqual(edit["prompt"], "a wide pointed hat on the head")
-        self.assertEqual(edit["in"], {"model": "base", "object": "object_sheet"})
+        self.assertEqual(ids, ["object", "object_sheet", "base", "edit", "cut_part", "part_sheet", "part_views", "part_model",
+                               "place", "check", "details", "judge_details", "colours", "judge_colours", "finish"])
+        node = {n["id"]: n for n in made["nodes"]}
+        self.assertEqual(node["edit"]["prompt"], "a wide pointed hat on the head")
+        self.assertEqual(node["edit"]["in"], {"model": "base", "object": "object_sheet"})
+        self.assertEqual(node["part_sheet"]["in"], {"pictures": "cut_part"})
+        self.assertEqual(node["part_sheet"]["what"], "a wide pointed hat on the head")
+
+    def test_a_part_from_words_can_still_grow_from_noise(self):
+        made = self.create(part_prompt="a hat", from_noise=True)
+        ids = [n["id"] for n in made["nodes"]]
+        self.assertNotIn("cut_part", ids)
         self.assertEqual(ids[-1], "judge_colours")
 
     def test_words_and_pictures_of_a_part_together_are_refused(self):
@@ -520,7 +529,7 @@ class OverHttp(WithServer):
         code, answer = self.ask("/api/app/create", json.dumps(wanted).encode(), {"X-Flow-Page": "1", "Content-Type": "application/json"})
         self.assertEqual((code, json.loads(answer)), (200, {"ok": True}))
         listed = json.loads(self.ask("/api/flows")[1])
-        self.assertEqual([(f["file"], f["nodes"], f["app"]) for f in listed], [("demo", 10, True)])
+        self.assertEqual([(f["file"], f["nodes"], f["app"]) for f in listed], [("demo", 15, True)])
         code, answer = self.ask("/api/upload?flow=demo&role=part&name=model.glb", b"x", mine)
         self.assertEqual(code, 400)
         self.assertIn("no picture or video", json.loads(answer)["error"])

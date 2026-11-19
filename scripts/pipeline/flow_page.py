@@ -86,7 +86,7 @@ SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25, "given": ""}, "pick_seed": {},
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70},
-            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4, "min_voxels": 5}, "check": {"ai": True}, "finish": {}, "part_views": {"way": "angles", "seed": 1}, "part_colours": {}}
+            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4, "min_voxels": 5}, "check": {"ai": True}, "finish": {}, "part_views": {"way": "angles", "seed": 1}, "part_colours": {}, "cut_part": {}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
 # Can this computer run the AI itself? Only with an NVIDIA GPU (TRELLIS.2 needs CUDA). Without one (a laptop: its
 # graphics are in the processor) every run goes to the uni server as one job, whatever a page asks for; this computer
@@ -642,6 +642,13 @@ def create_flow(wanted):
         nodes.append({"id": "edit", "type": "edit", **({"at": at} if at else {}), **({"replace": True} if wanted.get("replace") else {}),
                       "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}} if files["part"]
                      else {"id": "edit", "type": "edit", "prompt": words, "in": {"model": "base", "object": "object_sheet"}})
+        own_model = files["part"] or not wanted.get("from_noise")
+        if words and own_model:  # a part from words gets a picture of its own: what the picture AI painted, cut out
+            # (Nov 19: from noise cora's tiara came out a thin ring of wires, part 27; from_noise: True keeps that way)
+            nodes.append({"id": "cut_part", "type": "cut_part", "in": {"edit": "edit"}})
+            nodes.append({"id": "part_sheet", "type": "data_sheet", "role": "part", "what": words[:200], "in": {"pictures": "cut_part"}})
+            nodes.append({"id": "part_views", "type": "part_views", "in": {"data": "part_sheet"}})
+            sheet = "part_views"
         if files["part"]:  # the structure of docs/FIRST-SUCCESS.md: the part as its own model, placed, details + colours only
             sheet = "part_sheet"
             if len(files["part"]) == 1 and files["part"][0].lower().endswith(core.PICTURE_TYPES):  # one picture: its back is guessed
@@ -649,18 +656,19 @@ def create_flow(wanted):
                 nodes.insert(edit_at, {"id": "part_views", "type": "part_views", "in": {"data": "part_sheet"}})
                 sheet = "part_views"
                 nodes[edit_at + 1]["in"]["part"] = sheet
+        if own_model:
             nodes.append({"id": "part_model", "type": "base", "label": "02 The part's own model", "seed": seed, "where": where,
                           "resolution": "1024", "steps": steps, "in": {"data": sheet}})
             nodes.append({"id": "place", "type": "place", "zoom": 0.25, "size": 0.8, "in": {"part_model": "part_model", "edit": "edit"}})
             nodes.append({"id": "check", "type": "check", "in": {"edit": "place"}})
             before, steps_, edit_ = "place", ("details",), "check"  # its colours come from its own model (below)
-        else:  # only words: the part grows out of the model (a crown on a head), its shape from noise
+        else:  # only words, from_noise: the part grows out of the model (a crown on a head), its shape from noise
             before, steps_, edit_ = "base", ("shape", "details", "colours"), "edit"
         for step in steps_:
             nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "where": where, "in": {"model": before, "edit": edit_}})
             nodes.append({"id": f"judge_{step}", "type": "judge", "step": step, "in": {"candidates": step, "edit": edit_}})
             before = f"judge_{step}"
-        if files["part"]:  # the part's own model has its colours right on every side; TRELLIS.2's colours step guessed
+        if own_model:  # the part's own model has its colours right on every side; TRELLIS.2's colours step guessed
             # the book's back cover grey (Nov 19: part 68, colour 68 in 22 minutes; from its own model 79 and 80 in seconds)
             nodes.append({"id": "colours", "type": "part_colours", "in": {"model": before, "edit": edit_}})
             nodes.append({"id": "judge_colours", "type": "judge", "step": "colours", "in": {"candidates": "colours", "edit": edit_}})
