@@ -105,16 +105,24 @@ def start_comfyui(report=print):
     if found is False:
         raise RuntimeError(f"{COMFYUI} is another ComfyUI (no {UNET}): set COMFYUI_URL to a free port, e.g. http://127.0.0.1:8198")
     report("Starting ComfyUI...")
-    log = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs", "comfyui.log"), "w")
+    # its input, output and temp pictures go to the system's temporary folder: they are handed back to us right away,
+    # and on the uni server /home was full, so ComfyUI could not save the picture it had made (Nov 19)
+    import tempfile
+    scratch = os.path.join(tempfile.gettempdir(), f"comfyui-{os.getuid()}")
+    folders = []
+    for kind in ("input", "output", "temp"):
+        os.makedirs(os.path.join(scratch, kind), exist_ok=True)
+        folders += [f"--{kind}-directory", os.path.join(scratch, kind)]
+    log = open(os.path.join(scratch, "comfyui.log"), "w")
     process = subprocess.Popen([os.path.join(COMFYUI_DIR, ".venv", "bin", "python"), "main.py", "--listen", "127.0.0.1",
-                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", MODEL_PATHS],
+                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", MODEL_PATHS, *folders],
                                cwd=COMFYUI_DIR, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(120):
         time.sleep(2)
         if ours():
             return process
         if process.poll() is not None:
-            raise RuntimeError("ComfyUI didn't start, see outputs/comfyui.log")
+            raise RuntimeError(f"ComfyUI didn't start, see {log.name}")
     raise RuntimeError("ComfyUI didn't answer within 4 minutes")
 
 

@@ -364,7 +364,9 @@ def inpaint(args):
     else:
         raise SystemExit("give the area: --box X0 Y0 Z0 X1 Y1 Z1 (model coordinates) or --area file.npy")
     name = re.sub("_+", "_", os.path.splitext(os.path.basename(args.model))[0][:40])  # "__" marks results
-    folder = os.path.join(PROJECT_DIR, "outputs", "cloud")
+    # a job run here (--here --wait) is packed into the folder it waits in, the flow node's own: on the uni server /home
+    # was full and outputs/cloud could take no more (Nov 19), while the node's folder can be anywhere (linked to /tmp)
+    folder = args.wait if getattr(args, "here", False) and getattr(args, "wait", None) else os.path.join(PROJECT_DIR, "outputs", "cloud")
     os.makedirs(folder, exist_ok=True)
     area_file, path = os.path.join(folder, f"{name}_area.npy"), os.path.join(folder, f"{name}_job.zip")
     np.save(area_file, points)

@@ -113,6 +113,21 @@ def with_preview(outputs, folder, render=True):
     return {**outputs, "sheet": sheet} if os.path.exists(sheet) else outputs
 
 
+def caches_off_a_full_home(least=500 << 20):
+    """The settings that keep TRELLIS.2's caches off the home folder while its disk is (nearly) full: flex_gemm saves its
+    autotune cache to ~/.flex_gemm after a run and Triton compiles into ~/.triton; on the uni server /home had 0 bytes
+    left (Nov 19) and the part's model failed in that last save. Both are only for speed: then not saved / kept in /tmp."""
+    import shutil
+    import tempfile
+    try:
+        if shutil.disk_usage(os.path.expanduser("~")).free >= least:
+            return {}
+    except OSError:
+        return {}
+    return {"FLEX_GEMM_AUTOSAVE_AUTOTUNE_CACHE": "0",
+            "TRITON_CACHE_DIR": os.environ.get("TRITON_CACHE_DIR") or os.path.join(tempfile.gettempdir(), f"triton-{os.getuid()}")}
+
+
 class Flow:
     def __init__(self, path):
         self.file = json.load(open(path))
@@ -196,7 +211,7 @@ class Flow:
         return ""
 
     def run_step(self, key, command, label, done, folder):
-        env = {**os.environ, "PYTHONUNBUFFERED": "1", "BLENDER": BLENDER}
+        env = {**os.environ, "PYTHONUNBUFFERED": "1", "BLENDER": BLENDER, **caches_off_a_full_home()}
         log = os.path.join(folder, "log.txt")
         with open(log, "a") as out:
             out.write(f"\n$ {' '.join(map(str, command))}\n")
