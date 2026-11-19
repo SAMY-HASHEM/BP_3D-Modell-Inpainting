@@ -63,7 +63,7 @@ TYPES = {
                                            s.get("place"), s.get("side"), s.get("hand"), s.get("after"), s.get("prompt"), s.get("prompt_seed", 1), s.get("at")), None)),
     "place": ("03b Place the part", ["part_model", "edit"], "this PC: measured",
               lambda i, s, name: (core.place(i["part_model"]["model"], i["edit"]["edit"], s.get("zoom", 0.25), s.get("size", 0.8),
-                                             s.get("sides", 4), s.get("behind", 4)), None)),
+                                             s.get("sides", 4), s.get("behind", 4), s.get("min_voxels", 5)), None)),
     "check": ("03c Judge the plan", ["edit"], "this PC: measured + local AI",
               lambda i, s, name: (core.plan_check(i["edit"]["edit"], s.get("ai", True)), None)),
     "finish": ("06 Into the whole", ["model", "edit"], "this PC: measured",

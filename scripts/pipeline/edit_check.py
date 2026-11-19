@@ -106,8 +106,12 @@ def findings(measured):
                       "Place the part with place_part.py (its pegs make the box big enough), or make the part smaller."))
     thin = min(measured.get("part_voxels") or [99])
     if thin < 3:
-        found.append((2, f"The new part is only {thin:.1f} voxels thick: too thin to be built well.",
-                      "Zoom in: place_part.py --zoom 0.25 sends only a box around the part, so it gets more voxels."))
+        found.append((3, f"The new part is only {thin:.1f} voxels thick: too thin to be built at all.",
+                      "Zoom in (place_part.py --zoom 0.25 sends only a box around the part) and let place_part.py make it "
+                      "thicker (--min-voxels 5)."))
+    elif thin < 4.5:  # Nov 19: a book 3.6 voxels thick came out as a frame with hollow, speckled covers; 5 came out whole
+        found.append((2, f"The new part is only {thin:.1f} voxels thick: its flat sides may come out hollow.",
+                      "place_part.py --min-voxels 5 makes a flat part that thick (the flow's place node does it)."))
     return sorted(found, key=lambda f: -f[0])
 
 

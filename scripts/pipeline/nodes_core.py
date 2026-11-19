@@ -398,7 +398,7 @@ def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit=
                         "sheet": os.path.join(folder, "three.jpg"), "area_map": os.path.join(folder, "area_map.jpg")}}
 
 
-def place(part_model, edit_, zoom=0.25, size=0.8, sides=4, behind=4):
+def place(part_model, edit_, zoom=0.25, size=0.8, sides=4, behind=4, min_voxels=5):
     """03b: the part's own 3D model put where the old part is (place_part.py, docs/FIRST-SUCCESS.md): the edit's front
     mask says where and how big, the old part's plane how it lies. Only a box around the two parts goes on (zoom), and
     the four sides' pictures all show the same part. Its folder is the edit for every step after it; the model the
@@ -407,11 +407,11 @@ def place(part_model, edit_, zoom=0.25, size=0.8, sides=4, behind=4):
     folder = node_folder(edit_["name"], "03b_place", {"model": stamp(model["glb"]), "part": stamp(part_model["glb"]),
                                                       "edit": stamp(os.path.join(edit_["folder"], "edit.json")),
                                                       "zoom": zoom, "size": size, "sides": sides, "behind": behind,
-                                                      "facing": "by colour"})  # a flat part's side to the camera: measured (Nov 19)
+                                                      "facing": "by colour", "min_voxels": min_voxels})  # Nov 19: measured side, thick enough
     out = os.path.join(folder, "placed.glb")
     done = os.path.join(folder, "edit.json")  # place_part.py writes it last: a run stopped halfway is not taken as done
     command = py("inpainting/place_part.py", model["glb"], part_model["glb"], "--edit", edit_["folder"], "--out", folder,
-                 "--zoom", zoom, "--size", size, "--sides", sides, "--behind", behind)
+                 "--zoom", zoom, "--size", size, "--sides", sides, "--behind", behind, "--min-voxels", min_voxels)
     placed = {"name": edit_["name"], "kind": "placed", "label": "the part placed"}
     return {"folder": folder, "steps": [(command, "03b place the part in 3D", done)],
             "outputs": {"edit": {**edit_, "folder": folder, "original": {**placed, "label": "before", "glb": os.path.join(folder, "before.glb")},

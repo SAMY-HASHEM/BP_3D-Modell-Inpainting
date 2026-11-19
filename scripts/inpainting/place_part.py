@@ -339,6 +339,27 @@ def placed(part, old_points, mask, origin, right, toward, size, per_pixel, facto
     return matrix
 
 
+def thickened(part, new_points, both, mesh, zoom, least):
+    """The 4 x 4 matrix that makes a flat part `least` voxels thick in TRELLIS.2's cube, or None when it is thick enough.
+    The toaster robot's book, Nov 19: 3.6 voxels thick, the details step built only its frame and left the covers hollow
+    and speckled; the book of Nov 16 was 5 voxels thick and came out whole. Only the thin direction is stretched, around
+    the part's middle: a book a little thicker still looks like the same book in the hand."""
+    directions, reach = axes_of(new_points)
+    if reach[2] >= 0.35 * reach[1]:  # not flat
+        return None
+    span = np.ptp(both, 0).max() * (1 + 2 * zoom) if zoom else np.maximum(np.ptp(mesh.vertices, 0), np.ptp(both, 0)).max()
+    voxel = span / GRID
+    if reach[2] >= least * voxel:
+        return None
+    factor = least * voxel / reach[2]
+    thin, middle = directions[2], new_points.mean(0)
+    stretch = np.eye(4)
+    stretch[:3, :3] += (factor - 1) * np.outer(thin, thin)
+    stretch[:3, 3] = middle - stretch[:3, :3] @ middle
+    print(f"    the new part is {reach[2] / voxel:.1f} voxels thick: made {least:.0f} (x {factor:.2f} in its thin direction)", flush=True)
+    return stretch
+
+
 def with_pegs(mesh, low, high, size):
     """The mesh with a tiny peg in every corner of the box: its bounds are then the box, and TRELLIS.2's cube with it."""
     corners = np.array([[x, y, z] for x in (low[0], high[0]) for y in (low[1], high[1]) for z in (low[2], high[2])])
@@ -384,6 +405,8 @@ def main():
                         "TRELLIS.2: the margin around them, as a share of their size (0.5: they fill half of the cube; 0: the whole model)")
     parser.add_argument("--size", type=float, default=1.0, help="the new part bigger or smaller than the picture AI painted it")
     parser.add_argument("--sides", type=int, choices=[4, 8], default=4, help="8: also the four sides in between (45 degrees)")
+    parser.add_argument("--min-voxels", type=float, default=5.0, help="a flat part thinner than this in TRELLIS.2's cube is "
+                        "made this thick (a book 3.6 voxels thick came out hollow, 5 whole); 0: as it is")
     parser.add_argument("--old", metavar="WORD", help="without --edit: the old part by its name (\"axe\"), found on pictures "
                         "from eight sides by the mask AI. For one fused mesh, where the part is no piece of its own")
     parser.add_argument("--hand", nargs=2, metavar=("RIG_JSON", "PART"), help="with --old: the new part is a held thing; its grip "
@@ -431,6 +454,12 @@ def main():
         part.apply_transform(placed(part, old_points, front_mask, origin, right, toward, size, per_pixel, args.size, wanted))
     new_points = trimesh.sample.sample_surface(part, 300_000, seed=0)[0]
     both = np.concatenate([new_points, old_points])
+    if args.min_voxels:  # a flat part too thin for TRELLIS.2's cube is made a little thicker (it would come out hollow)
+        thicker = thickened(part, new_points, both, mesh, args.zoom, args.min_voxels)
+        if thicker is not None:
+            part.apply_transform(thicker)
+            new_points = trimesh.sample.sample_surface(part, 300_000, seed=0)[0]
+            both = np.concatenate([new_points, old_points])
     rest.export(os.path.join(args.out, "rest_whole.glb"))
 
     # the box that becomes TRELLIS.2's cube: around the two parts (--zoom), or the whole model and the new part
