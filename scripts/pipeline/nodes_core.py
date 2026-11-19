@@ -290,12 +290,12 @@ def sheet_views(data, which):
     return [project_path(paths[name]) for name in sheet["lists"][which]]
 
 
-def cut_part(edit_):
+def cut_part(edit_, change=60):
     """03a: a part from words gets a picture of its own: what the picture AI painted, cut out of the edit's AFTER picture
     (cut_part.py). Its output is like an input's, so the part's data sheet, sides and own model follow as for an upload."""
-    folder = node_folder(edit_["name"], "03a_cut_part", {"edit": stamp(os.path.join(edit_["folder"], "edit.json"))})
+    folder = node_folder(edit_["name"], "03a_cut_part", {"edit": stamp(os.path.join(edit_["folder"], "edit.json")), "change": change})
     out = os.path.join(folder, "part.png")
-    command = py("inpainting/cut_part.py", edit_["folder"], "--out", folder, "--what", edit_["part"])
+    command = py("inpainting/cut_part.py", edit_["folder"], "--out", folder, "--what", edit_["part"], "--change", change)
     return {"folder": folder, "steps": [(command, "03a the painted part cut out", out)],
             "outputs": {"pictures": {"name": edit_["name"], "files": [out]}, "sheet": out}}
 

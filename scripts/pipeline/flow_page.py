@@ -86,7 +86,7 @@ SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25, "given": ""}, "pick_seed": {},
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70},
-            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4, "min_voxels": 5}, "check": {"ai": True}, "finish": {}, "part_views": {"way": "angles", "seed": 1}, "part_colours": {}, "cut_part": {}}
+            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4, "min_voxels": 5}, "check": {"ai": True}, "finish": {}, "part_views": {"way": "angles", "seed": 1}, "part_colours": {}, "cut_part": {"change": 60}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
 # Can this computer run the AI itself? Only with an NVIDIA GPU (TRELLIS.2 needs CUDA). Without one (a laptop: its
 # graphics are in the processor) every run goes to the uni server as one job, whatever a page asks for; this computer

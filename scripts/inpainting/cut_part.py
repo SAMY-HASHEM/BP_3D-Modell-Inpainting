@@ -26,10 +26,18 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--what", default="", help="what the part is (the data sheet's what); default the edit's prompt")
     parser.add_argument("--margin", type=float, default=0.15, help="room around the part, a share of its size")
+    parser.add_argument("--change", type=int, default=60, help="a pixel of the mask is the part only if it changed this much "
+                        "(the sum of R, G and B differences to the BEFORE picture)")
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
     after = np.asarray(Image.open(os.path.join(args.edit, "after.png")).convert("RGB"))
     mask = np.asarray(Image.open(os.path.join(args.edit, "mask.png")).convert("L")) > 127
+    before = os.path.join(args.edit, "before.png")
+    if os.path.isfile(before):  # only what really changed: the hair under cora's tiara was in the mask, barely changed,
+        # and came along as a black base on every side the picture AI then drew (Nov 19)
+        change = np.abs(after.astype(int) - np.asarray(Image.open(before).convert("RGB")).astype(int)).sum(-1)
+        changed = ndimage.binary_closing(mask & (change > args.change), iterations=2) & mask
+        mask = changed if changed.sum() > 0.3 * mask.sum() else mask
     labels, count = ndimage.label(mask)
     if not count:
         raise SystemExit("the edit's mask is empty: nothing was painted")

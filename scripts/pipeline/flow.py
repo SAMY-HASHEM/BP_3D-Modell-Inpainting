@@ -50,7 +50,7 @@ TYPES = {
                    lambda i, s, name: (core.data_sheet(i["pictures"]["pictures"], s.get("role", "object"), s.get("frames", 8),
                                                        s.get("ai", True), s.get("what", ""), s.get("sides", "")), None)),
     "cut_part": ("03a The painted part", ["edit"], "this PC: measured",
-                 lambda i, s, name: (core.cut_part(i["edit"]["edit"]), None)),
+                 lambda i, s, name: (core.cut_part(i["edit"]["edit"], s.get("change", 60)), None)),
     "part_views": ("01b The part's sides", ["data"], "this PC: picture AI",
                    lambda i, s, name: (core.part_views(i["data"]["data"], s.get("way", "angles"), s.get("seed", 1)), None)),
     "base": ("02 Base model", ["data"], "TRELLIS.2",
