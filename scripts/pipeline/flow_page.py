@@ -86,7 +86,7 @@ SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25, "given": ""}, "pick_seed": {},
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
             "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70},
-            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4, "min_voxels": 5}, "check": {"ai": True}, "finish": {}, "part_views": {"way": "angles", "seed": 1}}
+            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4, "min_voxels": 5}, "check": {"ai": True}, "finish": {}, "part_views": {"way": "angles", "seed": 1}, "part_colours": {}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
 # Can this computer run the AI itself? Only with an NVIDIA GPU (TRELLIS.2 needs CUDA). Without one (a laptop: its
 # graphics are in the processor) every run goes to the uni server as one job, whatever a page asks for; this computer
@@ -588,8 +588,10 @@ def create_flow(wanted):
     files, prompts, called = {"object": [], "part": []}, {"object": [], "part": []}, {}
     for item in wanted.get("items") or []:
         role = item.get("role")
-        inside = os.path.realpath(os.path.join(UPLOADS, file, str(role))) + os.sep
-        full = os.path.realpath(os.path.join(core.PROJECT, str(item.get("path", ""))))
+        # paths as written (.. taken out, links not followed): an upload folder linked elsewhere (/home full, Nov 19)
+        # kept its realpath before, which was not the page's path, so its files counted as taken off and were deleted
+        inside = os.path.normpath(os.path.join(os.path.abspath(UPLOADS), file, str(role))) + os.sep
+        full = os.path.normpath(os.path.join(os.path.abspath(core.PROJECT), str(item.get("path", ""))))
         if role not in files or not full.startswith(inside) or not os.path.isfile(full):
             raise ValueError(f"{item.get('path')} was not uploaded for this project")
         files[role].append(os.path.relpath(full, core.PROJECT).replace(os.sep, "/"))
@@ -651,15 +653,18 @@ def create_flow(wanted):
                           "resolution": "1024", "steps": steps, "in": {"data": sheet}})
             nodes.append({"id": "place", "type": "place", "zoom": 0.25, "size": 0.8, "in": {"part_model": "part_model", "edit": "edit"}})
             nodes.append({"id": "check", "type": "check", "in": {"edit": "place"}})
-            before, steps_, edit_ = "place", ("details", "colours"), "check"
+            before, steps_, edit_ = "place", ("details",), "check"  # its colours come from its own model (below)
         else:  # only words: the part grows out of the model (a crown on a head), its shape from noise
             before, steps_, edit_ = "base", ("shape", "details", "colours"), "edit"
         for step in steps_:
             nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "where": where, "in": {"model": before, "edit": edit_}})
             nodes.append({"id": f"judge_{step}", "type": "judge", "step": step, "in": {"candidates": step, "edit": edit_}})
             before = f"judge_{step}"
-        if files["part"]:
-            nodes.append({"id": "finish", "type": "finish", "in": {"model": before, "edit": edit_}})
+        if files["part"]:  # the part's own model has its colours right on every side; TRELLIS.2's colours step guessed
+            # the book's back cover grey (Nov 19: part 68, colour 68 in 22 minutes; from its own model 79 and 80 in seconds)
+            nodes.append({"id": "colours", "type": "part_colours", "in": {"model": before, "edit": edit_}})
+            nodes.append({"id": "judge_colours", "type": "judge", "step": "colours", "in": {"candidates": "colours", "edit": edit_}})
+            nodes.append({"id": "finish", "type": "finish", "in": {"model": "judge_colours", "edit": edit_}})
     if not everything and not vision_ai_here():  # no vision AI where the nodes run: the data sheets and judges measure alone
         for node in nodes:
             if node["type"] in ("data_sheet", "judge", "check"):

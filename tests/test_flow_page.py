@@ -98,6 +98,7 @@ class CreatingAFlow(InTemporaryProject):
         ids = [n["id"] for n in made["nodes"]]
         self.assertEqual(ids, ["object", "part", "object_sheet", "part_sheet", "base", "part_views", "edit", "part_model", "place",
                                "check", "details", "judge_details", "colours", "judge_colours", "finish"])
+        self.assertEqual(node_types := {n["id"]: n["type"] for n in made["nodes"]}["colours"], "part_colours")  # not TRELLIS.2's
         node = {n["id"]: n for n in made["nodes"]}
         # one picture of the part: the picture AI makes its other sides first (its back is not guessed by TRELLIS.2)
         self.assertEqual(node["part_views"]["in"], {"data": "part_sheet"})
@@ -109,6 +110,15 @@ class CreatingAFlow(InTemporaryProject):
         edit = node["edit"]
         self.assertNotIn("prompt", edit)
         self.assertNotIn("what", next(n for n in made["nodes"] if n["id"] == "part_sheet"))  # no prompt: the local AI says what it is
+
+    def test_an_upload_folder_linked_elsewhere_keeps_its_files(self):
+        # /home full (Nov 19): pictures/uploads/<flow> linked to /tmp; its files were deleted as "taken off the page"
+        elsewhere = tempfile.mkdtemp()
+        os.makedirs(page.UPLOADS, exist_ok=True)
+        os.symlink(elsewhere, os.path.join(page.UPLOADS, "demo"))
+        made = self.create()
+        self.assertTrue(os.path.isfile(os.path.join(elsewhere, "object", "front.png")))
+        self.assertEqual(made["nodes"][0]["files"], ["pictures/uploads/demo/object/front.png"])
 
     def test_a_part_with_several_pictures_gets_no_made_sides(self):
         made = self.create(parts=2)

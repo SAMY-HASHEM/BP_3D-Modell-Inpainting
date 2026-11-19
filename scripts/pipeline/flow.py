@@ -66,6 +66,8 @@ TYPES = {
                                              s.get("sides", 4), s.get("behind", 4), s.get("min_voxels", 5)), None)),
     "check": ("03c Judge the plan", ["edit"], "this PC: measured + local AI",
               lambda i, s, name: (core.plan_check(i["edit"]["edit"], s.get("ai", True)), None)),
+    "part_colours": ("05b Colours from the part", ["model", "edit"], "this PC: measured",
+                     lambda i, s, name: (core.colours_from_part(i["model"]["model"], i["edit"]["edit"]), None)),
     "finish": ("06 Into the whole", ["model", "edit"], "this PC: measured",
                lambda i, s, name: (core.finish(i["model"]["model"], i["edit"]["edit"]), None)),
     "inpaint": ("04 Inpaint", ["model", "edit"], "TRELLIS.2",
@@ -75,9 +77,9 @@ TYPES = {
               lambda i, s, name: (core.edit_judge(models_of(i["candidates"]), i["edit"]["edit"], s.get("step", "shape"),
                                                   s.get("ai", True), s.get("keep_min", 85), s.get("part_min", 70)), None)),
 }
-LOCAL_GPU = {"data_sheet", "part_views", "pick_seed", "edit", "place", "check", "judge", "finish"}  # one after another on this PC's GPU
+LOCAL_GPU = {"data_sheet", "part_views", "pick_seed", "edit", "place", "check", "judge", "part_colours", "finish"}  # one after another on this PC's GPU
 COLOURS = {"input": "#4a7a9c", "data_sheet": "#8a8ab0", "base": "#b58c2a", "pick_seed": "#5f9c6a", "edit": "#a8623c",
-           "inpaint": "#b58c2a", "judge": "#5f9c6a", "place": "#a8623c", "check": "#5f9c6a", "finish": "#4a7a9c", "part_views": "#a8623c"}
+           "inpaint": "#b58c2a", "judge": "#5f9c6a", "place": "#a8623c", "check": "#5f9c6a", "finish": "#4a7a9c", "part_views": "#a8623c", "part_colours": "#a8623c"}
 
 
 def links(node):

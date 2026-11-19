@@ -432,6 +432,16 @@ def plan_check(edit_, ai=True):
             "outputs": {"edit": edit_, "verdict": "pass", "sheet": os.path.join(folder, "check.jpg")}}
 
 
+def colours_from_part(result, edit_):
+    """05b: the details step's result, its new part coloured from the part's own model (place_part.py --part-colours):
+    instead of TRELLIS.2's colours step, which guessed the book's back cover grey. No GPU, seconds."""
+    folder = node_folder(edit_["name"], "05b_part_colours", {"result": stamp(result["glb"]), "edit": stamp(os.path.join(edit_["folder"], "edit.json"))})
+    out = os.path.join(folder, "coloured.glb")
+    command = py("inpainting/place_part.py", "--part-colours", result["glb"], "--out", edit_["folder"], "--final", out)
+    return {"folder": folder, "steps": [(command, "05b colours from the part's own model", out)],
+            "outputs": {"model": {"name": edit_["name"], "kind": "colours", "label": "colours from the part", "glb": out}}}
+
+
 def finish(result, edit_):
     """06: the inpainted part back into the whole, untouched model (place_part.py --finish): only the box went through
     TRELLIS.2, everything else is the model's own mesh."""

@@ -252,13 +252,13 @@ const BUILDINGS = [
   {id: "factory",  name: "The great pyramid", runs: "TRELLIS.2 builds the 3D model",             kind: "model",      where: "server", split: "server", about: 15,  who: "engineer", types: ["base"],               x: 860, y: 180, c: "#2f6fb5", shape: "pyramid", r: 50},
   {id: "studio",   name: "Painters' pavilion", runs: "Qwen-Image-Edit paints your wish",         kind: "local AI",   where: "server", split: "device", about: 2,   who: "painter",  types: ["edit", "part_views"], x: 450, y: 160, c: "#c0392b", shape: "kiosk",   r: 40},
   {id: "clinic",   name: "House of life",    runs: "UniRig finds the bones",                     kind: "model",      where: "server", split: "device", about: 1,   who: "doctor",   types: ["rig"],                x: 595, y: 560, c: "#2aa58a", shape: "mastaba", r: 38},
-  {id: "workshop", name: "Builders' yard",   runs: "Puts the new part in its place, and the result back into the whole",             kind: "processing", where: "server", split: "device", about: 4,   who: "fitter",   types: ["place", "finish"],    x: 650, y: 150, c: "#d98a2b", shape: "yard",    r: 40},
+  {id: "workshop", name: "Builders' yard",   runs: "Puts the new part in its place, and the result back into the whole",             kind: "processing", where: "server", split: "device", about: 4,   who: "fitter",   types: ["place", "finish", "part_colours"], x: 650, y: 150, c: "#d98a2b", shape: "yard",    r: 40},
   {id: "forge",    name: "The forge",        runs: "TRELLIS.2 inpaints shape, details, colours", kind: "model",      where: "server", split: "server", about: 90,  who: "smith",    types: ["inpaint"],            x: 900, y: 400, c: "#c0392b", shape: "step",    r: 46},
   {id: "court",    name: "Hall of judgement", runs: "Measures, then the local vision AI looks",          kind: "local AI",   where: "server", split: "device", about: 6,   who: "judge",    types: ["judge", "pick_seed", "check"], x: 765, y: 565, c: "#8a4fc0", shape: "temple",  r: 42},
   {id: "gallery",  name: "The gallery",      runs: "Your finished model",                        kind: "processing", where: "device", split: "device", about: 0,   who: "host",     types: [],                     x: 95,  y: 215, c: "#2aa58a", shape: "obelisk", r: 36},
 ];
 const B = Object.fromEntries(BUILDINGS.map(b => [b.id, b]));
-const TYPICAL = {input: 0.2, data_sheet: 1, base: 15, pick_seed: 2, edit: 2, inpaint: 30, judge: 2, rig: 1, place: 4, check: 1, finish: 0.5, part_views: 3};  // minutes per node
+const TYPICAL = {input: 0.2, data_sheet: 1, base: 15, pick_seed: 2, edit: 2, inpaint: 30, judge: 2, rig: 1, place: 4, check: 1, finish: 0.5, part_views: 3, part_colours: 0.3};  // minutes per node
 const WHERE = {device: "our device", server: "uni server"};
 
 const NS = "http://www.w3.org/2000/svg", svg = $("city");
@@ -772,7 +772,7 @@ function stepBody(n) {  // what one step of the flow shows: its pictures, its da
     if ((s.why || []).length) out.push(h("ul", {class: "why"}, s.why.map(w => h("li", {}, w))));
     if (n.picture) out.push(p(h("small", {class: "note"}, "The whole sheet at a glance (click a picture to see it big):")), h("img", {class: "wide", src: n.picture, onclick: () => window.open(n.picture, "_blank")}));
   }
-  if (["base", "inpaint", "place", "finish"].includes(n.type) && n.model_url) out.push(viewer(n.model_url));
+  if (["base", "inpaint", "place", "finish", "part_colours"].includes(n.type) && n.model_url) out.push(viewer(n.model_url));
   if (n.type === "base" && n.picture) out.push(p(h("small", {class: "note"}, "The model next to the views it was built from:")), h("img", {class: "wide", src: n.picture, onclick: () => window.open(n.picture, "_blank")}));
   if (n.compare) {
     const c = n.compare;

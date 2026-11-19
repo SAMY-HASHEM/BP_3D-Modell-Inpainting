@@ -375,6 +375,28 @@ def with_pegs(mesh, low, high, size):
                            visual=trimesh.visual.TextureVisuals(uv=uv, material=mesh.visual.material))
 
 
+def part_colours(args):
+    """The details step's result with the new part coloured from the part's own textured model (placed in after.glb):
+    every vertex within one voxel of the placed part takes the colour of its nearest point there, the rest keeps its own.
+    Toaster robot, Nov 19: TRELLIS.2's colours step gave the book a grey back cover and a dull front (part 68, colour 68,
+    22 minutes on the GPU); its own model, made from four sides, had them right: kept 98, part 79, colour 80, 7 seconds."""
+    voxel = json.load(open(os.path.join(args.out, "edit.json")))["voxel"]
+    after = trimesh.load(os.path.join(args.out, "after.glb"))
+    part = max(after.geometry.values(), key=lambda g: len(g.faces))  # the placed part (the rest is cut to the box)
+    part.visual.material = part.visual.material.to_simple()  # a PBR material: its base colour texture
+    points, _, colours = trimesh.sample.sample_surface(part, 2_000_000, seed=0, sample_color=True)
+    result = one_mesh(args.part_colours)
+    result.visual.material = result.visual.material.to_simple()
+    own = result.visual.to_color().vertex_colors.copy()
+    distance, nearest = cKDTree(points).query(result.vertices, distance_upper_bound=args.reach * voxel)
+    near = np.isfinite(distance)
+    own[near, :3] = colours[nearest[near], :3]
+    srgb = own[:, :3] / 255.0  # glTF's vertex colours are linear: sRGB stored as it is came out pale (kept 71 instead of 98)
+    own[:, :3] = np.round(255 * np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)).astype(np.uint8)
+    trimesh.Trimesh(result.vertices, result.faces, vertex_colors=own, process=False).export(args.final)
+    print(f"    {args.final}: {near.sum():,} of {len(near):,} vertices coloured from the part's own model", flush=True)
+
+
 def finish(args):
     """The result's new part put back into the whole model: everything else is the model's own mesh, untouched."""
     made = json.load(open(os.path.join(args.out, "edit.json")))
@@ -415,8 +437,13 @@ def main():
                         "part is made again too (a fist around a new grip), and the cut edges where the old part was")
     parser.add_argument("--front", type=int, default=0, help="without --edit: which straight view is the model's front (0: as TRELLIS.2 puts it)")
     parser.add_argument("--finish", metavar="RESULT", help="after the inpainting: its result's new part into the whole model")
-    parser.add_argument("--final", help="--finish: the finished model's file")
+    parser.add_argument("--final", help="--finish, --part-colours: the model's file to write")
+    parser.add_argument("--part-colours", metavar="RESULT", help="after the details step: its result with the new part "
+                        "coloured from the part's own model (instead of TRELLIS.2's colours step); --out is the place folder")
     args = parser.parse_args()
+    if args.part_colours:
+        args.reach = 1.0
+        return part_colours(args)
     if args.finish:
         return finish(args)
     os.makedirs(args.out, exist_ok=True)
