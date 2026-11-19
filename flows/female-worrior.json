@@ -1,0 +1,20 @@
+{
+ "name": "female-worrior",
+ "about": "maek the dull body dace 3d model",
+ "prompt": "maek the dull body dace 3d model",
+ "made_by": "app",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the object", "files": ["pictures/uploads/female-worrior/object/jake-waddington-face-jakewaddington.jpg"], "prompts": ["jake-waddington-face-jakewaddington.jpg: face"]},
+  {"id": "part", "type": "input", "label": "00 Input: the part", "files": ["pictures/uploads/female-worrior/part/jake-waddington-full-body-c-jakewaddington.jpg", "pictures/uploads/female-worrior/part/jake-waddington-upper-body-a-jakewaddington.jpg"], "prompts": ["jake-waddington-full-body-c-jakewaddington.jpg: total body", "jake-waddington-upper-body-a-jakewaddington.jpg: upper body"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "what": "face", "in": {"pictures": "object"}},
+  {"id": "part_sheet", "type": "data_sheet", "role": "part", "what": "total body", "in": {"pictures": "part"}},
+  {"id": "base", "type": "base", "seed": 42, "where": "server", "resolution": "1024", "steps": 25, "in": {"data": "object_sheet"}},
+  {"id": "edit", "type": "edit", "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}},
+  {"id": "shape", "type": "inpaint", "step": "shape", "seeds": [1], "in": {"model": "base", "edit": "edit"}},
+  {"id": "judge_shape", "type": "judge", "step": "shape", "in": {"candidates": "shape", "edit": "edit"}},
+  {"id": "details", "type": "inpaint", "step": "details", "seeds": [1], "in": {"model": "judge_shape", "edit": "edit"}},
+  {"id": "judge_details", "type": "judge", "step": "details", "in": {"candidates": "details", "edit": "edit"}},
+  {"id": "colours", "type": "inpaint", "step": "colours", "seeds": [1], "in": {"model": "judge_details", "edit": "edit"}},
+  {"id": "judge_colours", "type": "judge", "step": "colours", "in": {"candidates": "colours", "edit": "edit"}}
+ ]
+}

@@ -1,0 +1,20 @@
+{
+ "name": "toaster_sword",
+ "about": "replace the toast in his hand with this sword",
+ "prompt": "replace the toast in his hand with this sword",
+ "made_by": "app",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the object", "files": ["pictures/uploads/toaster_sword/object/toaster_front.png"], "prompts": ["toaster.glb: a small blue robot with a toaster for a head"]},
+  {"id": "part", "type": "input", "label": "00 Input: the part", "files": ["pictures/uploads/toaster_sword/part/sword.jpg"], "prompts": ["sword.jpg: a silver sword"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "what": "a small blue robot with a toaster for a head", "in": {"pictures": "object"}, "sides": "front", "ai": false},
+  {"id": "part_sheet", "type": "data_sheet", "role": "part", "what": "a silver sword", "in": {"pictures": "part"}, "sides": "front, three-quarter, three-quarter, side", "ai": false},
+  {"id": "base", "type": "base", "seed": 42, "where": "pc", "resolution": "1024", "steps": 25, "given": "pictures/uploads/toaster_sword/object/toaster.glb", "label": "02 Base model: yours", "in": {"data": "object_sheet"}},
+  {"id": "edit", "type": "edit", "replace": true, "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}, "after": "flows/hand/toaster_sword_edit/prompt_1.png", "side": 1, "hand": "flows/hand/toaster_sword_edit"},
+  {"id": "shape", "type": "inpaint", "step": "shape", "seeds": [1], "in": {"model": "base", "edit": "edit"}},
+  {"id": "judge_shape", "type": "judge", "step": "shape", "in": {"candidates": "shape", "edit": "edit"}, "ai": false},
+  {"id": "details", "type": "inpaint", "step": "details", "seeds": [1], "in": {"model": "judge_shape", "edit": "edit"}},
+  {"id": "judge_details", "type": "judge", "step": "details", "in": {"candidates": "details", "edit": "edit"}, "ai": false},
+  {"id": "colours", "type": "inpaint", "step": "colours", "seeds": [1], "in": {"model": "judge_details", "edit": "edit"}},
+  {"id": "judge_colours", "type": "judge", "step": "colours", "in": {"candidates": "colours", "edit": "edit"}, "ai": false}
+ ]
+}

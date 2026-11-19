@@ -1,0 +1,11 @@
+{
+ "name": "cora",
+ "about": "build a 3D model of this",
+ "prompt": "build a 3D model of this",
+ "made_by": "app",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the object", "files": ["pictures/uploads/cora/object/cora_sheet.jpg"], "prompts": ["cora_sheet.jpg: a young woman's bust with dark wavy hair and a teal scarf"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "what": "a young woman's bust with dark wavy hair and a teal scarf", "in": {"pictures": "object"}, "sides": "side, three-quarter, three-quarter, side", "ai": false},
+  {"id": "base", "type": "base", "seed": 42, "where": "pc", "resolution": "1024", "steps": 25, "in": {"data": "object_sheet"}}
+ ]
+}

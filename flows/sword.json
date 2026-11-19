@@ -1,0 +1,11 @@
+{
+ "name": "sword",
+ "about": "build a 3D model of this sword",
+ "prompt": "build a 3D model of this sword",
+ "made_by": "app",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the object", "files": ["pictures/uploads/sword/object/sword.jpg"], "prompts": ["sword.jpg: a silver sword with an ornate grip and guard"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "what": "a silver sword with an ornate grip and guard", "in": {"pictures": "object"}, "sides": "front, three-quarter, three-quarter, side", "ai": false},
+  {"id": "base", "type": "base", "seed": 42, "where": "pc", "resolution": "1024", "steps": 25, "in": {"data": "object_sheet"}}
+ ]
+}
