@@ -236,7 +236,8 @@ def resolve(outputs):
         best = os.path.abspath(answer["best"])
         outputs = {**outputs, "model": next(c for c in outputs["candidates"] if os.path.abspath(c["glb"]) == best)}
         if "verdict" in answer:
-            outputs["verdict"] = answer["verdict"] + (f" ({'; '.join(answer['why'])})" if answer.get("why") else "")
+            outputs["verdict"] = answer["verdict"] + (f" ({'; '.join(answer['why'])})" if answer.get("why") else "") + \
+                (f"; warning: {'; '.join(answer['warnings'])}" if answer.get("warnings") else "")
     return outputs
 
 
