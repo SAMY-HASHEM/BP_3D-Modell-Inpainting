@@ -705,7 +705,7 @@ def understand(wanted):
             images.append(thumb.split(",", 1)[1])
             shown = f", shown as image {len(images)}"
         lines.append(f"{k + 1}. {str(item.get('kind', 'file'))[:20]} \"{str(item.get('name', ''))[:80]}\"{shown}")
-    body = {"model": MODEL, "stream": False, "format": "json", "think": False, "options": {"temperature": 0},
+    body = {"model": MODEL, "stream": False, "format": "json", "think": False, "options": {"temperature": 0, "num_predict": 4096},
             "messages": [{"role": "user", "content": UNDERSTAND % (prompt.replace('"', "'"), "\n".join(lines)), "images": images}]}
     try:
         request = urllib.request.Request(OLLAMA + "/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})

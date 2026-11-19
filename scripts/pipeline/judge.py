@@ -47,11 +47,14 @@ def encoded(path, size=512):
 
 
 def ask(images, question):
+    # qwen3-vl:30b thinks before it answers even with think: False, and once (Nov 19, the toaster's plan check) it
+    # thought for over 8 minutes: its thinking counts against num_predict, so an answer that runs away ends there and
+    # the judges go on with what they measured (their callers catch it), instead of holding the flow for 15 minutes
     body = {"model": MODEL, "stream": False, "think": False, "format": "json", "keep_alive": 0,  # unload: GPU free again
-            "options": {"temperature": 0}, "messages": [{"role": "user", "content": question, "images": images}]}
+            "options": {"temperature": 0, "num_predict": 4096}, "messages": [{"role": "user", "content": question, "images": images}]}
     request = urllib.request.Request(f"{OLLAMA}/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
-    answer = json.load(urllib.request.urlopen(request, timeout=900))["message"]["content"]
+    answer = json.load(urllib.request.urlopen(request, timeout=300))["message"]["content"]
     return json.loads(answer), answer
 
 

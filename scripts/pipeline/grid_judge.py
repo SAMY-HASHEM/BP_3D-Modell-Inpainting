@@ -118,11 +118,11 @@ def ask(images, question, size=512):
         answer, _ = ai.ask(BACKEND["model"], BACKEND["processor"], [i.convert("RGB") for i in images], question, 300)
         return answer
     body = {"model": JUDGE, "stream": False, "think": False, "format": "json", "keep_alive": "10m",
-            "options": {"temperature": 0}, "messages": [{"role": "user", "content": question,
+            "options": {"temperature": 0, "num_predict": 4096}, "messages": [{"role": "user", "content": question,
                                                          "images": [encoded(i, size) for i in images]}]}
     request = urllib.request.Request(f"{OLLAMA}/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
-    text = json.load(urllib.request.urlopen(request, timeout=900))["message"]["content"]
+    text = json.load(urllib.request.urlopen(request, timeout=300))["message"]["content"]
     try:
         return json.loads(text)
     except json.JSONDecodeError:
