@@ -84,13 +84,20 @@ A part with its own pictures (the web app makes this flow by itself since Nov 19
 [FIRST-SUCCESS.md](FIRST-SUCCESS.md), until then run by hand):
 
 ```
-03 Edit ─► 02 The part's own model ─► 03b Place ─► 03c Judge the plan ─► 04 details ─► 05 Judge ─► 04 colours ─► 05 Judge ─► 06 Into the whole
-make_edit   generate.py (its sheet)    place_part.py  edit_check.py          (placed.glb  edit_judge   inpaint.py   edit_judge   place_part.py --finish
-(front      the part as a 3D model     zoomed box,    redo stops the flow    keeps its                                          the rest stays the
- picture)                              4 sides        before the GPU work    voxels)                                            model's own mesh
+01b The part's sides ─► 02 The part's own model ─► 03b Place ─► 03c Judge the plan ─► 04 details ─► 05 Judge ─► 05b Colours from the part ─► 05 Judge ─► 06 Into the whole
+views_from_picture      multi_image.py              place_part.py  edit_check.py          inpaint.py    edit_judge   place_part.py              edit_judge   place_part.py --finish
+(one picture only:      (four sides: its back is    zoomed box,    redo stops the flow    (placed.glb                --part-colours: the part's               the rest stays the
+ the picture AI makes   not guessed)                4 sides, flat  before the GPU work    keeps its                  own model's colours, no                  model's own mesh
+ the other three)                                   parts 5 voxels                        voxels)                    GPU, seconds
+                                                    thick, painted
+                                                    side to camera
 ```
 
-A part from words only (a crown growing out of a head) keeps 04 shape ─► details ─► colours from the edit.
+Toaster robot + a red book (Nov 19, night): kept 98, part 79, colour 80; TRELLIS.2's colours step got 68 there (a grey
+back cover). A judge's redo stops the flow at that node.
+
+A part from words only (a crown growing out of a head) keeps 04 shape ─► details ─► colours from the edit (its one
+side is expected there: `cloud.py edit --grows`).
 
 Front ends of the same flows: the terminal (`flow.py flows/x.json`), the web app (`user_interface_model/app.html`: a chat, the
 data and the city that shows the run, + `flow_page.py`, see [FLOWS.md](FLOWS.md#3-web-app); its earlier pages in `old/`). Details: [FLOWS.md](FLOWS.md#1-inpainting-flow).
