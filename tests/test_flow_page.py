@@ -398,6 +398,28 @@ class OneSetOfDefaults(unittest.TestCase):
         self.assertEqual(set(flows.COLOURS), set(flows.TYPES))
 
 
+class AJudgeThatSaysRedo(unittest.TestCase):
+    """A judge's redo stops the flow there (Nov 19: details judged redo, and the colours step started on it anyway)."""
+
+    def flow_with(self, verdict, **judge):
+        made = flows.Flow.__new__(flows.Flow)
+        made.nodes = {"judge_details": {"id": "judge_details", "type": "judge", **judge}, "edit": {"id": "edit", "type": "edit"}}
+        made.state = {"judge_details": {"outputs": {"verdict": verdict}}, "edit": {"outputs": {"verdict": "redo"}}}
+        return made
+
+    def test_redo_stops_it(self):
+        self.assertIn("redo (part 46", self.flow_with("redo (part 46 is below 70)").rejected("judge_details"))
+
+    def test_pass_goes_on(self):
+        self.assertEqual(self.flow_with("pass").rejected("judge_details"), "")
+
+    def test_it_can_be_let_go_on(self):
+        self.assertEqual(self.flow_with("redo", stop_on_redo=False).rejected("judge_details"), "")
+
+    def test_only_a_judge_stops_it(self):
+        self.assertEqual(self.flow_with("pass").rejected("edit"), "")
+
+
 class AProxyThatRefuses(unittest.TestCase):
     """The uni server's proxy is sometimes down: a run then goes without it, with the models from disk."""
 

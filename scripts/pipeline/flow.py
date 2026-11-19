@@ -150,6 +150,8 @@ class Flow:
                 elif os.path.isfile(os.path.join(job["folder"], "time.json")):
                     state["minutes"] = json.load(open(os.path.join(job["folder"], "time.json")))["minutes"]
             state["outputs"] = with_preview(core.resolve(dict(outputs)), state["folder"])
+            if self.rejected(key):
+                return self.set(key, "failed", self.rejected(key))
             self.set(key, "done", state["outputs"].get("verdict", ""))
         except Exception as e:  # noqa: BLE001 (shown on the node; the nodes after it stay waiting)
             self.set(key, "failed", f"{type(e).__name__}: {e}"[:300])
@@ -173,9 +175,21 @@ class Flow:
                     if os.path.isfile(os.path.join(job["folder"], "time.json")):
                         self.state[key]["minutes"] = json.load(open(os.path.join(job["folder"], "time.json")))["minutes"]
                 self.state[key]["outputs"] = with_preview(core.resolve(dict(outputs)), self.state[key]["folder"], previews)
+                if self.rejected(key):
+                    self.state[key].update(status="failed", note=self.rejected(key))
+                    continue
                 self.state[key].update(status="done", note=self.state[key]["outputs"].get("verdict", ""))
             except Exception as e:  # noqa: BLE001 (it shows when the node runs)
                 self.state[key]["note"] = f"{type(e).__name__}: {e}"[:200]
+
+    def rejected(self, key):
+        """A judge that says redo stops the flow there: the steps after it would build on a model it rejected (the
+        toaster's book, Nov 19: details judged redo, part 46, and the colours step started on it anyway). A node
+        with "stop_on_redo": false lets it go on, to look at what comes of it."""
+        verdict = str((self.state[key]["outputs"] or {}).get("verdict") or "")
+        if self.nodes[key]["type"] == "judge" and verdict.startswith("redo") and self.settings(self.nodes[key]).get("stop_on_redo", True):
+            return f"the judge says {verdict}; the steps after it are not run on a rejected model"
+        return ""
 
     def run_step(self, key, command, label, done, folder):
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "BLENDER": BLENDER}

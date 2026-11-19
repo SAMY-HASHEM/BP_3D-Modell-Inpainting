@@ -139,7 +139,12 @@ file did, and one was compared with the other. Saved the same way, the rest is k
   first); the one-mesh file was written with a few lines of Python, not by a script.
 - **A model made of pieces.** The old part was one of the robot's 52 pieces. For one fused mesh (what TRELLIS.2 makes)
   the old part is the faces under the mask, `--behind` voxels deep: written, not tried.
-- **The steps are run by hand.** There is no flow node for them yet (`flows/`, `nodes_core.py`).
+- ~~The steps are run by hand.~~ Since Nov 19 they are flow nodes, and the web app builds this flow by itself when the
+  part comes with its own pictures: `part_views` (one picture only: the picture AI makes its other three sides, so its
+  back is not guessed), `base` for the part, `place`, `check` (redo stops the flow), `inpaint` details and colours with
+  their judges, `finish`. Two things found on the way: a flat part was turned back to front when TRELLIS.2 put the
+  picture's side at -Z (the red book: a guessed grey-blue painting faced the camera), so the side is now chosen by
+  colour against the AFTER picture; and a node's done file must be the last file its script writes.
 - **The local vision AI** (Qwen3.6-27B) gave 10 of 10 to every plan, good or bad. Only the measured part of the judge
   before the inpainting told them apart.
 - **Top views** are not rendered, only the four straight sides and the four in between.
