@@ -453,8 +453,8 @@ def edit(args):
         # minute here; on the server it costs 20 to 40 minutes (the toaster robot's book went twice, Nov 15)
         from edit_check import check
         checked = os.path.join(args.edit, "check.json")
-        result = json.load(open(checked)) if os.path.isfile(checked) and os.path.getmtime(checked) >= os.path.getmtime(
-            os.path.join(args.edit, "edit.json")) else check(args.edit, part=made.get("prompt") or "a new part")
+        result = json.load(open(checked)) if not args.grows and os.path.isfile(checked) and os.path.getmtime(checked) >= os.path.getmtime(
+            os.path.join(args.edit, "edit.json")) else check(args.edit, part=made.get("prompt") or "a new part", grows=args.grows)
         for found in result["findings"]:
             print(f"  [{found['how_bad']}] {found['what']}\n      -> {found['do']}", flush=True)
         if result["verdict"] != "pass":
@@ -680,6 +680,8 @@ def main(argv=None):
     p.add_argument("--details", action="store_true", help="model is the shape step's result: only its fine shape")
     p.add_argument("--colours", action="store_true", help="the last step: only the colours of the model")
     p.add_argument("--unchecked", action="store_true", help="send it also when the judge before the inpainting says redo")
+    p.add_argument("--grows", action="store_true", help="the part grows out of the model (from words, the shape from noise): "
+                   "for the judge before the inpainting one side is then expected")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch")
     p.add_argument("--here", action="store_true", help="run it on this PC's GPU instead of the uni server (needs --wait)")
     p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")

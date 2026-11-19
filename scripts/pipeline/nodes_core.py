@@ -462,7 +462,9 @@ def inpaint_step(model, edit_, step="shape", seeds=(1,), where="server"):
                                                                 **({"where": "pc"} if here else {})})
     done = os.path.join(folder, "server_job.json")
     command = py("server/cloud.py", "edit", edit_["folder"], model["glb"], "--seeds", *seeds, "--wait", folder,
-                 *({"shape": [], "details": ["--details"], "colours": ["--colours"]}[step]), *(["--here"] if here else []))
+                 *({"shape": ["--grows"], "details": ["--details"], "colours": ["--colours"]}[step]), *(["--here"] if here else []))
+    # the shape from noise is only for a part that grows out of the model (a part with its own model is placed and
+    # starts at details): its one side is expected there, the judge before the inpainting does not stop it for that
     return {"folder": folder, "steps": [(command, f"04 inpaint: {step} ({'this PC' if here else 'uni server'})", done)],
             "outputs": {"models_from": done, "model_like": {"name": edit_["name"], "kind": step, "label": step}}}
 

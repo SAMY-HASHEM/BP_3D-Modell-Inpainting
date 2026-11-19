@@ -73,7 +73,7 @@ def measure(folder):
             "high": round(float(np.ptp(points[:, 1]) / voxel), 1)}
 
 
-def findings(measured):
+def findings(measured, grows=False):
     """What is wrong, as (how bad 1..3, what, what to do). 3 = do not send."""
     found = []
     shown = [f for f in measured["sides"] if "room" in f]
@@ -94,7 +94,10 @@ def findings(measured):
             found.append((2, f"On {where}, the middle of the 3D area is {f['middle']:.1f} part widths away from the part.",
                           "Look at area_map.jpg: the area should lie on the part."))
     if len(shown) <= 1:
-        found.append((3 if measured["deep"] > 8 else 2,
+        # grows: a part from words that grows out of the model (a crown on a head) has only the front by design, and its
+        # shape is made from noise there (the crown and the wheel, October); for it this is a warning, not a stop
+        # (Nov 19: the rule stopped every words-only flow of the web app before its shape step)
+        found.append((2 if grows or measured["deep"] <= 8 else 3,
                       f"Only one side has a picture of the new part. The 3D area is {measured['deep']:.0f} voxels deep "
                       f"({measured['wide']:.0f} wide, {measured['high']:.0f} high), and nothing says where in it the part is or how thick: "
                       "its depth, sides and back would be guessed.",
@@ -131,9 +134,9 @@ def sheet(folder, sides):
     return path
 
 
-def check(folder, object_="an object", part="a new part", ai=True):
+def check(folder, object_="an object", part="a new part", ai=True, grows=False):
     measured = measure(folder)
-    found = findings(measured)
+    found = findings(measured, grows)
     sides = len(measured["sides"])
     seen = {}
     if ai:
@@ -161,10 +164,12 @@ def main():
     parser.add_argument("--object", default="an object")
     parser.add_argument("--part", default="a new part", help="what the change is, in words")
     parser.add_argument("--no-ai", action="store_true", help="only what is measured")
+    parser.add_argument("--grows", action="store_true", help="a part from words that grows out of the model: one side "
+                        "is expected (a warning, not a redo)")
     parser.add_argument("--out", help="also write check.json (and check.jpg) here, and passed.json only on pass: a flow "
                         "node's folder, so a plan judged redo is judged again next time and not taken as done")
     args = parser.parse_args()
-    result = check(args.edit, args.object, args.part, not args.no_ai)
+    result = check(args.edit, args.object, args.part, not args.no_ai, args.grows)
     if args.out:
         import shutil
         os.makedirs(args.out, exist_ok=True)
