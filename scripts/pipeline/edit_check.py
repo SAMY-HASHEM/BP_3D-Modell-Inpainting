@@ -73,7 +73,7 @@ def measure(folder):
             "high": round(float(np.ptp(points[:, 1]) / voxel), 1)}
 
 
-def findings(measured):
+def findings(measured, grows=False):
     """What is wrong, as (how bad 1..3, what, what to do). 3 = do not send."""
     found = []
     shown = [f for f in measured["sides"] if "room" in f]
@@ -94,7 +94,10 @@ def findings(measured):
             found.append((2, f"On {where}, the middle of the 3D area is {f['middle']:.1f} part widths away from the part.",
                           "Look at area_map.jpg: the area should lie on the part."))
     if len(shown) <= 1:
-        found.append((3 if measured["deep"] > 8 else 2,
+        # grows: a part from words that grows out of the model (a crown on a head) has only the front by design, and its
+        # shape is made from noise there (the crown and the wheel, October); for it this is a warning, not a stop
+        # (Nov 19: the rule stopped every words-only flow of the web app before its shape step)
+        found.append((2 if grows or measured["deep"] <= 8 else 3,
                       f"Only one side has a picture of the new part. The 3D area is {measured['deep']:.0f} voxels deep "
                       f"({measured['wide']:.0f} wide, {measured['high']:.0f} high), and nothing says where in it the part is or how thick: "
                       "its depth, sides and back would be guessed.",
@@ -106,8 +109,12 @@ def findings(measured):
                       "Place the part with place_part.py (its pegs make the box big enough), or make the part smaller."))
     thin = min(measured.get("part_voxels") or [99])
     if thin < 3:
-        found.append((2, f"The new part is only {thin:.1f} voxels thick: too thin to be built well.",
-                      "Zoom in: place_part.py --zoom 0.25 sends only a box around the part, so it gets more voxels."))
+        found.append((3, f"The new part is only {thin:.1f} voxels thick: too thin to be built at all.",
+                      "Zoom in (place_part.py --zoom 0.25 sends only a box around the part) and let place_part.py make it "
+                      "thicker (--min-voxels 5)."))
+    elif thin < 4.5:  # Nov 19: a book 3.6 voxels thick came out as a frame with hollow, speckled covers; 5 came out whole
+        found.append((2, f"The new part is only {thin:.1f} voxels thick: its flat sides may come out hollow.",
+                      "place_part.py --min-voxels 5 makes a flat part that thick (the flow's place node does it)."))
     return sorted(found, key=lambda f: -f[0])
 
 
@@ -127,9 +134,9 @@ def sheet(folder, sides):
     return path
 
 
-def check(folder, object_="an object", part="a new part", ai=True):
+def check(folder, object_="an object", part="a new part", ai=True, grows=False):
     measured = measure(folder)
-    found = findings(measured)
+    found = findings(measured, grows)
     sides = len(measured["sides"])
     seen = {}
     if ai:
@@ -157,8 +164,23 @@ def main():
     parser.add_argument("--object", default="an object")
     parser.add_argument("--part", default="a new part", help="what the change is, in words")
     parser.add_argument("--no-ai", action="store_true", help="only what is measured")
+    parser.add_argument("--grows", action="store_true", help="a part from words that grows out of the model: one side "
+                        "is expected (a warning, not a redo)")
+    parser.add_argument("--out", help="also write check.json (and check.jpg) here, and passed.json only on pass: a flow "
+                        "node's folder, so a plan judged redo is judged again next time and not taken as done")
     args = parser.parse_args()
-    result = check(args.edit, args.object, args.part, not args.no_ai)
+    result = check(args.edit, args.object, args.part, not args.no_ai, args.grows)
+    if args.out:
+        import shutil
+        os.makedirs(args.out, exist_ok=True)
+        for name in ("check.json", "check.jpg"):
+            if os.path.isfile(os.path.join(args.edit, name)):
+                shutil.copy(os.path.join(args.edit, name), os.path.join(args.out, name))
+        passed = os.path.join(args.out, "passed.json")
+        if result["verdict"] == "pass":
+            json.dump({"verdict": "pass"}, open(passed, "w"))
+        elif os.path.exists(passed):
+            os.remove(passed)
     m = result["measured"]
     print(f"the 3D area: {m['voxels']} voxels, {m['wide']:.0f} wide x {m['high']:.0f} high x {m['deep']:.0f} deep"
           + (f"; the new part is {' x '.join(f'{v:.0f}' for v in m['part_voxels'])} voxels" if m.get("part_voxels") else ""), flush=True)

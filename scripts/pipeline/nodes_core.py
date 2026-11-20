@@ -236,7 +236,8 @@ def resolve(outputs):
         best = os.path.abspath(answer["best"])
         outputs = {**outputs, "model": next(c for c in outputs["candidates"] if os.path.abspath(c["glb"]) == best)}
         if "verdict" in answer:
-            outputs["verdict"] = answer["verdict"] + (f" ({'; '.join(answer['why'])})" if answer.get("why") else "")
+            outputs["verdict"] = answer["verdict"] + (f" ({'; '.join(answer['why'])})" if answer.get("why") else "") + \
+                (f"; warning: {'; '.join(answer['warnings'])}" if answer.get("warnings") else "")
     return outputs
 
 
@@ -287,6 +288,29 @@ def sheet_views(data, which):
     sheet = json.load(open(data["path"]))
     paths = {v["name"]: v["path"] for v in sheet["views"]}
     return [project_path(paths[name]) for name in sheet["lists"][which]]
+
+
+def cut_part(edit_, change=60):
+    """03a: a part from words gets a picture of its own: what the picture AI painted, cut out of the edit's AFTER picture
+    (cut_part.py). Its output is like an input's, so the part's data sheet, sides and own model follow as for an upload."""
+    folder = node_folder(edit_["name"], "03a_cut_part", {"edit": stamp(os.path.join(edit_["folder"], "edit.json")), "change": change})
+    out = os.path.join(folder, "part.png")
+    command = py("inpainting/cut_part.py", edit_["folder"], "--out", folder, "--what", edit_["part"], "--change", change)
+    return {"folder": folder, "steps": [(command, "03a the painted part cut out", out)],
+            "outputs": {"pictures": {"name": edit_["name"], "files": [out]}, "sheet": out}}
+
+
+def part_views(data, way="angles", seed=1):
+    """01b: a part with one picture only gets its missing sides from the picture AI (views_from_picture.py): from one
+    picture TRELLIS.2 guesses the back, and the red book of Nov 19 got a grey-blue painting as its back cover. Writes a
+    data sheet of its own (the four views in turning order, the front first), which the part's model and the edit read."""
+    front = sheet_views(data, "base")[0]
+    what = json.load(open(data["path"])).get("what") or ""
+    folder = node_folder(data["name"], "01b_part_views", {"front": stamp(front), "way": way, "seed": seed})
+    out = os.path.join(folder, "sheet.json")
+    command = py("generation/views_from_picture.py", front, "--way", way, "--seed", seed, "--out", folder, "--sheet", what)
+    return {"folder": folder, "steps": [(command, "01b the part's missing sides (picture AI)", out)],
+            "outputs": {"data": {**data, "path": out}, "sheet": os.path.join(folder, "overview.jpg")}}
 
 
 def base_model(data, where="server", mode="multidiffusion", resolution="1024", steps=25, seed=42, colours="all", view=None,
@@ -385,6 +409,59 @@ def edit(model, part, obj, replace=False, width=0.75, sink=0.15, head=0.12, fit=
                         "sheet": os.path.join(folder, "three.jpg"), "area_map": os.path.join(folder, "area_map.jpg")}}
 
 
+def place(part_model, edit_, zoom=0.25, size=0.8, sides=4, behind=4, min_voxels=5):
+    """03b: the part's own 3D model put where the old part is (place_part.py, docs/FIRST-SUCCESS.md): the edit's front
+    mask says where and how big, the old part's plane how it lies. Only a box around the two parts goes on (zoom), and
+    the four sides' pictures all show the same part. Its folder is the edit for every step after it; the model the
+    inpainting starts from is placed.glb (the details step keeps its voxels), the judges compare with before.glb."""
+    model = edit_["original"]
+    folder = node_folder(edit_["name"], "03b_place", {"model": stamp(model["glb"]), "part": stamp(part_model["glb"]),
+                                                      "edit": stamp(os.path.join(edit_["folder"], "edit.json")),
+                                                      "zoom": zoom, "size": size, "sides": sides, "behind": behind,
+                                                      "facing": "by colour", "min_voxels": min_voxels})  # Nov 19: measured side, thick enough
+    out = os.path.join(folder, "placed.glb")
+    done = os.path.join(folder, "edit.json")  # place_part.py writes it last: a run stopped halfway is not taken as done
+    command = py("inpainting/place_part.py", model["glb"], part_model["glb"], "--edit", edit_["folder"], "--out", folder,
+                 "--zoom", zoom, "--size", size, "--sides", sides, "--behind", behind, "--min-voxels", min_voxels)
+    placed = {"name": edit_["name"], "kind": "placed", "label": "the part placed"}
+    return {"folder": folder, "steps": [(command, "03b place the part in 3D", done)],
+            "outputs": {"edit": {**edit_, "folder": folder, "original": {**placed, "label": "before", "glb": os.path.join(folder, "before.glb")},
+                                 "whole": model},
+                        "model": {**placed, "glb": out}, "sheet": os.path.join(folder, "three.jpg"),
+                        "area_map": os.path.join(folder, "area_map.jpg")}}
+
+
+def plan_check(edit_, ai=True):
+    """03c: the judge before the inpainting (edit_check.py): are the pictures and the 3D area fit to be sent? A plan
+    judged redo stops the flow here, before it costs GPU time; passed.json is only written on pass."""
+    folder = node_folder(edit_["name"], "03c_check", {"edit": stamp(os.path.join(edit_["folder"], "edit.json")), "ai": ai})
+    out = os.path.join(folder, "passed.json")
+    command = py("pipeline/edit_check.py", edit_["folder"], "--object", edit_["object"], "--part", edit_["part"],
+                 "--out", folder, *([] if ai else ["--no-ai"]))
+    return {"folder": folder, "steps": [(command, "03c judge the plan", out)],
+            "outputs": {"edit": edit_, "verdict": "pass", "sheet": os.path.join(folder, "check.jpg")}}
+
+
+def colours_from_part(result, edit_):
+    """05b: the details step's result, its new part coloured from the part's own model (place_part.py --part-colours):
+    instead of TRELLIS.2's colours step, which guessed the book's back cover grey. No GPU, seconds."""
+    folder = node_folder(edit_["name"], "05b_part_colours", {"result": stamp(result["glb"]), "edit": stamp(os.path.join(edit_["folder"], "edit.json"))})
+    out = os.path.join(folder, "coloured.glb")
+    command = py("inpainting/place_part.py", "--part-colours", result["glb"], "--out", edit_["folder"], "--final", out)
+    return {"folder": folder, "steps": [(command, "05b colours from the part's own model", out)],
+            "outputs": {"model": {"name": edit_["name"], "kind": "colours", "label": "colours from the part", "glb": out}}}
+
+
+def finish(result, edit_):
+    """06: the inpainted part back into the whole, untouched model (place_part.py --finish): only the box went through
+    TRELLIS.2, everything else is the model's own mesh."""
+    folder = node_folder(edit_["name"], "06_finish", {"result": stamp(result["glb"]), "edit": stamp(os.path.join(edit_["folder"], "edit.json"))})
+    out = os.path.join(folder, f"{edit_['name']}_finished.glb")
+    command = py("inpainting/place_part.py", "--finish", result["glb"], "--out", edit_["folder"], "--final", out)
+    return {"folder": folder, "steps": [(command, "06 back into the whole model", out)],
+            "outputs": {"model": {"name": edit_["name"], "kind": "finished", "label": "finished", "glb": out}}}
+
+
 def inpaint_step(model, edit_, step="shape", seeds=(1,), where="server"):
     """04: one step of the inpainting, always in the order shape -> details -> colours, each from the result of the
     one before. Several seeds give several candidates in one server job (TRELLIS.2 is loaded once)."""
@@ -395,7 +472,9 @@ def inpaint_step(model, edit_, step="shape", seeds=(1,), where="server"):
                                                                 **({"where": "pc"} if here else {})})
     done = os.path.join(folder, "server_job.json")
     command = py("server/cloud.py", "edit", edit_["folder"], model["glb"], "--seeds", *seeds, "--wait", folder,
-                 *({"shape": [], "details": ["--details"], "colours": ["--colours"]}[step]), *(["--here"] if here else []))
+                 *({"shape": ["--grows"], "details": ["--details"], "colours": ["--colours"]}[step]), *(["--here"] if here else []))
+    # the shape from noise is only for a part that grows out of the model (a part with its own model is placed and
+    # starts at details): its one side is expected there, the judge before the inpainting does not stop it for that
     return {"folder": folder, "steps": [(command, f"04 inpaint: {step} ({'this PC' if here else 'uni server'})", done)],
             "outputs": {"models_from": done, "model_like": {"name": edit_["name"], "kind": step, "label": step}}}
 

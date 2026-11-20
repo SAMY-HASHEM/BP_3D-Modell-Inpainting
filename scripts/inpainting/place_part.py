@@ -44,7 +44,7 @@ import subprocess
 
 import numpy as np
 import trimesh
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
@@ -269,14 +269,40 @@ def axes_of(points):
     return directions[order], reach[order]
 
 
-def placed(part, old_points, mask, origin, right, toward, size, per_pixel, factor=1.0):
-    """The new part moved, turned and scaled to its place: the 4 x 4 matrix. factor: bigger or smaller than painted."""
+def side_colours(part, thin, count=60_000):
+    """The mean colour (RGB 0-255) of a flat part's two big sides: the one thin points to, and the other one."""
+    try:
+        coloured = part.copy()
+        coloured.visual.material = coloured.visual.material.to_simple()  # a PBR material: its base colour texture
+        points, _, colours = trimesh.sample.sample_surface(coloured, count, seed=0, sample_color=True)
+    except Exception:  # noqa: BLE001 (no texture: the side is not known by colour)
+        return None
+    depth = (points - points.mean(0)) @ thin
+    front, back = depth > 0.3 * depth.max(), depth < 0.3 * depth.min()
+    if front.sum() < 100 or back.sum() < 100:
+        return None
+    return colours[front, :3].mean(0), colours[back, :3].mean(0)
+
+
+def placed(part, old_points, mask, origin, right, toward, size, per_pixel, factor=1.0, wanted=None):
+    """The new part moved, turned and scaled to its place: the 4 x 4 matrix. factor: bigger or smaller than painted.
+    wanted: the colour the AFTER picture shows inside the mask (RGB): a flat part turns the side of that colour to the camera."""
     up = np.array([0.0, 1.0, 0.0])
     cloud = trimesh.sample.sample_surface(part, 200_000, seed=0)[0]
     directions, reach = axes_of(cloud)
     flat = reach[2] < 0.35 * reach[1]  # a book, a shield, a plate: its thin direction decides how it lies
     if flat:
         thin = directions[2] * (1 if directions[2][2] >= 0 else -1)  # the side the part's picture shows looks at the camera
+        # which side that is, is measured when the colours tell: TRELLIS.2 does not always turn the picture's side to +Z.
+        # The red book of Nov 19 had its red cover at -Z and a guessed grey-blue back at +Z, and was placed back to front.
+        sides = side_colours(part, thin) if wanted is not None else None
+        if sides is not None:
+            near, far = (float(np.linalg.norm(c - np.asarray(wanted, float))) for c in sides)
+            if far < 0.8 * near:
+                thin = -thin
+            print(f"    the side that looks at the camera: by colour (wanted {np.round(wanted).astype(int).tolist()}, "
+                  f"this side {np.round(sides[0 if far >= 0.8 * near else 1]).astype(int).tolist()}, "
+                  f"{'turned round' if far < 0.8 * near else 'as it was'})", flush=True)
         long = max(directions[:2], key=lambda d: abs(d[1]))
         long = long * (1 if long[1] >= 0 else -1)
     else:  # TRELLIS.2's own pose: Y up, the front towards +Z
@@ -313,6 +339,27 @@ def placed(part, old_points, mask, origin, right, toward, size, per_pixel, facto
     return matrix
 
 
+def thickened(part, new_points, both, mesh, zoom, least):
+    """The 4 x 4 matrix that makes a flat part `least` voxels thick in TRELLIS.2's cube, or None when it is thick enough.
+    The toaster robot's book, Nov 19: 3.6 voxels thick, the details step built only its frame and left the covers hollow
+    and speckled; the book of Nov 16 was 5 voxels thick and came out whole. Only the thin direction is stretched, around
+    the part's middle: a book a little thicker still looks like the same book in the hand."""
+    directions, reach = axes_of(new_points)
+    if reach[2] >= 0.35 * reach[1]:  # not flat
+        return None
+    span = np.ptp(both, 0).max() * (1 + 2 * zoom) if zoom else np.maximum(np.ptp(mesh.vertices, 0), np.ptp(both, 0)).max()
+    voxel = span / GRID
+    if reach[2] >= least * voxel:
+        return None
+    factor = least * voxel / reach[2]
+    thin, middle = directions[2], new_points.mean(0)
+    stretch = np.eye(4)
+    stretch[:3, :3] += (factor - 1) * np.outer(thin, thin)
+    stretch[:3, 3] = middle - stretch[:3, :3] @ middle
+    print(f"    the new part is {reach[2] / voxel:.1f} voxels thick: made {least:.0f} (x {factor:.2f} in its thin direction)", flush=True)
+    return stretch
+
+
 def with_pegs(mesh, low, high, size):
     """The mesh with a tiny peg in every corner of the box: its bounds are then the box, and TRELLIS.2's cube with it."""
     corners = np.array([[x, y, z] for x in (low[0], high[0]) for y in (low[1], high[1]) for z in (low[2], high[2])])
@@ -326,6 +373,34 @@ def with_pegs(mesh, low, high, size):
     uv = np.concatenate([np.asarray(mesh.visual.uv), np.zeros((32, 2))])
     return trimesh.Trimesh(np.concatenate(vertices), np.concatenate(faces), process=False,
                            visual=trimesh.visual.TextureVisuals(uv=uv, material=mesh.visual.material))
+
+
+def part_colours(args):
+    """The details step's result with the new part coloured from the part's own textured model (placed in after.glb):
+    every vertex within one voxel of the placed part takes the colour of its nearest point there, the rest keeps its own.
+    Toaster robot, Nov 19: TRELLIS.2's colours step gave the book a grey back cover and a dull front (part 68, colour 68,
+    22 minutes on the GPU); its own model, made from four sides, had them right: kept 98, part 79, colour 80, 7 seconds."""
+    voxel = json.load(open(os.path.join(args.out, "edit.json")))["voxel"]
+    after = trimesh.load(os.path.join(args.out, "after.glb"))
+    part = max(after.geometry.values(), key=lambda g: len(g.faces))  # the placed part (the rest is cut to the box)
+    part.visual.material = part.visual.material.to_simple()  # a PBR material: its base colour texture
+    points, _, colours = trimesh.sample.sample_surface(part, 2_000_000, seed=0, sample_color=True)
+    result = one_mesh(args.part_colours)
+    # the colours are painted into a copy of the result's own texture, face by face, so its material stays: written
+    # as vertex colours, the metallic and roughness texture went and cora's hair shone differently (kept 89; painted 99)
+    texture = result.visual.material.baseColorTexture.convert("RGB")
+    width, height = texture.size
+    distance, nearest = cKDTree(points).query(result.triangles_center, distance_upper_bound=args.reach * voxel)
+    near = np.nonzero(np.isfinite(distance))[0]
+    uv = result.visual.uv[result.faces[near]]
+    corners = np.stack([uv[..., 0] * (width - 1), (1 - uv[..., 1]) * (height - 1)], -1)
+    painted = texture.copy()
+    draw = ImageDraw.Draw(painted)
+    for face, colour in zip(corners, colours[nearest[near], :3]):
+        draw.polygon([tuple(c) for c in face], fill=tuple(int(v) for v in colour))
+    result.visual.material.baseColorTexture = painted
+    trimesh.Scene([result]).export(args.final)
+    print(f"    {args.final}: {len(near):,} of {len(result.faces):,} faces coloured from the part's own model", flush=True)
 
 
 def finish(args):
@@ -358,6 +433,8 @@ def main():
                         "TRELLIS.2: the margin around them, as a share of their size (0.5: they fill half of the cube; 0: the whole model)")
     parser.add_argument("--size", type=float, default=1.0, help="the new part bigger or smaller than the picture AI painted it")
     parser.add_argument("--sides", type=int, choices=[4, 8], default=4, help="8: also the four sides in between (45 degrees)")
+    parser.add_argument("--min-voxels", type=float, default=5.0, help="a flat part thinner than this in TRELLIS.2's cube is "
+                        "made this thick (a book 3.6 voxels thick came out hollow, 5 whole); 0: as it is")
     parser.add_argument("--old", metavar="WORD", help="without --edit: the old part by its name (\"axe\"), found on pictures "
                         "from eight sides by the mask AI. For one fused mesh, where the part is no piece of its own")
     parser.add_argument("--hand", nargs=2, metavar=("RIG_JSON", "PART"), help="with --old: the new part is a held thing; its grip "
@@ -366,8 +443,13 @@ def main():
                         "part is made again too (a fist around a new grip), and the cut edges where the old part was")
     parser.add_argument("--front", type=int, default=0, help="without --edit: which straight view is the model's front (0: as TRELLIS.2 puts it)")
     parser.add_argument("--finish", metavar="RESULT", help="after the inpainting: its result's new part into the whole model")
-    parser.add_argument("--final", help="--finish: the finished model's file")
+    parser.add_argument("--final", help="--finish, --part-colours: the model's file to write")
+    parser.add_argument("--part-colours", metavar="RESULT", help="after the details step: its result with the new part "
+                        "coloured from the part's own model (instead of TRELLIS.2's colours step); --out is the place folder")
     args = parser.parse_args()
+    if args.part_colours:
+        args.reach = 1.0
+        return part_colours(args)
     if args.finish:
         return finish(args)
     os.makedirs(args.out, exist_ok=True)
@@ -399,9 +481,18 @@ def main():
         part.apply_transform(placed_in_hand(part, old_points, trimesh.sample.sample_surface(rest, 400_000, seed=0)[0], joint,
                                             np.ptp(mesh.vertices, 0).max() / GRID, args.size))
     else:
-        part.apply_transform(placed(part, old_points, front_mask, origin, right, toward, size, per_pixel, args.size))
+        after = np.asarray(Image.open(os.path.join(args.edit, "after.png")).convert("RGB"), float)
+        inside = ndimage.binary_erosion(front_mask, iterations=3) if front_mask.shape == after.shape[:2] else None
+        wanted = after[inside].mean(0) if inside is not None and inside.sum() > 50 else None  # the painted part's colour
+        part.apply_transform(placed(part, old_points, front_mask, origin, right, toward, size, per_pixel, args.size, wanted))
     new_points = trimesh.sample.sample_surface(part, 300_000, seed=0)[0]
     both = np.concatenate([new_points, old_points])
+    if args.min_voxels:  # a flat part too thin for TRELLIS.2's cube is made a little thicker (it would come out hollow)
+        thicker = thickened(part, new_points, both, mesh, args.zoom, args.min_voxels)
+        if thicker is not None:
+            part.apply_transform(thicker)
+            new_points = trimesh.sample.sample_surface(part, 300_000, seed=0)[0]
+            both = np.concatenate([new_points, old_points])
     rest.export(os.path.join(args.out, "rest_whole.glb"))
 
     # the box that becomes TRELLIS.2's cube: around the two parts (--zoom), or the whole model and the new part

@@ -14,6 +14,12 @@
 #             sheet and the judges. It must be running when a job comes: the last line shows how to start it again
 #   unirig    the skeleton model in its own environment conda/envs/unirig (scripts/tools/rig.sh)
 #   mask      the mask AI (./install_mask.sh)
+#   comfyui   only the fix that lets an installed ComfyUI 0.45 start with the project's torch 2.6
+#             (scripts/tools/fix_comfy_kitchen.py); run it again after ComfyUI or comfy_kitchen were updated.
+#             The project's ComfyUI listens on 127.0.0.1:8198: others run theirs on 8188 and 8189 on the uni server
+#
+# Ollama 0.13.0 of the uni server (installed for everyone) can't pull qwen3.6:27b, and the server can't reach
+# ollama.com (Nov 18): the judges use qwen3-vl:30b, which is there (JUDGE_MODEL in scripts/pipeline/judge.py).
 #
 # Not in here: the picture AI (ComfyUI + Qwen-Image-Edit, ./download_models.sh qwen). Without it a part needs its own
 # pictures and is put on the top of the object; a part from words can't be made on the server.
@@ -26,6 +32,9 @@ APPS="$HOME/Applications"
 mkdir -p "$APPS"
 
 for part in $WANTED; do case $part in
+comfyui)
+    python3 "$PROJECT/scripts/tools/fix_comfy_kitchen.py"
+    ;;
 blender)
     if [ -x "$APPS/blender/blender" ]; then echo "Blender is there: $("$APPS/blender/blender" --version | head -1)"; continue; fi
     echo "Blender 5.2.3 ..."

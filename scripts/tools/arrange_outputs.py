@@ -106,6 +106,8 @@ def from_flows():
             step = os.path.basename(os.path.dirname(folder.rstrip("/"))).replace("04_", "")
             for path in sorted(glob.glob(os.path.join(folder, "*.glb"))):
                 found.append((thing, (extra + "_" if extra else "") + f"{step}_{clean(os.path.basename(path)[:-4])}", path, "link"))
+        for path in sorted(glob.glob(os.path.join(flow, "06_finish", "*", "*.glb"))):  # the new part in the whole model
+            found.append((thing, (extra + "_" if extra else "") + "FINISHED_part_in_the_whole_model", path, "link"))
     return found
 
 

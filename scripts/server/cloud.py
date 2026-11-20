@@ -364,7 +364,9 @@ def inpaint(args):
     else:
         raise SystemExit("give the area: --box X0 Y0 Z0 X1 Y1 Z1 (model coordinates) or --area file.npy")
     name = re.sub("_+", "_", os.path.splitext(os.path.basename(args.model))[0][:40])  # "__" marks results
-    folder = os.path.join(PROJECT_DIR, "outputs", "cloud")
+    # a job run here (--here --wait) is packed into the folder it waits in, the flow node's own: on the uni server /home
+    # was full and outputs/cloud could take no more (Nov 19), while the node's folder can be anywhere (linked to /tmp)
+    folder = args.wait if getattr(args, "here", False) and getattr(args, "wait", None) else os.path.join(PROJECT_DIR, "outputs", "cloud")
     os.makedirs(folder, exist_ok=True)
     area_file, path = os.path.join(folder, f"{name}_area.npy"), os.path.join(folder, f"{name}_job.zip")
     np.save(area_file, points)
@@ -453,8 +455,8 @@ def edit(args):
         # minute here; on the server it costs 20 to 40 minutes (the toaster robot's book went twice, Nov 15)
         from edit_check import check
         checked = os.path.join(args.edit, "check.json")
-        result = json.load(open(checked)) if os.path.isfile(checked) and os.path.getmtime(checked) >= os.path.getmtime(
-            os.path.join(args.edit, "edit.json")) else check(args.edit, part=made.get("prompt") or "a new part")
+        result = json.load(open(checked)) if not args.grows and os.path.isfile(checked) and os.path.getmtime(checked) >= os.path.getmtime(
+            os.path.join(args.edit, "edit.json")) else check(args.edit, part=made.get("prompt") or "a new part", grows=args.grows)
         for found in result["findings"]:
             print(f"  [{found['how_bad']}] {found['what']}\n      -> {found['do']}", flush=True)
         if result["verdict"] != "pass":
@@ -680,6 +682,8 @@ def main(argv=None):
     p.add_argument("--details", action="store_true", help="model is the shape step's result: only its fine shape")
     p.add_argument("--colours", action="store_true", help="the last step: only the colours of the model")
     p.add_argument("--unchecked", action="store_true", help="send it also when the judge before the inpainting says redo")
+    p.add_argument("--grows", action="store_true", help="the part grows out of the model (from words, the shape from noise): "
+                   "for the judge before the inpainting one side is then expected")
     p.add_argument("--code", metavar="BRANCH", help="run it with the newest code of this branch")
     p.add_argument("--here", action="store_true", help="run it on this PC's GPU instead of the uni server (needs --wait)")
     p.add_argument("--wait", metavar="FOLDER", help="wait until the server is done and download the results into this folder")

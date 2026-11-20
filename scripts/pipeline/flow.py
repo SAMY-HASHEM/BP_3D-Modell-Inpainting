@@ -49,6 +49,10 @@ TYPES = {
     "data_sheet": ("01 Data sheet", ["pictures"], "this PC: local AI",
                    lambda i, s, name: (core.data_sheet(i["pictures"]["pictures"], s.get("role", "object"), s.get("frames", 8),
                                                        s.get("ai", True), s.get("what", ""), s.get("sides", "")), None)),
+    "cut_part": ("03a The painted part", ["edit"], "this PC: measured",
+                 lambda i, s, name: (core.cut_part(i["edit"]["edit"], s.get("change", 60)), None)),
+    "part_views": ("01b The part's sides", ["data"], "this PC: picture AI",
+                   lambda i, s, name: (core.part_views(i["data"]["data"], s.get("way", "angles"), s.get("seed", 1)), None)),
     "base": ("02 Base model", ["data"], "TRELLIS.2",
              lambda i, s, name: (core.base_model(i["data"]["data"], s.get("where", "server"), s.get("mode", "multidiffusion"),
                                                  str(s.get("resolution", "1024")), s.get("steps", 25), s.get("seed", 42), s.get("colours", "all"), s.get("view"),
@@ -59,6 +63,15 @@ TYPES = {
              lambda i, s, name: (core.edit(i["model"]["model"], (i.get("part") or {}).get("data"), i["object"]["data"], s.get("replace", False),
                                            s.get("width", 0.75), s.get("sink", 0.15), s.get("head", 0.12), s.get("fit", "between"),
                                            s.get("place"), s.get("side"), s.get("hand"), s.get("after"), s.get("prompt"), s.get("prompt_seed", 1), s.get("at")), None)),
+    "place": ("03b Place the part", ["part_model", "edit"], "this PC: measured",
+              lambda i, s, name: (core.place(i["part_model"]["model"], i["edit"]["edit"], s.get("zoom", 0.25), s.get("size", 0.8),
+                                             s.get("sides", 4), s.get("behind", 4), s.get("min_voxels", 5)), None)),
+    "check": ("03c Judge the plan", ["edit"], "this PC: measured + local AI",
+              lambda i, s, name: (core.plan_check(i["edit"]["edit"], s.get("ai", True)), None)),
+    "part_colours": ("05b Colours from the part", ["model", "edit"], "this PC: measured",
+                     lambda i, s, name: (core.colours_from_part(i["model"]["model"], i["edit"]["edit"]), None)),
+    "finish": ("06 Into the whole", ["model", "edit"], "this PC: measured",
+               lambda i, s, name: (core.finish(i["model"]["model"], i["edit"]["edit"]), None)),
     "inpaint": ("04 Inpaint", ["model", "edit"], "TRELLIS.2",
                 lambda i, s, name: (core.inpaint_step(i["model"]["model"], i["edit"]["edit"], s.get("step", "shape"),
                                                       s.get("seeds", [1]), s.get("where", "server")), None)),
@@ -66,9 +79,9 @@ TYPES = {
               lambda i, s, name: (core.edit_judge(models_of(i["candidates"]), i["edit"]["edit"], s.get("step", "shape"),
                                                   s.get("ai", True), s.get("keep_min", 85), s.get("part_min", 70)), None)),
 }
-LOCAL_GPU = {"data_sheet", "pick_seed", "edit", "judge"}  # one after another on this PC's GPU
+LOCAL_GPU = {"data_sheet", "part_views", "pick_seed", "edit", "place", "check", "judge", "part_colours", "finish", "cut_part"}  # one after another on this PC's GPU
 COLOURS = {"input": "#4a7a9c", "data_sheet": "#8a8ab0", "base": "#b58c2a", "pick_seed": "#5f9c6a", "edit": "#a8623c",
-           "inpaint": "#b58c2a", "judge": "#5f9c6a"}
+           "inpaint": "#b58c2a", "judge": "#5f9c6a", "place": "#a8623c", "check": "#5f9c6a", "finish": "#4a7a9c", "part_views": "#a8623c", "part_colours": "#a8623c", "cut_part": "#a8623c"}
 
 
 def links(node):
@@ -98,6 +111,21 @@ def with_preview(outputs, folder, render=True):
         subprocess.run([sys.executable, os.path.join(core.SCRIPTS, "pipeline", "preview.py"), "compare", sheet, model],
                        env={**os.environ, "BLENDER": BLENDER}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {**outputs, "sheet": sheet} if os.path.exists(sheet) else outputs
+
+
+def caches_off_a_full_home(least=500 << 20):
+    """The settings that keep TRELLIS.2's caches off the home folder while its disk is (nearly) full: flex_gemm saves its
+    autotune cache to ~/.flex_gemm after a run and Triton compiles into ~/.triton; on the uni server /home had 0 bytes
+    left (Nov 19) and the part's model failed in that last save. Both are only for speed: then not saved / kept in /tmp."""
+    import shutil
+    import tempfile
+    try:
+        if shutil.disk_usage(os.path.expanduser("~")).free >= least:
+            return {}
+    except OSError:
+        return {}
+    return {"FLEX_GEMM_AUTOSAVE_AUTOTUNE_CACHE": "0",
+            "TRITON_CACHE_DIR": os.environ.get("TRITON_CACHE_DIR") or os.path.join(tempfile.gettempdir(), f"triton-{os.getuid()}")}
 
 
 class Flow:
@@ -141,6 +169,8 @@ class Flow:
                 elif os.path.isfile(os.path.join(job["folder"], "time.json")):
                     state["minutes"] = json.load(open(os.path.join(job["folder"], "time.json")))["minutes"]
             state["outputs"] = with_preview(core.resolve(dict(outputs)), state["folder"])
+            if self.rejected(key):
+                return self.set(key, "failed", self.rejected(key))
             self.set(key, "done", state["outputs"].get("verdict", ""))
         except Exception as e:  # noqa: BLE001 (shown on the node; the nodes after it stay waiting)
             self.set(key, "failed", f"{type(e).__name__}: {e}"[:300])
@@ -164,12 +194,24 @@ class Flow:
                     if os.path.isfile(os.path.join(job["folder"], "time.json")):
                         self.state[key]["minutes"] = json.load(open(os.path.join(job["folder"], "time.json")))["minutes"]
                 self.state[key]["outputs"] = with_preview(core.resolve(dict(outputs)), self.state[key]["folder"], previews)
+                if self.rejected(key):
+                    self.state[key].update(status="failed", note=self.rejected(key))
+                    continue
                 self.state[key].update(status="done", note=self.state[key]["outputs"].get("verdict", ""))
             except Exception as e:  # noqa: BLE001 (it shows when the node runs)
                 self.state[key]["note"] = f"{type(e).__name__}: {e}"[:200]
 
+    def rejected(self, key):
+        """A judge that says redo stops the flow there: the steps after it would build on a model it rejected (the
+        toaster's book, Nov 19: details judged redo, part 46, and the colours step started on it anyway). A node
+        with "stop_on_redo": false lets it go on, to look at what comes of it."""
+        verdict = str((self.state[key]["outputs"] or {}).get("verdict") or "")
+        if self.nodes[key]["type"] == "judge" and verdict.startswith("redo") and self.settings(self.nodes[key]).get("stop_on_redo", True):
+            return f"the judge says {verdict}; the steps after it are not run on a rejected model"
+        return ""
+
     def run_step(self, key, command, label, done, folder):
-        env = {**os.environ, "PYTHONUNBUFFERED": "1", "BLENDER": BLENDER}
+        env = {**os.environ, "PYTHONUNBUFFERED": "1", "BLENDER": BLENDER, **caches_off_a_full_home()}
         log = os.path.join(folder, "log.txt")
         with open(log, "a") as out:
             out.write(f"\n$ {' '.join(map(str, command))}\n")

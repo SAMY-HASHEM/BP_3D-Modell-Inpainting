@@ -92,24 +92,58 @@ class CreatingAFlow(InTemporaryProject):
         self.assertEqual(made["nodes"][1]["what"], "the front")  # the row's prompt is what the object is called
         self.assertEqual(made["made_by"], "app")
 
-    def test_a_part_gives_the_edit_and_the_three_steps(self):
+    def test_a_part_gives_the_structure_of_the_first_success(self):
+        # docs/FIRST-SUCCESS.md: the part as its own model, placed in 3D, the plan judged, details and colours only
         made = self.create(parts=1)
         ids = [n["id"] for n in made["nodes"]]
-        self.assertEqual(ids, ["object", "part", "object_sheet", "part_sheet", "base", "edit", "shape", "judge_shape", "details",
-                               "judge_details", "colours", "judge_colours"])
-        edit = next(n for n in made["nodes"] if n["id"] == "edit")
-        self.assertEqual(edit["in"], {"model": "base", "part": "part_sheet", "object": "object_sheet"})
+        self.assertEqual(ids, ["object", "part", "object_sheet", "part_sheet", "base", "part_views", "edit", "part_model", "place",
+                               "check", "details", "judge_details", "colours", "judge_colours", "finish"])
+        self.assertEqual(node_types := {n["id"]: n["type"] for n in made["nodes"]}["colours"], "part_colours")  # not TRELLIS.2's
+        node = {n["id"]: n for n in made["nodes"]}
+        # one picture of the part: the picture AI makes its other sides first (its back is not guessed by TRELLIS.2)
+        self.assertEqual(node["part_views"]["in"], {"data": "part_sheet"})
+        self.assertEqual(node["edit"]["in"], {"model": "base", "part": "part_views", "object": "object_sheet"})
+        self.assertEqual(node["part_model"]["in"], {"data": "part_views"})
+        self.assertEqual(node["place"]["in"], {"part_model": "part_model", "edit": "edit"})
+        self.assertEqual(node["details"]["in"], {"model": "place", "edit": "check"})  # waits for the plan's pass
+        self.assertEqual(node["finish"]["in"], {"model": "judge_colours", "edit": "check"})
+        edit = node["edit"]
         self.assertNotIn("prompt", edit)
         self.assertNotIn("what", next(n for n in made["nodes"] if n["id"] == "part_sheet"))  # no prompt: the local AI says what it is
 
+    def test_an_upload_folder_linked_elsewhere_keeps_its_files(self):
+        # /home full (Nov 19): pictures/uploads/<flow> linked to /tmp; its files were deleted as "taken off the page"
+        elsewhere = tempfile.mkdtemp()
+        os.makedirs(page.UPLOADS, exist_ok=True)
+        os.symlink(elsewhere, os.path.join(page.UPLOADS, "demo"))
+        made = self.create()
+        self.assertTrue(os.path.isfile(os.path.join(elsewhere, "object", "front.png")))
+        self.assertEqual(made["nodes"][0]["files"], ["pictures/uploads/demo/object/front.png"])
+
+    def test_a_part_with_several_pictures_gets_no_made_sides(self):
+        made = self.create(parts=2)
+        node = {n["id"]: n for n in made["nodes"]}
+        self.assertNotIn("part_views", node)
+        self.assertEqual(node["part_model"]["in"], {"data": "part_sheet"})
+        self.assertEqual(node["edit"]["in"]["part"], "part_sheet")
+
     def test_a_part_from_words_needs_no_part_input(self):
+        # Nov 19: the painted part is cut out and gets its own model, as a part with pictures (from noise: a thin ring)
         made = self.create(part_prompt="  a wide   pointed hat on the head ")
         ids = [n["id"] for n in made["nodes"]]
         self.assertNotIn("part", ids)
-        self.assertNotIn("part_sheet", ids)
-        edit = next(n for n in made["nodes"] if n["id"] == "edit")
-        self.assertEqual(edit["prompt"], "a wide pointed hat on the head")
-        self.assertEqual(edit["in"], {"model": "base", "object": "object_sheet"})
+        self.assertEqual(ids, ["object", "object_sheet", "base", "edit", "cut_part", "part_sheet", "part_views", "part_model",
+                               "place", "check", "details", "judge_details", "colours", "judge_colours", "finish"])
+        node = {n["id"]: n for n in made["nodes"]}
+        self.assertEqual(node["edit"]["prompt"], "a wide pointed hat on the head")
+        self.assertEqual(node["edit"]["in"], {"model": "base", "object": "object_sheet"})
+        self.assertEqual(node["part_sheet"]["in"], {"pictures": "cut_part"})
+        self.assertEqual(node["part_sheet"]["what"], "a wide pointed hat on the head")
+
+    def test_a_part_from_words_can_still_grow_from_noise(self):
+        made = self.create(part_prompt="a hat", from_noise=True)
+        ids = [n["id"] for n in made["nodes"]]
+        self.assertNotIn("cut_part", ids)
         self.assertEqual(ids[-1], "judge_colours")
 
     def test_words_and_pictures_of_a_part_together_are_refused(self):
@@ -370,7 +404,7 @@ class OneSetOfDefaults(unittest.TestCase):
     def test_the_pages_defaults_are_the_nodes_defaults(self):
         import inspect
         nodes = {"data_sheet": core.data_sheet, "base": core.base_model, "edit": core.edit, "inpaint": core.inpaint_step,
-                 "judge": core.edit_judge}
+                 "judge": core.edit_judge, "place": core.place, "check": core.plan_check}
         same = lambda value: list(value) if isinstance(value, (list, tuple)) else "" if value is None else value
         for kind, function in nodes.items():
             real = {name: p.default for name, p in inspect.signature(function).parameters.items() if p.default is not p.empty}
@@ -381,6 +415,28 @@ class OneSetOfDefaults(unittest.TestCase):
     def test_every_node_type_is_known_everywhere(self):
         self.assertEqual(set(page.SETTINGS), set(flows.TYPES))
         self.assertEqual(set(flows.COLOURS), set(flows.TYPES))
+
+
+class AJudgeThatSaysRedo(unittest.TestCase):
+    """A judge's redo stops the flow there (Nov 19: details judged redo, and the colours step started on it anyway)."""
+
+    def flow_with(self, verdict, **judge):
+        made = flows.Flow.__new__(flows.Flow)
+        made.nodes = {"judge_details": {"id": "judge_details", "type": "judge", **judge}, "edit": {"id": "edit", "type": "edit"}}
+        made.state = {"judge_details": {"outputs": {"verdict": verdict}}, "edit": {"outputs": {"verdict": "redo"}}}
+        return made
+
+    def test_redo_stops_it(self):
+        self.assertIn("redo (part 46", self.flow_with("redo (part 46 is below 70)").rejected("judge_details"))
+
+    def test_pass_goes_on(self):
+        self.assertEqual(self.flow_with("pass").rejected("judge_details"), "")
+
+    def test_it_can_be_let_go_on(self):
+        self.assertEqual(self.flow_with("redo", stop_on_redo=False).rejected("judge_details"), "")
+
+    def test_only_a_judge_stops_it(self):
+        self.assertEqual(self.flow_with("pass").rejected("edit"), "")
 
 
 class AProxyThatRefuses(unittest.TestCase):
@@ -456,6 +512,15 @@ class OverHttp(WithServer):
         for path in ("/file/secret.png", "/file/pictures/../secret.png", "/file/pictures/notes.txt", "/file/pictures/%2e%2e/secret.png"):
             self.assertEqual(self.ask(path)[0], 404, path)
 
+    def test_a_folder_linked_into_outputs_is_shown(self):
+        # /home full: a run's work folder moved elsewhere and linked back (Nov 19)
+        elsewhere = tempfile.mkdtemp()
+        open(os.path.join(elsewhere, "b.png"), "wb").write(b"x")
+        os.makedirs(os.path.join(self.root, "outputs"), exist_ok=True)
+        os.symlink(elsewhere, os.path.join(self.root, "outputs", "moved"))
+        self.assertEqual(self.ask("/file/outputs/moved/b.png")[0], 200)
+        self.assertEqual(self.ask("/file/outputs/moved/../../secret.png")[0], 404)
+
     def test_upload_then_create_as_the_page_does(self):
         mine = {"X-Flow-Page": "1", "Content-Type": "application/octet-stream"}
         code, answer = self.ask("/api/upload?flow=demo&role=object&name=front.png", b"\x89PNG", mine)
@@ -464,7 +529,7 @@ class OverHttp(WithServer):
         code, answer = self.ask("/api/app/create", json.dumps(wanted).encode(), {"X-Flow-Page": "1", "Content-Type": "application/json"})
         self.assertEqual((code, json.loads(answer)), (200, {"ok": True}))
         listed = json.loads(self.ask("/api/flows")[1])
-        self.assertEqual([(f["file"], f["nodes"], f["app"]) for f in listed], [("demo", 10, True)])
+        self.assertEqual([(f["file"], f["nodes"], f["app"]) for f in listed], [("demo", 15, True)])
         code, answer = self.ask("/api/upload?flow=demo&role=part&name=model.glb", b"x", mine)
         self.assertEqual(code, 400)
         self.assertIn("no picture or video", json.loads(answer)["error"])

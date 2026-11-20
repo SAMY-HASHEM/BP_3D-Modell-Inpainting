@@ -52,6 +52,13 @@ compared with the first picture. Then give a score: 10 = the part is there as wa
 Answer only with JSON, no other text:
 {"part_is_there": true or false, "defects": ["..."], "score": a number from 1 to 10, "why": "a few words"}"""
 
+# what this step makes: the shape steps leave the surface for the colours step, so grey or patchy colours are not their fault
+STEP_NOTE = {"shape": "This step makes only the SHAPE: the colours are painted in a later step, so grey, patchy, noisy or wrong\n"
+                      "colours and textures are NOT defects. Judge the shape only.\n",
+             "details": "This step makes only the SHAPE and its details: the colours are painted in a later step, so grey, patchy,\n"
+                        "noisy or wrong colours and textures are NOT defects. Judge the shape only.\n",
+             "colours": "This step paints the colours: judge the shape and the colours.\n"}
+
 
 def lab(rgb):
     linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
@@ -222,7 +229,7 @@ def main():
                 grey.append(os.path.join(entry["renders"], f"ai_{k}.jpg"))
                 Image.fromarray((on_grey(Image.open(path)) * 255).astype(np.uint8)).save(grey[-1], quality=92)
             try:
-                answer, raw = ask([encoded(pictures[0], 768)] + [encoded(g, 768) for g in grey], QUESTION % (args.object, args.part))
+                answer, raw = ask([encoded(pictures[0], 768)] + [encoded(g, 768) for g in grey], STEP_NOTE[args.step] + QUESTION % (args.object, args.part))
             except Exception as e:  # noqa: BLE001 (Ollama not running: the measured scores still decide)
                 answer, raw = {}, f"{type(e).__name__}: {e}"
             score = answer.get("score") if isinstance(answer.get("score"), (int, float)) else None
@@ -234,11 +241,15 @@ def main():
     top = max(e["measured"] for e in report)
     close = [e for e in report if e["measured"] >= top - 5]
     best = max(close, key=lambda e: ((e.get("ai") or {}).get("score") or 0, e["measured"]))
-    verdict = "pass" if best["kept"] >= args.keep_min and best["part"] >= args.part_min else "redo"
-    why = [] if verdict == "pass" else [f"{key} {best[key]} is below {limit:g}" for key, limit in
-                                         (("kept", args.keep_min), ("part", args.part_min)) if best[key] < limit]
+    why = [f"{key} {best[key]} is below {limit:g}" for key, limit in
+           (("kept", args.keep_min), ("part", args.part_min)) if best[key] < limit]
+    ai = best.get("ai") or {}
+    if ai.get("part_is_there") is False:  # the measures can be fooled by a part of the right outline that is not there
+        why.append(f"the AI does not see the part ({ai.get('why') or 'no reason given'})")
+    verdict = "redo" if why else "pass"
+    warnings = [f"AI score {ai['score']}: {ai.get('why') or ''}".strip()] if isinstance(ai.get("score"), (int, float)) and ai["score"] <= 3 else []
     result = {"step": args.step, "edit": args.edit, "original": args.original, "candidates": report, "best": best["model"],
-              "verdict": verdict, "why": why, "limits": {"kept": args.keep_min, "part": args.part_min}}
+              "verdict": verdict, "why": why, "warnings": warnings, "limits": {"kept": args.keep_min, "part": args.part_min}}
     json.dump(result, open(os.path.join(args.out, "judge.json"), "w"), indent=1)
 
     cell = 300  # wanted | original | every candidate, the edit's side first, then the next sides

@@ -36,7 +36,7 @@ from PIL import Image, ImageDraw
 from project_texture import fit_camera, load_meshes, object_masks, render_meshes, to_clip
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-JUDGE = "qwen3.6:27b"
+from judge import MODEL as JUDGE  # noqa: E402  (one setting for every judge: judge.py)
 MIN_PIXELS = 600  # a block needs at least this many visible pixels in a picture to be judged there
 MIN_OVERLAP = 0.8  # a picture only judges if its camera fits this well (the model's pose; action poses fit 0.4-0.6)
 
@@ -118,11 +118,11 @@ def ask(images, question, size=512):
         answer, _ = ai.ask(BACKEND["model"], BACKEND["processor"], [i.convert("RGB") for i in images], question, 300)
         return answer
     body = {"model": JUDGE, "stream": False, "think": False, "format": "json", "keep_alive": "10m",
-            "options": {"temperature": 0}, "messages": [{"role": "user", "content": question,
+            "options": {"temperature": 0, "num_predict": 4096}, "messages": [{"role": "user", "content": question,
                                                          "images": [encoded(i, size) for i in images]}]}
     request = urllib.request.Request(f"{OLLAMA}/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
-    text = json.load(urllib.request.urlopen(request, timeout=900))["message"]["content"]
+    text = json.load(urllib.request.urlopen(request, timeout=300))["message"]["content"]
     try:
         return json.loads(text)
     except json.JSONDecodeError:

@@ -1,0 +1,23 @@
+{
+ "name": "toaster_book2",
+ "about": "replace the toast in his hand with this book",
+ "prompt": "replace the toast in his hand with this book",
+ "made_by": "app",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the object", "files": ["pictures/uploads/toaster_book2/object/toaster_front.png"]},
+  {"id": "part", "type": "input", "label": "00 Input: the part", "files": ["pictures/uploads/toaster_book2/part/red_book.png"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "in": {"pictures": "object"}},
+  {"id": "part_sheet", "type": "data_sheet", "role": "part", "in": {"pictures": "part"}},
+  {"id": "base", "type": "base", "seed": 42, "where": "pc", "resolution": "1024", "steps": 25, "given": "pictures/uploads/toaster_book2/object/toaster.glb", "label": "02 Base model: yours", "in": {"data": "object_sheet"}},
+  {"id": "part_views", "type": "part_views", "in": {"data": "part_sheet"}},
+  {"id": "edit", "type": "edit", "at": "in his hand", "replace": true, "in": {"model": "base", "part": "part_views", "object": "object_sheet"}},
+  {"id": "part_model", "type": "base", "label": "02 The part's own model", "seed": 42, "where": "pc", "resolution": "1024", "steps": 25, "in": {"data": "part_views"}},
+  {"id": "place", "type": "place", "zoom": 0.25, "size": 0.8, "in": {"part_model": "part_model", "edit": "edit"}},
+  {"id": "check", "type": "check", "in": {"edit": "place"}},
+  {"id": "details", "type": "inpaint", "step": "details", "seeds": [1], "where": "pc", "in": {"model": "place", "edit": "check"}},
+  {"id": "judge_details", "type": "judge", "step": "details", "in": {"candidates": "details", "edit": "check"}},
+  {"id": "colours", "type": "inpaint", "step": "colours", "seeds": [1], "where": "pc", "in": {"model": "judge_details", "edit": "check"}},
+  {"id": "judge_colours", "type": "judge", "step": "colours", "in": {"candidates": "colours", "edit": "check"}},
+  {"id": "finish", "type": "finish", "in": {"model": "judge_colours", "edit": "check"}}
+ ]
+}

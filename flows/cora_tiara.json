@@ -1,0 +1,23 @@
+{
+ "name": "cora_tiara",
+ "about": "put a small golden tiara on her head",
+ "prompt": "put a small golden tiara on her head",
+ "made_by": "app",
+ "nodes": [
+  {"id": "object", "type": "input", "label": "00 Input: the object", "files": ["pictures/uploads/cora_tiara/object/cora_sheet.jpg"]},
+  {"id": "object_sheet", "type": "data_sheet", "role": "object", "in": {"pictures": "object"}},
+  {"id": "base", "type": "base", "seed": 42, "where": "pc", "resolution": "1024", "steps": 25, "given": "pictures/uploads/cora_tiara/object/v01_base_3_views_mixed_1024_seed42.glb", "label": "02 Base model: yours", "in": {"data": "object_sheet"}},
+  {"id": "edit", "type": "edit", "prompt": "a small golden tiara", "in": {"model": "base", "object": "object_sheet"}},
+  {"id": "cut_part", "type": "cut_part", "in": {"edit": "edit"}},
+  {"id": "part_sheet", "type": "data_sheet", "role": "part", "what": "a small golden tiara", "in": {"pictures": "cut_part"}},
+  {"id": "part_views", "type": "part_views", "in": {"data": "part_sheet"}},
+  {"id": "part_model", "type": "base", "label": "02 The part's own model", "seed": 42, "where": "pc", "resolution": "1024", "steps": 25, "in": {"data": "part_views"}},
+  {"id": "place", "type": "place", "zoom": 0.25, "size": 0.8, "in": {"part_model": "part_model", "edit": "edit"}},
+  {"id": "check", "type": "check", "in": {"edit": "place"}},
+  {"id": "details", "type": "inpaint", "step": "details", "seeds": [1], "where": "pc", "in": {"model": "place", "edit": "check"}},
+  {"id": "judge_details", "type": "judge", "step": "details", "in": {"candidates": "details", "edit": "check"}},
+  {"id": "colours", "type": "part_colours", "in": {"model": "judge_details", "edit": "check"}},
+  {"id": "judge_colours", "type": "judge", "step": "colours", "in": {"candidates": "colours", "edit": "check"}},
+  {"id": "finish", "type": "finish", "in": {"model": "judge_colours", "edit": "check"}}
+ ]
+}

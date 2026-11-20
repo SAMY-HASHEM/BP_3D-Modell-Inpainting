@@ -34,7 +34,10 @@ import torch
 from PIL import Image
 
 
-COMFYUI = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188")
+# This project's own ComfyUI. Not ComfyUI's usual 8188: on the uni server other people run theirs on 8188 and 8189, and
+# a job sent there failed with "400 Bad Request" (their ComfyUI has no Qwen-Image-Edit, Nov 18). See ours() too.
+COMFYUI = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8198")
+UNET = "qwen_image_edit_2511_fp8mixed.safetensors"
 COMFYUI_DIR = os.environ.get("COMFYUI_DIR", os.path.expanduser("~/ai-models/tools/ComfyUI"))
 MODEL_PATHS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "comfyui_paths.yaml")  # local_ai_models/comfyui
 SIZE = 1024
@@ -94,28 +97,45 @@ def model_paths(folder):
     return out
 
 
-def start_comfyui(report=print):
-    """Starts ComfyUI if it isn't running; returns the process if this function started it."""
+def ours():
+    """Does the ComfyUI at COMFYUI have this project's picture AI? None: nothing answers there."""
     try:
         comfy("/system_stats", timeout=3)
-        return None
     except OSError:
-        pass
+        return None
+    try:
+        return UNET in comfy("/models/diffusion_models", timeout=10)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def start_comfyui(report=print):
+    """Starts ComfyUI if it isn't running; returns the process if this function started it. A ComfyUI that answers
+    at COMFYUI but is not this project's (someone else's, without Qwen-Image-Edit) is never used."""
+    found = ours()
+    if found:
+        return None
+    if found is False:
+        raise RuntimeError(f"{COMFYUI} is another ComfyUI (no {UNET}): set COMFYUI_URL to a free port, e.g. http://127.0.0.1:8198")
     report("Starting ComfyUI...")
-    outputs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs")
-    os.makedirs(outputs, exist_ok=True)
-    log = open(os.path.join(outputs, "comfyui.log"), "w")
+    # its input, output and temp pictures go to the system's temporary folder: they are handed back to us right away,
+    # and on the uni server /home was full, so ComfyUI could not save the picture it had made (Nov 19)
+    import tempfile
+    scratch = os.path.join(tempfile.gettempdir(), f"comfyui-{os.getuid()}")
+    folders = []
+    for kind in ("input", "output", "temp"):
+        os.makedirs(os.path.join(scratch, kind), exist_ok=True)
+        folders += [f"--{kind}-directory", os.path.join(scratch, kind)]
+    log = open(os.path.join(scratch, "comfyui.log"), "w")
     process = subprocess.Popen([os.path.join(COMFYUI_DIR, ".venv", "bin", "python"), "main.py", "--listen", "127.0.0.1",
-                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", model_paths(outputs)],
+                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", model_paths(scratch), *folders],
                                cwd=COMFYUI_DIR, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(120):
         time.sleep(2)
-        try:
-            comfy("/system_stats", timeout=3)
+        if ours():
             return process
-        except OSError:
-            if process.poll() is not None:
-                raise RuntimeError("ComfyUI didn't start, see outputs/comfyui.log")
+        if process.poll() is not None:
+            raise RuntimeError(f"ComfyUI didn't start, see {log.name}")
     raise RuntimeError("ComfyUI didn't answer within 4 minutes")
 
 

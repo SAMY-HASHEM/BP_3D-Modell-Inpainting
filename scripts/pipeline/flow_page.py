@@ -85,7 +85,8 @@ RUNS = {}  # {flow file: {"process", "upto", "log", "started"}}: the flow.py thi
 SETTINGS = {"input": {"files": []}, "data_sheet": {"role": "object", "frames": 8, "ai": True, "what": "", "sides": ""},
             "base": {"seed": 42, "where": "server", "mode": "multidiffusion", "resolution": "1024", "steps": 25, "given": ""}, "pick_seed": {},
             "edit": {"replace": False, "width": 0.75, "sink": 0.15, "head": 0.12, "fit": "between", "prompt": "", "prompt_seed": 1, "at": ""},
-            "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70}}
+            "inpaint": {"seeds": [1]}, "judge": {"ai": True, "keep_min": 85, "part_min": 70},
+            "place": {"zoom": 0.25, "size": 0.8, "sides": 4, "behind": 4, "min_voxels": 5}, "check": {"ai": True}, "finish": {}, "part_views": {"way": "angles", "seed": 1}, "part_colours": {}, "cut_part": {"change": 60}}
 CHOICES = {"role": ["object", "part"], "where": ["server", "pc"], "fit": ["between", "over"]}
 # Can this computer run the AI itself? Only with an NVIDIA GPU (TRELLIS.2 needs CUDA). Without one (a laptop: its
 # graphics are in the processor) every run goes to the uni server as one job, whatever a page asks for; this computer
@@ -587,8 +588,10 @@ def create_flow(wanted):
     files, prompts, called = {"object": [], "part": []}, {"object": [], "part": []}, {}
     for item in wanted.get("items") or []:
         role = item.get("role")
-        inside = os.path.realpath(os.path.join(UPLOADS, file, str(role))) + os.sep
-        full = os.path.realpath(os.path.join(core.PROJECT, str(item.get("path", ""))))
+        # paths as written (.. taken out, links not followed): an upload folder linked elsewhere (/home full, Nov 19)
+        # kept its realpath before, which was not the page's path, so its files counted as taken off and were deleted
+        inside = os.path.normpath(os.path.join(os.path.abspath(UPLOADS), file, str(role))) + os.sep
+        full = os.path.normpath(os.path.join(os.path.abspath(core.PROJECT), str(item.get("path", ""))))
         if role not in files or not full.startswith(inside) or not os.path.isfile(full):
             raise ValueError(f"{item.get('path')} was not uploaded for this project")
         files[role].append(os.path.relpath(full, core.PROJECT).replace(os.sep, "/"))
@@ -639,14 +642,40 @@ def create_flow(wanted):
         nodes.append({"id": "edit", "type": "edit", **({"at": at} if at else {}), **({"replace": True} if wanted.get("replace") else {}),
                       "in": {"model": "base", "part": "part_sheet", "object": "object_sheet"}} if files["part"]
                      else {"id": "edit", "type": "edit", "prompt": words, "in": {"model": "base", "object": "object_sheet"}})
-        before = "base"
-        for step in ("shape", "details", "colours"):
-            nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "where": where, "in": {"model": before, "edit": "edit"}})
-            nodes.append({"id": f"judge_{step}", "type": "judge", "step": step, "in": {"candidates": step, "edit": "edit"}})
+        own_model = files["part"] or not wanted.get("from_noise")
+        if words and own_model:  # a part from words gets a picture of its own: what the picture AI painted, cut out
+            # (Nov 19: from noise cora's tiara came out a thin ring of wires, part 27; from_noise: True keeps that way)
+            nodes.append({"id": "cut_part", "type": "cut_part", "in": {"edit": "edit"}})
+            nodes.append({"id": "part_sheet", "type": "data_sheet", "role": "part", "what": words[:200], "in": {"pictures": "cut_part"}})
+            nodes.append({"id": "part_views", "type": "part_views", "in": {"data": "part_sheet"}})
+            sheet = "part_views"
+        if files["part"]:  # the structure of docs/FIRST-SUCCESS.md: the part as its own model, placed, details + colours only
+            sheet = "part_sheet"
+            if len(files["part"]) == 1 and files["part"][0].lower().endswith(core.PICTURE_TYPES):  # one picture: its back is guessed
+                edit_at = next(k for k, n in enumerate(nodes) if n["id"] == "edit")  # a node comes after the ones it needs
+                nodes.insert(edit_at, {"id": "part_views", "type": "part_views", "in": {"data": "part_sheet"}})
+                sheet = "part_views"
+                nodes[edit_at + 1]["in"]["part"] = sheet
+        if own_model:
+            nodes.append({"id": "part_model", "type": "base", "label": "02 The part's own model", "seed": seed, "where": where,
+                          "resolution": "1024", "steps": steps, "in": {"data": sheet}})
+            nodes.append({"id": "place", "type": "place", "zoom": 0.25, "size": 0.8, "in": {"part_model": "part_model", "edit": "edit"}})
+            nodes.append({"id": "check", "type": "check", "in": {"edit": "place"}})
+            before, steps_, edit_ = "place", ("details",), "check"  # its colours come from its own model (below)
+        else:  # only words, from_noise: the part grows out of the model (a crown on a head), its shape from noise
+            before, steps_, edit_ = "base", ("shape", "details", "colours"), "edit"
+        for step in steps_:
+            nodes.append({"id": step, "type": "inpaint", "step": step, "seeds": [1], "where": where, "in": {"model": before, "edit": edit_}})
+            nodes.append({"id": f"judge_{step}", "type": "judge", "step": step, "in": {"candidates": step, "edit": edit_}})
             before = f"judge_{step}"
+        if own_model:  # the part's own model has its colours right on every side; TRELLIS.2's colours step guessed
+            # the book's back cover grey (Nov 19: part 68, colour 68 in 22 minutes; from its own model 79 and 80 in seconds)
+            nodes.append({"id": "colours", "type": "part_colours", "in": {"model": before, "edit": edit_}})
+            nodes.append({"id": "judge_colours", "type": "judge", "step": "colours", "in": {"candidates": "colours", "edit": edit_}})
+            nodes.append({"id": "finish", "type": "finish", "in": {"model": "judge_colours", "edit": edit_}})
     if not everything and not vision_ai_here():  # no vision AI where the nodes run: the data sheets and judges measure alone
         for node in nodes:
-            if node["type"] in ("data_sheet", "judge"):
+            if node["type"] in ("data_sheet", "judge", "check"):
                 node["ai"] = False
     prompt = " ".join(str(wanted.get("prompt", "")).split())
     os.makedirs(FLOWS, exist_ok=True)
@@ -689,7 +718,7 @@ def understand(wanted):
             images.append(thumb.split(",", 1)[1])
             shown = f", shown as image {len(images)}"
         lines.append(f"{k + 1}. {str(item.get('kind', 'file'))[:20]} \"{str(item.get('name', ''))[:80]}\"{shown}")
-    body = {"model": MODEL, "stream": False, "format": "json", "think": False, "options": {"temperature": 0},
+    body = {"model": MODEL, "stream": False, "format": "json", "think": False, "options": {"temperature": 0, "num_predict": 4096},
             "messages": [{"role": "user", "content": UNDERSTAND % (prompt.replace('"', "'"), "\n".join(lines)), "images": images}]}
     try:
         request = urllib.request.Request(OLLAMA + "/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})
@@ -1208,9 +1237,12 @@ class Page(BaseHTTPRequestHandler):
 
     def file(self, relative):
         """A picture or a video out of outputs/ or pictures/; a video also in pieces (the browser asks for a Range)."""
-        path = os.path.realpath(os.path.join(core.PROJECT, relative))
-        inside = any(path.startswith(os.path.realpath(os.path.join(core.PROJECT, top)) + os.sep) for top in OPEN)
-        model = path.lower().endswith(".glb") and path.startswith(os.path.realpath(os.path.join(core.PROJECT, "outputs")) + os.sep)
+        # the path as written (.. taken out, links not followed): a folder the user linked into outputs/ is served too
+        # (Nov 19: /home was full, the runs' work folders were moved to /tmp and linked back, and the page showed none
+        # of their pictures). Only pictures, videos and models under outputs/, pictures/ and flows/, as before
+        path = os.path.normpath(os.path.join(os.path.abspath(core.PROJECT), relative))
+        inside = any(path.startswith(os.path.join(os.path.abspath(core.PROJECT), top) + os.sep) for top in OPEN)
+        model = path.lower().endswith(".glb") and path.startswith(os.path.join(os.path.abspath(core.PROJECT), "outputs") + os.sep)
         if not inside or not (path.lower().endswith(SHOWN) or model) or not os.path.isfile(path):
             return self.answer({"error": "no such picture"}, 404)
         size = os.path.getsize(path)
