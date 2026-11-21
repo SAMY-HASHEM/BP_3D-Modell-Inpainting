@@ -24,3 +24,6 @@ flows/hand/*/prompt.log
 
 # The web page's accounts (flow_page.py --accounts): names and password hashes, made with accounts.py
 /accounts.json
+
+# Training data for the rig head (Rig-XL from UniRig, 5 GB+), downloaded by scripts/rigging
+/datasets/
