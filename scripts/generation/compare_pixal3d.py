@@ -9,7 +9,7 @@ and NAF sharpens DINOv3's features first.
     python scripts/generation/compare_pixal3d.py outputs/hi3d_compare/warrior/picture.png --name F_pixal3d \
         --out outputs/hi3d_compare/warrior
 
-Writes <out>/<name>.glb, <name>_input.png (what Pixal3D saw) and <name>.json (camera, time, GPU memory, faces).
+Writes <out>/<name>.glb, <name>_input.png (what Pixal3D saw) and <name>.json (camera, time, GPU memory, faces).\n--colour-picture: the shape from the picture, the colours from another one of the same view (_colour_input.png).\npaint_front.py then puts the picture's own pixels onto what the camera saw.
 Same seed and resolution as TRELLIS.2's A; the export is generate.py's (remeshed at 1024, 1M faces).
 Everything is local (local_ai_models/pixal3d): Pixal3D's code, MoGe-2, NAF (torch hub cache) and DINOv3.
 """
@@ -57,6 +57,53 @@ def _local_naf(repo, model, *args, **kwargs):
 torch.hub.load = _local_naf
 
 
+def cut_out(pipeline, picture):
+    """Pixal3D's preprocess_image, but its result keeps the outline (RGBA): the background taken away, cropped to
+    the object's square + 10 %."""
+    if picture.mode == "RGBA" and not np.all(np.asarray(picture)[..., 3] == 255):
+        rgba = picture
+    else:
+        picture = picture.convert("RGB")
+        scale = min(1, 1024 / max(picture.size))
+        if scale < 1:
+            picture = picture.resize((int(picture.width * scale), int(picture.height * scale)), Image.LANCZOS)
+        rgba = pipeline.rembg_model(picture)
+    ys, xs = np.nonzero(np.asarray(rgba)[..., 3] > 0.8 * 255)
+    cx, cy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
+    size = int(max(xs.max() - xs.min(), ys.max() - ys.min()) * 1.1)
+    return rgba.crop((cx - size // 2, cy - size // 2, cx + size // 2, cy + size // 2))
+
+
+def on_black(rgba):
+    """What Pixal3D sees: the colours on black, by the outline (as its preprocess_image ends)."""
+    a = np.asarray(rgba).astype(np.float32) / 255
+    return Image.fromarray((np.clip(a[..., :3] * a[..., 3:], 0, 1) * 255).astype(np.uint8))
+
+
+def line_up(picture, target):
+    """`picture` (RGBA) moved and scaled so that its outline lies on `target`'s (best overlap of the two masks)."""
+    a = np.asarray(target)[..., 3] > 127
+    rgba = np.asarray(picture)
+    best = (-1, None)
+    for scale in np.linspace(0.9, 1.1, 21):
+        size = round(picture.width * scale)
+        moved = picture.resize((size, size), Image.LANCZOS)
+        m = np.asarray(moved)[..., 3] > 127
+        ys, xs = np.nonzero(m)
+        ty, tx = np.nonzero(a)
+        dy, dx = round(ty.mean() - ys.mean()), round(tx.mean() - xs.mean())
+        for ddy in range(-6, 7, 2):
+            for ddx in range(-6, 7, 2):
+                canvas = Image.new("RGBA", target.size)
+                canvas.paste(moved, (dx + ddx, dy + ddy), moved)
+                c = np.asarray(canvas)[..., 3] > 127
+                iou = (c & a).sum() / max((c | a).sum(), 1)
+                if iou > best[0]:
+                    best = (iou, canvas)
+    print(f"colour picture lined up: outline overlap {best[0]:.1%}", flush=True)
+    return best[1]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("picture")
@@ -65,6 +112,9 @@ def main():
     parser.add_argument("--resolution", default="1024", choices=list(PIPELINE_TYPES))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fov", type=float, default=-1, help="camera field of view in radians; default: MoGe-2's")
+    parser.add_argument("--colour-picture", help="the colours from this picture instead (the same view, e.g. the "
+                        "painted version of a grey sculpt): the shape comes from `picture`, the colour step sees this "
+                        "one, lined up on the first by its outline")
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
     path = lambda ext: os.path.join(args.out, args.name + ext)
@@ -77,8 +127,20 @@ def main():
     pipeline = pixal.init_pipeline(PIXAL3D, low_vram=False)
     report["load_seconds"] = round(time.time() - start)
 
-    image = pipeline.preprocess_image(Image.open(args.picture))
+    cutout = cut_out(pipeline, Image.open(args.picture))
+    cutout.save(path("_input_rgba.png"))  # with its outline, for paint_front.py
+    image = on_black(cutout)
     image.save(path("_input.png"))
+    if args.colour_picture:
+        colour_rgba = line_up(cut_out(pipeline, Image.open(args.colour_picture)), cutout)
+        colour_rgba.save(path("_colour_input_rgba.png"))
+        colour = on_black(colour_rgba)
+        report["colour_picture"] = args.colour_picture
+        tex_model, own = pipeline.image_cond_model_tex_1024, pipeline.get_proj_cond_shape
+
+        def colour_for_texture(model, images, *a, **k):  # only the colour step sees the colour picture
+            return own(model, [colour] if model is tex_model else images, *a, **k)
+        pipeline.get_proj_cond_shape = colour_for_texture
     if args.fov > 0:
         fov = args.fov
     else:
