@@ -133,7 +133,7 @@ def main():
         for made, title, path, how in new:
             number = len(known) + 1
             planned[how] += 1
-            name = f"v{number:02d}_{title}.glb"
+            name = f"v{number:02d}_{title}{os.path.splitext(path)[1].lower() or '.glb'}"  # a .blend stays a .blend
             print(f"    {how:4}  {name}   <- {os.path.relpath(path, OUT)}")
             if args.do:
                 os.makedirs(folder, exist_ok=True)
