@@ -165,6 +165,29 @@ def render(model, folder, frame):
     return [Image.open(os.path.join(folder, f"view_{k}.png")).convert("RGBA") for k in range(4)]
 
 
+BORDER = 5  # points above a limit that still count as borderline
+
+
+def verdict_of(best, keep_min, part_min):
+    """pass or redo, why, and the warnings, for the best candidate. The measured numbers decide. The AI saying it does
+    not see the part makes it a redo only when the numbers are borderline (within BORDER of a limit): the measures can
+    be fooled by a part of the right outline that is not there, but qwen3-vl:30b also said "not there" (1/10) of cora's
+    tiara, which is in every render, while the numbers passed clearly (kept 98, part 82: Nov 19). The user's choice,
+    Nov 22: keep the AI's veto, but only for borderline numbers. Otherwise it is a warning on the node."""
+    why = [f"{key} {best[key]} is below {limit:g}" for key, limit in (("kept", keep_min), ("part", part_min)) if best[key] < limit]
+    ai = best.get("ai") or {}
+    warnings = []
+    if ai.get("part_is_there") is False:
+        said = f"the AI does not see the part ({ai.get('why') or 'no reason given'})"
+        if best["kept"] < keep_min + BORDER or best["part"] < part_min + BORDER:
+            why.append(said)
+        else:
+            warnings.append(said + f"; not a redo: the numbers pass clearly (kept {best['kept']}, part {best['part']})")
+    if isinstance(ai.get("score"), (int, float)) and ai["score"] <= 3:
+        warnings.append(f"AI score {ai['score']}: {ai.get('why') or ''}".strip())
+    return ("redo" if why else "pass"), why, warnings
+
+
 def main():
     parser = argparse.ArgumentParser(description="The local judge of an edit: is the part there, is the rest kept")
     parser.add_argument("--edit", required=True, help="the folder make_edit.py wrote")
@@ -241,13 +264,7 @@ def main():
     top = max(e["measured"] for e in report)
     close = [e for e in report if e["measured"] >= top - 5]
     best = max(close, key=lambda e: ((e.get("ai") or {}).get("score") or 0, e["measured"]))
-    why = [f"{key} {best[key]} is below {limit:g}" for key, limit in
-           (("kept", args.keep_min), ("part", args.part_min)) if best[key] < limit]
-    ai = best.get("ai") or {}
-    if ai.get("part_is_there") is False:  # the measures can be fooled by a part of the right outline that is not there
-        why.append(f"the AI does not see the part ({ai.get('why') or 'no reason given'})")
-    verdict = "redo" if why else "pass"
-    warnings = [f"AI score {ai['score']}: {ai.get('why') or ''}".strip()] if isinstance(ai.get("score"), (int, float)) and ai["score"] <= 3 else []
+    verdict, why, warnings = verdict_of(best, args.keep_min, args.part_min)
     result = {"step": args.step, "edit": args.edit, "original": args.original, "candidates": report, "best": best["model"],
               "verdict": verdict, "why": why, "warnings": warnings, "limits": {"kept": args.keep_min, "part": args.part_min}}
     json.dump(result, open(os.path.join(args.out, "judge.json"), "w"), indent=1)
