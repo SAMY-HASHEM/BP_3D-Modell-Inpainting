@@ -532,6 +532,13 @@ Settings: `RIG_SMOOTH=2` (default) smooths the weights along the surface, about 
 follow the same bones, so sleeves and cloaks bend instead of wrinkling. `0` turns it off (the shading around a moved
 arm gets dark and streaky), `1` is between.
 
+**A model that does not stand in a T or A pose** (hands on the hips, arms against the body, a statue): add
+`--joints views`. The rig head learnt from characters in a T or A pose and gets such arms wrong (Mai, Nov 22: her
+elbows outside her body). Then the joints are found on 12 pictures of the model by GEM-X's 77-point finder (needs
+`install_gemx.sh`, below), and the weights come from the bones each point wraps around; a hand sculpted into a hip is
+cut free (a flat palm and a patch on the hip). About 3 minutes more. Cloth and long hair still only follow the body:
+a flap at the hips swings up when the body lies down.
+
 **Posing it yourself in Blender:** open the `_wave.blend` (it opens in Pose Mode), stop the animation (Space), click a
 bone, press **R**, move the mouse, click. Alt+R resets a bone; A then Alt+R resets all.
 
@@ -545,6 +552,9 @@ to see (`--keep-colours`: its own colours).
 bash scripts/rigging/install_gemx.sh       # once: its own environment conda/envs/gemx, 7 GB of weights, ~15 min
 python3 scripts/rigging/motion_from_video.py video.mp4 outputs/rigged/<name>_rigged.glb --out outputs/motion/<name> \
     --start 120 --duration 240              # only minutes 2:00 to 6:00 (in seconds); without them: the whole video
+# the same motion onto another model, without tracking again; --keep-colours: its own colours (a textured model)
+python3 scripts/rigging/motion_from_video.py video.mp4 outputs/rigged/<other>_rigged.glb --out outputs/motion/<other> \
+    --joints outputs/motion/<name>/joints.npz --keep-colours
 ```
 
 | File | What it is |

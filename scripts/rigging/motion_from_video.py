@@ -2,7 +2,7 @@
 (motion_to_rig.py, Blender), and a side-by-side video to check it (the clip left, the model right).
 
     python3 scripts/rigging/motion_from_video.py video.mp4 rigged.glb --out outputs/motion/<name> [--start 0] [--duration 10]
-        [--keep-colours]
+        [--keep-colours] [--joints outputs/motion/<other>/joints.npz]
 
 Writes <out>/animated.blend (press Space), <out>/animated.glb, <out>/side_by_side.mp4, and GEM-X's own <out>/motion.pt
 and <out>/joints.npz. Any Python 3 starts it; the tracking runs in conda/envs/gemx, the rest in Blender. A video longer
@@ -36,17 +36,21 @@ def main():
     parser.add_argument("--duration", type=float)
     parser.add_argument("--camera", choices=["static", "background"], default="static")
     parser.add_argument("--keep-colours", action="store_true", help="the model's own colours, not one skin colour")
+    parser.add_argument("--joints", help="a joints.npz this video was already tracked into (motion_track.py): the same "
+                        "motion onto another model without tracking again")
     args = parser.parse_args()
     out = os.path.abspath(args.out)
     os.makedirs(out, exist_ok=True)
-    track = [os.path.join(PROJECT, "conda", "envs", "gemx", "bin", "python"), os.path.join(HERE, "motion_track.py"),
-             os.path.abspath(args.video), "--out", out, "--start", str(args.start), "--camera", args.camera]
-    if args.duration:
-        track += ["--duration", str(args.duration)]
-    subprocess.run(track, check=True)
+    joints = os.path.abspath(args.joints) if args.joints else os.path.join(out, "joints.npz")
+    if not args.joints:
+        track = [os.path.join(PROJECT, "conda", "envs", "gemx", "bin", "python"), os.path.join(HERE, "motion_track.py"),
+                 os.path.abspath(args.video), "--out", out, "--start", str(args.start), "--camera", args.camera]
+        if args.duration:
+            track += ["--duration", str(args.duration)]
+        subprocess.run(track, check=True)
     shutil.rmtree(os.path.join(out, "frames"), ignore_errors=True)
     subprocess.run([BLENDER, "-b", "--python", os.path.join(HERE, "motion_to_rig.py"), "--", os.path.abspath(args.rigged),
-                    os.path.join(out, "joints.npz"), out] + (["--keep-colours"] if args.keep_colours else []), check=True)
+                    joints, out] + (["--keep-colours"] if args.keep_colours else []), check=True)
     frames = sorted(glob.glob(os.path.join(out, "frames", "f_*.png")))
     if frames:
         clip = ["-ss", str(args.start)] + (["-t", str(args.duration)] if args.duration else [])

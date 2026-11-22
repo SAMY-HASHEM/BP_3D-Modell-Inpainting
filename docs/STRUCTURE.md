@@ -203,7 +203,7 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | Grounding DINO + SAM 2.1 | a word → the part on a picture | `find_part.py` |
 | Qwen3-VL-8B | sorts the pictures of the character pipeline | `sort_pictures.py`, `organise_pictures.py` |
 | Rig head (ours, trained on Rig-XL from UniRig) | a humanoid's skeleton (22 body + 30 finger bones) and skin weights from TRELLIS.2's shape latent | `rig_head.py`, `rig_from_glb.py` |
-| GEM-X (NVIDIA) | a person's motion from a video: 77 joints in 3D (body, fingers, face), frame by frame | `motion_track.py`, `motion_from_video.py` |
+| GEM-X (NVIDIA) | a person's motion from a video: 77 joints in 3D (body, fingers, face), frame by frame; its 2D point finder also finds a model's joints on pictures of it | `motion_track.py`, `motion_from_video.py`, `rig_views.py` |
 | Pixal3D (+ MoGe-2, NAF) | TRELLIS.2 retrained with the camera: follows the picture more closely, its camera lets the picture be painted on; 31 GB GPU; compared, not yet in the flows | `compare_pixal3d.py`, `paint_front.py` |
 | Hi3D 1.0 | a finer shape from TRELLIS.2's structure; compared: TRELLIS.2 stays | `compare_hi3d.py` |
 
@@ -217,7 +217,7 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | **Front ends** | `blender/inpaint_addon.py`; `user_interface_model/app.html`, `login.html`, `old/` + `pipeline/flow_page.py`, `accounts.py`; `blender/pipeline_nodes.py`; `comfyui/` | ~8,700 |
 | **Character pipeline** | `pipeline/correct.py`, `auto_pipeline.py`, `run_pipeline.py`, `sort_pictures.py`, `grid_judge.py`, `refine_region.py`, `combine_parts.py`, `hair_strands.py`, `preview.py`; `generation/organise_pictures.py` | ~2,800 |
 | **Helpers** | `tools/render_views.py`, `render_preview.py`, `project_texture.py`, `compare_in_blender.py`; `generation/views_from_picture.py`, `views_from_video.py`, `fix_normals.py`, `run_tests.py` | ~1,700 |
-| **Rigging** | `rigging/rig_data.py` (training data), `rig_head.py` (the model, its training), `rig_from_glb.py` (a .glb → rigged .glb), `wave_demo.py`, `rig_picture.py`; `motion_track.py` (a video → the person's joints, GEM-X), `motion_to_rig.py` (the joints → the rigged model's animation), `motion_from_video.py` (both and a side-by-side video), `install_gemx.sh` | ~1,500 |
+| **Rigging** | `rigging/rig_data.py` (training data), `rig_head.py` (the model, its training), `rig_from_glb.py` (a .glb → rigged .glb), `wave_demo.py`, `rig_picture.py`; `motion_track.py` (a video → the person's joints, GEM-X), `motion_to_rig.py` (the joints → the rigged model's animation), `motion_from_video.py` (both and a side-by-side video), `install_gemx.sh`; `rig_views.py` (a model's joints found on 12 pictures of it, for poses the rig head does not know) | ~1,900 |
 | **Comparing generators** | `generation/compare_hi3d.py`, `compare_pixal3d.py` (`--colour-picture`: shape from one picture, colours from another), `compare_pixal3d_mv.py` (several views), `paint_front.py` (the pictures painted onto what Pixal3D's cameras saw: lined up, a close-up for the face), `swap_head.py` (a head made alone put onto the body), `clay_views.py` (renders side by side) | ~1,100 |
 | **Kept for an open task** | `generation/try_settings.py` (requirement 2: the best settings), `tools/compare_models.sh` | ~80 |
 
