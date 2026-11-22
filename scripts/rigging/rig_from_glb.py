@@ -33,42 +33,57 @@ BLENDER = os.environ.get("BLENDER") or next(  # the project's own Blender (the s
 
 # ---------------------------------------------------------------- 1: the prediction (the project's Python)
 
-def predict(model_path, out, checkpoint):
+def predict(model_path, out, checkpoint, latent=None):
+    """latent: (coords (L, 3) on the 64^3 grid, feats (L, 32)) as TRELLIS.2's generation made it, in its own cube
+    (its glb's axes: x, z, -y). Without it, the model is read into the latent with TRELLIS.2's shape encoder. The
+    generated latent is the better one (Nov 22: the same skeleton within 2 %, but cleaner skin, the fingers in the
+    hands where the re-encoded latent put one hand's into the skirt)."""
     import _paths  # noqa: F401
     import numpy as np
     import torch
     import trimesh
-    import trellis2.models as models
-    from inpaint import SHAPE_ENCODER, Placement, encode_shape
     from rig_head import load_head, predict_one
     sys.modules.pop("rig_picture", None)
     sys.path.insert(0, HERE)  # scripts/tools has a rig_picture.py of its own
     from rig_picture import picture
 
     mesh = trimesh.load(model_path, force="mesh", process=False)  # glTF axes: Y up, front +Z
-    place = Placement(mesh.vertices)
-    encoder = models.from_pretrained(SHAPE_ENCODER).cuda().eval()
-    with torch.no_grad():
-        latent = encode_shape(encoder, place.to_cube(mesh.vertices).astype(np.float32), np.asarray(mesh.faces))
-    coords = latent.coords[:, 1:].cpu().numpy().astype(np.int16)
-    feats = latent.feats.float().cpu().numpy()
-    del encoder
+    if latent is not None:
+        coords = np.asarray(latent[0]).astype(np.int16)
+        feats = np.asarray(latent[1], np.float32)
+        scale = 1.0
+
+        def to_gltf(p):  # TRELLIS.2's cube -> its glb (to_glb keeps the size)
+            p = np.asarray(p, float)
+            return np.stack([p[:, 0], p[:, 2], -p[:, 1]], 1)
+    else:
+        import trellis2.models as models
+        from inpaint import SHAPE_ENCODER, Placement, encode_shape
+        place = Placement(mesh.vertices)
+        encoder = models.from_pretrained(SHAPE_ENCODER).cuda().eval()
+        with torch.no_grad():
+            encoded = encode_shape(encoder, place.to_cube(mesh.vertices).astype(np.float32), np.asarray(mesh.faces))
+        coords = encoded.coords[:, 1:].cpu().numpy().astype(np.int16)
+        feats = encoded.feats.float().cpu().numpy()
+        del encoder
+        scale = place.scale
+
+        def to_gltf(p):  # inverse of Placement.to_cube
+            p = np.asarray(p, float)
+            return place.center + np.stack([p[:, 0], p[:, 2] - place.lift, -p[:, 1]], 1) / place.scale
     head = load_head(checkpoint)
     joints, fingers, skin = predict_one(head, coords, feats)
-
-    def to_gltf(p):  # inverse of Placement.to_cube
-        p = np.asarray(p, float)
-        return place.center + np.stack([p[:, 0], p[:, 2] - place.lift, -p[:, 1]], 1) / place.scale
+    torch.cuda.empty_cache()
 
     from rig_data import GRID
     np.savez(out + ".npz", coords=coords, feats=feats.astype(np.float16), joints=joints, fingers=fingers,
              has_fingers=np.ones(len(fingers), bool), skin=skin.astype(np.float16),
              gltf_joints=to_gltf(joints), gltf_fingers=to_gltf(fingers),
-             gltf_voxels=to_gltf((coords + 0.5) / GRID - 0.5), voxel_size=1 / GRID / place.scale)
+             gltf_voxels=to_gltf((coords + 0.5) / GRID - 0.5), voxel_size=1 / GRID / scale)
     picture(out + ".npz")
     start = time.time()
     welded, bones, weights = vertex_weights(np.asarray(mesh.vertices), np.asarray(mesh.faces), to_gltf(
-        (coords + 0.5) / GRID - 0.5), skin, to_gltf(joints), to_gltf(fingers), 1 / GRID / place.scale)
+        (coords + 0.5) / GRID - 0.5), skin, to_gltf(joints), to_gltf(fingers), 1 / GRID / scale)
     np.savez(out + "_weights.npz", points=welded, bones=bones, weights=weights)
     print(f"predicted: {out}.npz, weights of {len(welded)} points in {time.time() - start:.0f} s", flush=True)
 
@@ -530,6 +545,28 @@ def pose_picture(armature, meshes, path):
     print("pose picture:", path, flush=True)
 
 
+def rig(model_path, out, checkpoint=None, latent=None, joints="head", skin=None):
+    """The whole rigging in one call (main, and the generation scripts' --rig): the skeleton and the skin, then
+    Blender builds <out>_rigged.glb and <out>_pose.png. latent: see predict(); joints, skin: see main()."""
+    import numpy as np
+    checkpoint = checkpoint or os.path.join(PROJECT_DIR, "local_ai_models", "rig_head", "best.pt")
+    model_path, out = os.path.abspath(model_path), os.path.abspath(out)
+    skin = skin or ("wrap" if joints == "views" else "head")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    predict(model_path, out, checkpoint, latent)
+    if joints == "views":
+        folder = out + "_views"
+        subprocess.run([BLENDER, "-b", "--python", os.path.join(HERE, "rig_views.py"), "--", "render",
+                        model_path, folder], check=True)
+        subprocess.run([os.path.join(PROJECT_DIR, "conda", "envs", "gemx", "bin", "python"), os.path.join(HERE, "rig_views.py"),
+                        "detect", folder], check=True)
+        d, found = dict(np.load(out + ".npz")), np.load(os.path.join(folder, "joints.npz"))
+        d["gltf_joints"], d["gltf_fingers"] = found["gltf_joints"], found["gltf_fingers"]
+        np.savez(out + ".npz", **d)
+    subprocess.run([BLENDER, "-b", "--python", os.path.abspath(__file__), "--", model_path, out, skin], check=True)
+    return out + "_rigged.glb"
+
+
 def main():
     if "--" in sys.argv:  # in Blender
         build(*sys.argv[sys.argv.index("--") + 1:])
@@ -546,22 +583,7 @@ def main():
                         help="head: the rig head's weights; wrap: from the bones each point wraps around (wrap_weights; "
                         "default with --joints views)")
     args = parser.parse_args()
-    out = os.path.abspath(args.out)
-    skin = args.skin or ("wrap" if args.joints == "views" else "head")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    predict(os.path.abspath(args.model), out, args.checkpoint)
-    if args.joints == "views":
-        import numpy as np
-        folder = out + "_views"
-        subprocess.run([BLENDER, "-b", "--python", os.path.join(HERE, "rig_views.py"), "--", "render",
-                        os.path.abspath(args.model), folder], check=True)
-        subprocess.run([os.path.join(PROJECT_DIR, "conda", "envs", "gemx", "bin", "python"), os.path.join(HERE, "rig_views.py"),
-                        "detect", folder], check=True)
-        d, found = dict(np.load(out + ".npz")), np.load(os.path.join(folder, "joints.npz"))
-        d["gltf_joints"], d["gltf_fingers"] = found["gltf_joints"], found["gltf_fingers"]
-        np.savez(out + ".npz", **d)
-    subprocess.run([BLENDER, "-b", "--python", os.path.abspath(__file__), "--",
-                    os.path.abspath(args.model), out, skin], check=True)
+    rig(args.model, args.out, args.checkpoint, joints=args.joints, skin=args.skin)
 
 
 if __name__ == "__main__":

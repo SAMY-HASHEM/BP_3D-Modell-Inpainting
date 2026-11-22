@@ -11,6 +11,7 @@ The results go to outputs/: the picture after background removal (*_input.png) a
 """
 import argparse
 import os
+import sys
 import time
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -148,8 +149,9 @@ def prepare_image(pipeline, image_path, name):
 
 
 def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=None, texture_guidance=None,
-             max_tokens=None):
-    """Returns the generated mesh and the generation time in seconds."""
+             max_tokens=None, latent=None):
+    """Returns the generated mesh and the generation time in seconds. latent: a list that gets the shape latent
+    (coords on the 64^3 grid, feats) appended, for the rig head (only at 1024: its grid; at 1536 it is 96^3)."""
     torch.cuda.empty_cache()
     start = time.time()
     # The same number of steps for all stages: structure, shape and texture.
@@ -169,12 +171,17 @@ def generate(pipeline, image, resolution, seed, steps=DEFAULT_STEPS, guidance=No
         def finer(lr_cond, cond, flow_lr, flow, lr_resolution, _, coords, *rest):
             return cascade(lr_cond, cond, flow_lr, flow, lr_resolution, 2048, coords, *rest)
         pipeline.sample_shape_slat_cascade = finer
-    mesh = pipeline.run(
+    result = pipeline.run(
         image, seed=seed, preprocess_image=False, pipeline_type=PIPELINE_TYPES[resolution],
         sparse_structure_sampler_params=shape_params,
         shape_slat_sampler_params=shape_params,
-        tex_slat_sampler_params=texture_params, **extra,
-    )[0]
+        tex_slat_sampler_params=texture_params, return_latent=latent is not None, **extra,
+    )
+    if latent is not None:
+        result, (shape_slat, _, grid) = result
+        if shape_slat.coords[:, 1:].max() < 64:  # the rig head's grid
+            latent.append((shape_slat.coords[:, 1:].cpu().numpy(), shape_slat.feats.float().cpu().numpy()))
+    mesh = result[0]
     pipeline.sample_shape_slat_cascade = cascade
     return mesh, time.time() - start
 
@@ -218,6 +225,9 @@ def main():
     parser.add_argument("--out", help="the model's file, for one picture (default: outputs/<name>.glb)")
     parser.add_argument("--faces", type=int, default=1_000_000,
                         help="faces in the saved model (default 1,000,000); more keeps finer detail, e.g. 4000000")
+    parser.add_argument("--rig", action="store_true",
+                        help="also rig it (a humanoid): the rig head reads the skeleton from the generation's own "
+                             "shape latent; writes <model>_rigged.glb and <model>_pose.png (~3 min more)")
     args = parser.parse_args()
     for path in args.images:
         if not os.path.isfile(path):
@@ -266,8 +276,9 @@ def make_model(pipeline, path, resolution, args):
     image = prepare_image(pipeline, path, name)
 
     print(f"Generating the 3D model at {resolution} with {args.steps} steps per stage...")
+    latent = [] if getattr(args, "rig", False) else None
     mesh, gen_time = generate(pipeline, image, resolution, args.seed, args.steps,
-                              args.guidance, args.texture_guidance, args.max_tokens)
+                              args.guidance, args.texture_guidance, args.max_tokens, latent=latent)
     print(f"    generated in {gen_time:.0f} s, {mesh.faces.shape[0]:,} faces")
 
     print("Saving as .glb...")
@@ -277,6 +288,12 @@ def make_model(pipeline, path, resolution, args):
     del mesh
     print(f"    saved in {time.time() - start:.0f} s")
     print(f"Done: {glb_path}")
+    if latent is not None:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rigging"))
+        from rig_from_glb import rig
+        print("Rigging (the skeleton from the generation's own latent)..." if latent else
+              "Rigging (the model read in again: its latent was not on the 64^3 grid)...")
+        print(f"Rigged: {rig(glb_path, os.path.splitext(glb_path)[0], latent=latent[0] if latent else None)}")
 
 
 if __name__ == "__main__":

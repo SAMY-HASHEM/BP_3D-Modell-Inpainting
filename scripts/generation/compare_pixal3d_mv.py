@@ -134,6 +134,8 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--resolution", default="1024", choices=["1024", "1536"])
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--rig", action="store_true", help="also rig it (a humanoid): <name>_rigged.glb, <name>_pose.png "
+                        "(Pixal3D's cube is turned to its camera, so the finished model is read in again for it)")
     parser.add_argument("--fov", type=float, default=-1, help="radians; default: MoGe-2's on the front view")
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -211,6 +213,13 @@ def main():
     report.update(gpu_gb=round(torch.cuda.max_memory_allocated() / 2**30, 1), faces=int(len(glb.faces)))
     json.dump(report, open(path(".json"), "w"), indent=1)
     print(json.dumps(report, indent=1))
+    if args.rig:
+        del pipeline
+        torch.cuda.empty_cache()
+        sys.path.insert(0, os.path.join(PROJECT_DIR if "PROJECT_DIR" in globals() else single.PROJECT_DIR,
+                                        "scripts", "rigging"))
+        from rig_from_glb import rig
+        print("Rigged:", rig(path(".glb"), path("")))
 
 
 if __name__ == "__main__":

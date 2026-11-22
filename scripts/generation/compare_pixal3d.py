@@ -68,6 +68,25 @@ def free_gpu(pipeline):
     torch.cuda.empty_cache()
 
 
+def free_before_decoding(pipeline):
+    """Pixal3D's last step (decode_latent: the mesh, filling its holes) runs while its 4 flow models and DINOv3s are
+    still on the GPU; at 1536 that ran out of 46 GB (a tile of the girl's face, Nov 22). They go to the CPU first."""
+    decode = pipeline.decode_latent
+
+    def decode_with_room(*args, **kwargs):
+        for key, model in pipeline.models.items():
+            if "flow" in key and hasattr(model, "cpu"):
+                model.cpu()
+        for name in ("image_cond_model_ss", "image_cond_model_shape_512", "image_cond_model_shape_1024",
+                     "image_cond_model_tex_1024", "rembg_model"):
+            model = getattr(pipeline, name, None)
+            if model is not None and hasattr(model, "cpu"):
+                model.cpu()
+        torch.cuda.empty_cache()
+        return decode(*args, **kwargs)
+    pipeline.decode_latent = decode_with_room
+
+
 def cut_out(pipeline, picture):
     """Pixal3D's preprocess_image, but its result keeps the outline (RGBA): the background taken away, cropped to
     the object's square + 10 %."""
@@ -122,6 +141,8 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--resolution", default="1024", choices=list(PIPELINE_TYPES))
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--rig", action="store_true", help="also rig it (a humanoid): <name>_rigged.glb, <name>_pose.png "
+                        "(Pixal3D's cube is turned to its camera, so the finished model is read in again for it)")
     parser.add_argument("--fov", type=float, default=-1, help="camera field of view in radians; default: MoGe-2's")
     parser.add_argument("--colour-picture", help="the colours from this picture instead (the same view, e.g. the "
                         "painted version of a grey sculpt): the shape comes from `picture`, the colour step sees this "
@@ -136,6 +157,7 @@ def main():
     torch.cuda.reset_peak_memory_stats()
     start = time.time()
     pipeline = pixal.init_pipeline(PIXAL3D, low_vram=False)
+    free_before_decoding(pipeline)
     report["load_seconds"] = round(time.time() - start)
 
     cutout = cut_out(pipeline, Image.open(args.picture))
@@ -189,6 +211,13 @@ def main():
     report.update(gpu_gb=round(torch.cuda.max_memory_allocated() / 2**30, 1), faces=int(len(glb.faces)))
     json.dump(report, open(path(".json"), "w"), indent=1)
     print(json.dumps(report, indent=1))
+    if args.rig:
+        del pipeline
+        torch.cuda.empty_cache()
+        sys.path.insert(0, os.path.join(PROJECT_DIR if "PROJECT_DIR" in globals() else single.PROJECT_DIR,
+                                        "scripts", "rigging"))
+        from rig_from_glb import rig
+        print("Rigged:", rig(path(".glb"), path("")))
 
 
 if __name__ == "__main__":

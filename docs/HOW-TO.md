@@ -508,6 +508,16 @@ the result, each step guided by the picture. The settings below change how these
 The rig head (`scripts/rigging/rig_head.py`) is trained once (below); after that a model takes about 4 minutes.
 It finds 22 body bones (hips to head, arms, legs, toes) and 30 finger bones; the face has no bones yet.
 
+### In one run: picture → rigged model
+
+```bash
+python scripts/generation/generate.py picture.png --rig      # TRELLIS.2: the skeleton from the generation's own latent
+python scripts/generation/compare_pixal3d.py picture.png --name x --out outputs/x --rig   # Pixal3D (model read in again)
+```
+
+TRELLIS.2 at 1024: the rig head reads the latent the generation made (cleaner than reading the finished model in
+again). At 1536 the latent is 96³, not the rig head's 64³: the model is read in again, by itself.
+
 ### Every time: one model
 
 ```bash
