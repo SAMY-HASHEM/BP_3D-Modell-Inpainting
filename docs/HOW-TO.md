@@ -606,6 +606,17 @@ python scripts/rigging/rig_from_glb.py $O/whole.glb --out $O/rigged
 The head's cut-out: the close-up from the hair to the collar, background away (RMBG-2.0), the halo and other things
 at its edges taken out. Only front and back views: the 3/4 views of a sheet have angles nobody wrote down.
 
+### An item in the hand
+
+```bash
+blender -b --python scripts/rigging/hold_item.py -- outputs/x/rigged_rigged.blend axe.glb outputs/x/with_axe --size 0.5 --swing
+```
+
+The item (a .glb, e.g. from generate.py) goes into the right hand (--hand l: the left), its length --size of the
+character's height, the grip --grip of its length from the handle's end; the fingers close around it. --swing adds
+a raise-and-chop animation. Writes <out>.blend (press Space), <out>.glb, close-ups of the grip (<out>_hand_*.png, cut
+away so a sleeve does not hide the hand) and the whole body.
+
 ### Once: the training data and the training
 
 ```bash
