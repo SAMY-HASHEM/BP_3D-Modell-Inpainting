@@ -197,6 +197,7 @@ def main():
                                           pipeline_type=f"{args.resolution}_cascade")
     report["seconds"] = round(time.time() - start)
     mesh = meshes[0]
+    single.free_gpu(pipeline)  # the mesh step at 1536 needs the room the models take (it ran out of 46 GB, Nov 22)
     mesh.simplify(16777216)
     torch.cuda.empty_cache()
     import o_voxel

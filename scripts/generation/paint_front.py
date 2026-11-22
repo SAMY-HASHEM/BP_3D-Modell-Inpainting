@@ -105,6 +105,13 @@ def line_up_on(target, mask, image, window=False, start=None, limit=None, shift_
     return warp, score
 
 
+HEAD_REGIONS = {  # the same for a head / bust: the face in the middle, the hair above on each side
+    "face": ((0.28, 0.80), (0.22, 0.78)),
+    "hair left": ((0.0, 0.45), (0.0, 0.56)),
+    "hair right": ((0.0, 0.45), (0.44, 1.0)),
+    "lower left": ((0.60, 1.0), (0.0, 0.56)),
+    "lower right": ((0.60, 1.0), (0.44, 1.0)),
+}
 REGIONS = {  # (top, bottom) as shares of the figure's height, (left, right) as shares of its width; overlapping
     "face": ((0.10, 0.26), (0.36, 0.64)),
     "upper body left": ((0.18, 0.58), (0.0, 0.56)),
@@ -114,7 +121,7 @@ REGIONS = {  # (top, bottom) as shares of the figure's height, (left, right) as 
 }
 
 
-def line_up_by_regions(own, mask, rgb, alpha):
+def line_up_by_regions(own, mask, rgb, alpha, regions=None):
     """The picture lined up on the model part by part (REGIONS: face, upper and lower body, each side): a
     generated model is not shifted the same everywhere (its face a little lower, a leg a little wider), so each
     part gets its own small move; the parts are blended softly where they overlap. Picture's left = screen left."""
@@ -128,7 +135,7 @@ def line_up_by_regions(own, mask, rgb, alpha):
     base_rgb, base_alpha = cv2_warp(rgb, whole, res), cv2_warp(alpha, whole, res)
     total = np.full((res, res), 0.05, np.float32)  # the whole picture's move where no part reaches
     sum_rgb, sum_alpha = base_rgb * 0.05, base_alpha * 0.05
-    for name, ((top, bottom), (left, right)) in REGIONS.items():
+    for name, ((top, bottom), (left, right)) in (regions or REGIONS).items():
         box = np.zeros((res, res), np.float32)
         r0, r1 = int(y0 + top * h), int(y0 + bottom * h)
         c0, c1 = int(x0 + left * w), int(x0 + right * w)
@@ -148,6 +155,30 @@ def line_up_by_regions(own, mask, rgb, alpha):
         sum_rgb += cv2_warp(rgb, warp, res) * soft[..., None]
         sum_alpha += cv2_warp(alpha, warp, res) * soft
     return sum_rgb / total[..., None], sum_alpha / total
+
+
+def bend_onto(target, mask, image, alpha, strength=1.0):
+    """Every pixel of `image` moved a little on its own (optical flow, OpenCV's DIS) so that it lands on the same
+    feature of `target` (the model's own colours, which sit exactly on its shape): a picture whose face is shaped a
+    little differently (rounder, wider eyes) then puts its lips on the 3D lips, its eyes in the 3D eyes, instead of
+    beside them (the doubled, fuzzy look). The flow is smoothed and only used inside the mask."""
+    import cv2
+    t = (gray(target) * 255).astype(np.uint8)
+    i = (gray(image) * 255).astype(np.uint8)
+    dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    flow = dis.calc(t, i, None)  # for each target pixel: where its feature is in the image
+    flow = cv2.GaussianBlur(flow, (0, 0), 3)
+    limit = 0.03 * target.shape[0]
+    flow = np.clip(flow, -limit, limit) * strength
+    m = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), 6)[..., None]
+    flow *= m
+    h, w = t.shape
+    grid = np.stack(np.meshgrid(np.arange(w), np.arange(h)), -1).astype(np.float32) + flow
+    moved = cv2.remap(np.ascontiguousarray(image, np.float32), grid[..., 0], grid[..., 1], cv2.INTER_LINEAR)
+    moved_alpha = cv2.remap(np.ascontiguousarray(alpha, np.float32), grid[..., 0], grid[..., 1], cv2.INTER_LINEAR)
+    print(f"  picture bent onto the model: mean move {np.linalg.norm(flow, axis=2)[mask].mean():.1f} px, "
+          f"largest {np.linalg.norm(flow, axis=2)[mask].max():.1f} px", flush=True)
+    return moved, moved_alpha
 
 
 def match_features(close, picture, alpha):
@@ -198,6 +229,12 @@ def main():
                         help="the picture's camera around the model (degrees; 180 = a back view of multi-view Pixal3D)")
     parser.add_argument("--closeup", help="a nearer picture of the same view (e.g. the face): painted over, sharper")
     parser.add_argument("--closeup-box", type=int, nargs=4, help="x0 y0 x1 y1: the close-up's part of that picture")
+    parser.add_argument("--parts", choices=["body", "head"], default="body",
+                        help="the 5 parts lined up one by one: a whole body's or a head's (a bust)")
+    parser.add_argument("--flow", action="store_true",
+                        help="after lining up, bend the picture pixel by pixel onto the model's own colours "
+                             "(optical flow). An experiment: on the girl's face (Nov 22) it followed the shading, "
+                             "not the features, and painted skin over the eyes; better left off")
     parser.add_argument("--no-align", action="store_true", help="don't line the picture up on the model first")
     parser.add_argument("--from-angle", type=float, default=50, help="full picture colour up to this angle (deg)")
     parser.add_argument("--to-angle", type=float, default=72, help="none of it from this angle on (deg)")
@@ -275,7 +312,10 @@ def main():
     if args.no_align:
         aligned, aligned_alpha = rgb, alpha
     else:
-        aligned, aligned_alpha = line_up_by_regions(own, own_mask & (alpha > 0.5), rgb, alpha)
+        aligned, aligned_alpha = line_up_by_regions(own, own_mask & (alpha > 0.5), rgb, alpha,
+                                                    HEAD_REGIONS if args.parts == "head" else REGIONS)
+    if args.flow:
+        aligned, aligned_alpha = bend_onto(own, own_mask & (aligned_alpha > 0.5), aligned, aligned_alpha)
     weight = straight * aligned_alpha[px[:, 1], px[:, 0]]
     colour = aligned[px[:, 1], px[:, 0]]
     painted = np.zeros((size, size, 3), np.float32)
@@ -300,6 +340,12 @@ def main():
         warp, score = line_up_on(own_big, mask_big, canvas, window=True, limit=0.02 * K * res, shift_only=True)
         warp = np.eye(2, 3, dtype=np.float32) if warp is None else warp
         canvas, cover = cv2_warp(canvas, warp, K * res), cv2_warp(cover, warp, K * res)
+        if args.flow:  # the close-up bent onto the model as well, in the box it covers
+            ys, xs = np.nonzero(mask_big)
+            y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+            bent, bent_cover = bend_onto(own_big[y0:y1, x0:x1], mask_big[y0:y1, x0:x1], canvas[y0:y1, x0:x1],
+                                         cover[y0:y1, x0:x1])
+            canvas[y0:y1, x0:x1], cover[y0:y1, x0:x1] = bent, bent_cover
         alpha_big = np.asarray(Image.fromarray((alpha * 255).astype(np.uint8)).resize((K * res, K * res))) / 255
         qx = np.clip((uv_tex * K * res).astype(int), 0, K * res - 1)
         w_close = straight * cover[qx[:, 1], qx[:, 0]] * alpha_big[qx[:, 1], qx[:, 0]]

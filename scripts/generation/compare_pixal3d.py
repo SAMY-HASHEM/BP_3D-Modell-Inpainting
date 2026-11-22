@@ -57,6 +57,17 @@ def _local_naf(repo, model, *args, **kwargs):
 torch.hub.load = _local_naf
 
 
+def free_gpu(pipeline):
+    """All of Pixal3D's models off the GPU (to the CPU): only the generated mesh is left for the last step."""
+    for model in list(getattr(pipeline, "models", {}).values()) + [
+            getattr(pipeline, name, None) for name in ("image_cond_model_ss", "image_cond_model_shape_512",
+                                                       "image_cond_model_shape_1024", "image_cond_model_tex_1024",
+                                                       "rembg_model")]:
+        if model is not None and hasattr(model, "cpu"):
+            model.cpu()
+    torch.cuda.empty_cache()
+
+
 def cut_out(pipeline, picture):
     """Pixal3D's preprocess_image, but its result keeps the outline (RGBA): the background taken away, cropped to
     the object's square + 10 %."""
@@ -85,7 +96,7 @@ def line_up(picture, target):
     a = np.asarray(target)[..., 3] > 127
     rgba = np.asarray(picture)
     best = (-1, None)
-    for scale in np.linspace(0.9, 1.1, 21):
+    for scale in np.linspace(0.8, 1.25, 31):
         size = round(picture.width * scale)
         moved = picture.resize((size, size), Image.LANCZOS)
         m = np.asarray(moved)[..., 3] > 127
@@ -163,6 +174,7 @@ def main():
                                        return_latent=True, pipeline_type=PIPELINE_TYPES[args.resolution])
     report["seconds"] = round(time.time() - start)
     mesh = meshes[0]
+    free_gpu(pipeline)  # the mesh step at 1536 needs the room the models take (it ran out of 46 GB, Nov 22)
     mesh.simplify(16777216)
     torch.cuda.empty_cache()
     glb = o_voxel.postprocess.to_glb(
