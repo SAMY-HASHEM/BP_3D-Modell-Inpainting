@@ -535,6 +535,37 @@ arm gets dark and streaky), `1` is between.
 **Posing it yourself in Blender:** open the `_wave.blend` (it opens in Pose Mode), stop the animation (Space), click a
 bone, press **R**, move the mouse, click. Alt+R resets a bone; A then Alt+R resets all.
 
+### A person's motion from a video onto the rigged model
+
+GEM-X (NVIDIA) reads the person in a video as 77 joints in 3D (body, fingers, face), frame by frame; the rigged model's
+bones are turned so that they point the same way, frame by frame. The model gets one skin colour, so its moves are easy
+to see (`--keep-colours`: its own colours).
+
+```bash
+bash scripts/rigging/install_gemx.sh       # once: its own environment conda/envs/gemx, 7 GB of weights, ~15 min
+python3 scripts/rigging/motion_from_video.py video.mp4 outputs/rigged/<name>_rigged.glb --out outputs/motion/<name> \
+    --start 120 --duration 240              # only minutes 2:00 to 6:00 (in seconds); without them: the whole video
+```
+
+| File | What it is |
+|---|---|
+| `animated.blend` | open it in Blender and press **Space**: the model moves like the person (bones as sticks, a floor, the camera) |
+| `animated.glb` | the same for any program that reads glTF |
+| `side_by_side.mp4` | the video on the left, the model on the right, seen from where the video's camera stood |
+| `joints.npz` | the tracked joints (`motion_track.py`); `part_<k>/motion.pt`: GEM-X's own results |
+
+How long: GEM-X takes about 10 minutes per 50 seconds of video on the RTX 3090 (finding the person runs on the
+processor); putting the motion on the model and the pictures about 1 minute per 10 seconds.
+
+Good to know:
+- One person, the one seen the most. Best with a camera that does not move (`--camera background` if it turns).
+- GEM-X takes at most 60 s at a time: longer clips are tracked in parts of 50 s that overlap by 2 s and are joined.
+- GEM-X's own world drifts (on the stretching video 2 to 3 m sideways within 50 s, on a yoga mat), and its idea of
+  "up" leans by up to 9 degrees for a whole part (in plank the toes were 20 cm above the floor). With a camera that
+  stands still `motion_track.py` takes the body as the camera saw it, turns it upright once for the whole video (the
+  median "up" of all frames), and puts the hands, feet and knees that rest on the floor onto it, frame by frame.
+- The model is not the person: its arms and legs have other lengths, so a hand can end a little above or in the floor.
+
 ### Once: the training data and the training
 
 ```bash
