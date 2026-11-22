@@ -22,9 +22,22 @@ from PIL import Image, ImageDraw
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 # The local vision AI of every judge (also grid_judge, data_sheet, pick_seed, edit_judge, picture_check, the web page).
-# qwen3.6:27b is the one meant; the uni server's Ollama (0.13.0) can't pull it yet, so qwen3-vl:30b stands in.
+# qwen3.6:27b is the one meant; the uni server's Ollama (0.13.0) can't pull it yet, so qwen3-vl:30b stands in there.
+# Without JUDGE_MODEL the first of these that this computer's Ollama has is taken: the default was qwen3-vl:30b for all,
+# and on a PC with only qwen3.6:27b every question was refused (404), so every view counted as "unknown" (Nov 22).
 # Another one for a single run: JUDGE_MODEL=qwen3.6:27b python ...
-MODEL = os.environ.get("JUDGE_MODEL", "qwen3-vl:30b")
+WANTED = ("qwen3.6:27b", "qwen3-vl:30b")
+
+
+def installed_model():
+    try:
+        have = [m["name"] for m in json.load(urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=3)).get("models", [])]
+    except (OSError, ValueError):
+        return WANTED[-1]
+    return next((w for w in WANTED if w in have), next((h for h in have if "vl" in h or "qwen3.6" in h), WANTED[-1]))
+
+
+MODEL = os.environ.get("JUDGE_MODEL") or installed_model()
 
 # One candidate at a time (the artist's picture + its front and side render): with all candidates in one question
 # (9 pictures) the AI mixed up the numbers and picked the worst one.
