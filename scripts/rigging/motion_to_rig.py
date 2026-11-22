@@ -43,6 +43,10 @@ fps = float(data["fps"])
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=os.path.abspath(glb))
 rig = next(o for o in bpy.context.scene.objects if o.type == "ARMATURE")
+if any(b.name.endswith(("twist_l", "twist_r")) for b in rig.data.bones):  # rig_from_glb.py's twist bones (Nov 22):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))       # their constraints and preserve volume
+    from rig_from_glb import better_skinning                               # are not kept in a glb
+    better_skinning(rig)
 for o in list(bpy.context.scene.objects):  # the importer's bone shape (an icosphere) is not part of the model
     if o.type == "MESH" and o.parent is None and len(o.data.vertices) < 100:
         bpy.data.objects.remove(o)

@@ -493,13 +493,95 @@ def build(model_path, out, weights_by="head"):
                 for bone, x in zip(w["bones"][k], w["weights"][k]):
                     if x > 0:
                         groups[bone].add([v.index], float(x), "REPLACE")
+    if SKINNING == "better":
+        add_twist_bones(armature, meshes)
     for obj in meshes:
         obj.parent = armature
         modifier = obj.modifiers.new("rig", "ARMATURE")
         modifier.object = armature
+    if SKINNING == "better":
+        better_skinning(armature)
     bpy.ops.export_scene.gltf(filepath=out + "_rigged.glb", export_format="GLB", export_skins=True)
+    bpy.ops.wm.save_as_mainfile(filepath=out + "_rigged.blend")  # the twist constraints and preserve volume live here
     print("rigged:", out + "_rigged.glb", flush=True)
     pose_picture(armature, meshes, out + "_pose.png")
+
+
+SKINNING = os.environ.get("RIG_SKINNING", "better")  # "plain": as before Nov 22 (no twist bones, no preserve volume)
+TWIST = {  # twist bone: (bone it splits, where along that bone, the part of its weight it takes there)
+    "upper_arm_twist_l": "upper_arm_l", "upper_arm_twist_r": "upper_arm_r",
+    "lower_arm_twist_l": "lower_arm_l", "lower_arm_twist_r": "lower_arm_r",
+}
+
+
+def add_twist_bones(armature, meshes):
+    """Two twist bones per arm, so the arm does not wring like a candy wrapper when it rolls:
+      lower_arm_twist   wrist half of the forearm; turns with half of the hand's roll (better_skinning): a turned
+                        wrist twists the whole forearm a little instead of the wrist's skin all at once
+      upper_arm_twist   shoulder half of the upper arm; points at the elbow but never rolls: a rolled upper arm
+                        does not twist the shoulder
+    Each takes its half's share of its arm bone's weight, growing smoothly along the bone (none at the middle)."""
+    import bpy
+    import numpy as np
+    bpy.context.view_layer.objects.active = armature
+    bpy.ops.object.mode_set(mode="EDIT")
+    bones = armature.data.edit_bones
+    for twist, arm in TWIST.items():
+        a = bones[arm]
+        b = bones.new(twist)
+        if twist.startswith("lower"):
+            b.head, b.tail, b.parent = a.head.lerp(a.tail, 0.5), a.tail.copy(), a
+        else:
+            b.head, b.tail, b.parent = a.head.copy(), a.head.lerp(a.tail, 0.5), a.parent
+        b.roll = a.roll
+    spans = {arm: (bones[arm].head.copy(), bones[arm].tail.copy()) for arm in TWIST.values()}
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for obj in meshes:
+        world = obj.matrix_world
+        for twist, arm in TWIST.items():
+            src = obj.vertex_groups.get(arm)
+            if src is None:
+                continue
+            dst = obj.vertex_groups.get(twist) or obj.vertex_groups.new(name=twist)
+            h, t = spans[arm]
+            axis = t - h
+            for v in obj.data.vertices:
+                w = next((g.weight for g in v.groups if g.group == src.index), 0.0)
+                if w <= 0:
+                    continue
+                u = max(0.0, min(1.0, (world @ v.co - h).dot(axis) / axis.length_squared))
+                share = u if twist.startswith("lower") else 1 - u  # along the bone, towards the twist bone's end
+                share = float(np.clip((share - 0.5) / 0.5, 0, 1))
+                share = share * share * (3 - 2 * share)
+                if share > 0:
+                    src.add([v.index], w * (1 - share), "REPLACE")
+                    dst.add([v.index], w * share, "REPLACE")
+    print("twist bones: upper and lower arm, both sides", flush=True)
+
+
+def better_skinning(armature):
+    """What a glb cannot keep, set up in Blender (rig_from_glb.py's .blend, and motion_to_rig.py again after loading
+    the glb): the twist bones' constraints, and preserve volume (dual quaternions: elbows, knees and shoulders keep
+    their volume instead of collapsing)."""
+    import bpy
+    for twist, arm in TWIST.items():
+        pb = armature.pose.bones.get(twist)
+        if pb is None or pb.constraints:
+            continue
+        side = twist[-1]
+        if twist.startswith("lower"):  # half of the hand's roll around the forearm
+            c = pb.constraints.new("COPY_ROTATION")
+            c.target, c.subtarget = armature, "hand_" + side
+            c.use_x, c.use_y, c.use_z = False, True, False
+            c.target_space = c.owner_space = "LOCAL"
+            c.influence = 0.5
+        else:  # follows the upper arm's swing, not its roll
+            c = pb.constraints.new("DAMPED_TRACK")
+            c.target, c.subtarget, c.head_tail = armature, arm, 1.0
+    for obj in bpy.context.scene.objects:
+        for m in obj.modifiers:
+            if m.type == "ARMATURE":
+                m.use_deform_preserve_volume = True
 
 
 def pose_picture(armature, meshes, path):

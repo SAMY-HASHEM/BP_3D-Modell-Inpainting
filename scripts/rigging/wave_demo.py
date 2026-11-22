@@ -11,6 +11,10 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=glb)
 rig = next(o for o in bpy.context.scene.objects if o.type == "ARMATURE")
 rig.name = "rig"
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rig_from_glb import better_skinning  # twist constraints and preserve volume: a glb does not keep them
+better_skinning(rig)
 rig.show_in_front = True
 rig.data.display_type = "STICK"
 scene = bpy.context.scene
