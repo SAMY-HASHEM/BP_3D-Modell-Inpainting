@@ -217,7 +217,7 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | **Character pipeline** | `pipeline/correct.py`, `auto_pipeline.py`, `run_pipeline.py`, `sort_pictures.py`, `grid_judge.py`, `refine_region.py`, `combine_parts.py`, `hair_strands.py`, `preview.py`; `generation/organise_pictures.py` | ~2,800 |
 | **Helpers** | `tools/render_views.py`, `render_preview.py`, `project_texture.py`, `compare_in_blender.py`; `generation/views_from_picture.py`, `views_from_video.py`, `fix_normals.py`, `run_tests.py` | ~1,700 |
 | **Rigging** | `rigging/rig_data.py` (training data), `rig_head.py` (the model, its training), `rig_from_glb.py` (a .glb → rigged .glb), `wave_demo.py`, `rig_picture.py` | ~950 |
-| **Comparing generators** | `generation/compare_hi3d.py`, `compare_pixal3d.py` (`--colour-picture`: shape from one picture, colours from another), `paint_front.py` (the picture painted onto what Pixal3D's camera saw), `clay_views.py` (renders side by side) | ~550 |
+| **Comparing generators** | `generation/compare_hi3d.py`, `compare_pixal3d.py` (`--colour-picture`: shape from one picture, colours from another), `compare_pixal3d_mv.py` (several views), `paint_front.py` (the pictures painted onto what Pixal3D's cameras saw: lined up, a close-up for the face), `swap_head.py` (a head made alone put onto the body), `clay_views.py` (renders side by side) | ~1,100 |
 | **Kept for an open task** | `generation/try_settings.py` (requirement 2: the best settings), `tools/compare_models.sh` | ~80 |
 
 How the rig head works and how to run it: [HOW-TO.md](HOW-TO.md#5-rigging-a-model).

@@ -535,6 +535,26 @@ arm gets dark and streaky), `1` is between.
 **Posing it yourself in Blender:** open the `_wave.blend` (it opens in Pose Mode), stop the animation (Space), click a
 bone, press **R**, move the mouse, click. Alt+R resets a bone; A then Alt+R resets all.
 
+### A character with a detailed face (Pixal3D on the uni server, 35 GB GPU)
+
+```bash
+G=grey_views; C=colour_views; O=outputs/<name>
+python scripts/generation/compare_pixal3d_mv.py $G/front.png:0 $G/back.png:180 --colour $C/front.png $C/back.png --name body --out $O
+python scripts/generation/paint_front.py $O/body.glb --picture $O/body_colour_input_rgba.png --camera $O/body.json \
+    --closeup closeup.jpg --closeup-box x0 y0 x1 y1 --out $O/body_front.glb
+python scripts/generation/paint_front.py $O/body_front.glb --picture $O/body_colour_views/view01_azim+180.png \
+    --camera $O/body.json --view-angle 180 --out $O/body_painted.glb
+python scripts/generation/compare_pixal3d.py head_cut_out.png --resolution 1536 --name head --out $O   # the head alone
+python scripts/generation/paint_front.py $O/head.glb --picture $O/head_input_rgba.png --camera $O/head.json --out $O/head_painted.glb
+python scripts/generation/swap_head.py $O/body_painted.glb --body-camera $O/body.json --body-picture $O/body_colour_input_rgba.png \
+    $O/head_painted.glb --head-camera $O/head.json --head-picture $O/head_input_rgba.png --head-source head_cut_out.png \
+    --closeup closeup.jpg --closeup-box x0 y0 x1 y1 --head-crop hx hy --out $O/whole.glb
+python scripts/rigging/rig_from_glb.py $O/whole.glb --out $O/rigged
+```
+
+The head's cut-out: the close-up from the hair to the collar, background away (RMBG-2.0), the halo and other things
+at its edges taken out. Only front and back views: the 3/4 views of a sheet have angles nobody wrote down.
+
 ### Once: the training data and the training
 
 ```bash
