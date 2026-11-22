@@ -20,6 +20,7 @@ Samy Hashem
 | `scripts/inpainting/` | changing one area of a model: the core (`inpaint.py`, `inversion.py`) and what makes its pictures and masks |
 | `scripts/pipeline/` | the node flows (`flow.py`, `nodes_core.py`), their web page's back end, the character pipeline |
 | `scripts/server/` | where the AI runs: this PC (`inpaint_server.py`) or the uni server through Sciebo (`cloud.py`, `cloud_worker.py`) |
+| `scripts/rigging/` | a skeleton for a generated humanoid: the rig head (trained on TRELLIS.2's shape latent) and `rig_from_glb.py` |
 | `scripts/tools/` | renders and comparisons |
 | `blender/` | the Blender add-on (`inpaint_addon.py`) and the node editor (`pipeline_nodes.py`) |
 | `user_interface_model/`, `flows/`, `comfyui/` | the web app's pages (a chat, the data, the city), the node flows as files, the same nodes in ComfyUI |

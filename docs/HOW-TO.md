@@ -6,6 +6,7 @@ Where the AI runs and what every setting does. How the whole project fits togeth
 - [2. The uni server from anywhere](#2-the-uni-server-from-anywhere)
 - [3. On the uni server itself](#3-on-the-uni-server-itself)
 - [4. Settings](#4-settings)
+- [5. Rigging a model](#5-rigging-a-model)
 
 ## 1. This PC
 
@@ -499,3 +500,51 @@ the result, each step guided by the picture. The settings below change how these
 | Small, very detailed objects | `--resolution 1536 --steps 25 --faces 4000000` |
 | Long hair / very big objects at 1536 | add `--max-tokens 40000` |
 | Turntable video | `views_from_video.py video.mp4 --cutout`, then `multi_image.py pictures/<video>/view_*.png …` |
+
+## 5. Rigging a model
+
+*How to: give a generated humanoid a skeleton and skin weights, so it can be posed and animated*
+
+The rig head (`scripts/rigging/rig_head.py`) is trained once (below); after that a model takes about 4 minutes.
+It finds 22 body bones (hips to head, arms, legs, toes) and 30 finger bones; the face has no bones yet.
+
+### Every time: one model
+
+```bash
+source activate.sh
+python scripts/rigging/rig_from_glb.py outputs/<object>/model.glb --out outputs/rigged/<name>
+blender -b --python scripts/rigging/wave_demo.py -- outputs/rigged/<name>_rigged.glb outputs/rigged/<name>_wave.blend
+```
+
+| File | What it is |
+|---|---|
+| `<name>_rigged.glb` | the model with its armature, ready to pose or animate (any program that reads glTF) |
+| `<name>_pose.png` | at rest and posed side by side: does the skin follow the bones? |
+| `<name>.jpg` | the skeleton on the latent's voxels, coloured by bone, from the front and the side |
+| `<name>_wave.blend` | open it in Blender and press **Space**: the model waves (bones shown as sticks) |
+
+Needs: a GPU (the rig head and TRELLIS.2's shape encoder, ~4 GB), TRELLIS.2 installed (`./install.sh`),
+Blender 4.x, and the trained rig head in `local_ai_models/rig_head/best.pt` (not in Git, 58 MB; it is in Sciebo, or
+train it). Blender not on the PATH: `export BLENDER=/path/to/blender`. The model must stand upright and face the front,
+as TRELLIS.2 and Pixal3D make it (glTF: Y up, front +Z).
+
+Settings: `RIG_SMOOTH=2` (default) smooths the weights along the surface, about 2 voxels far: neighbouring points
+follow the same bones, so sleeves and cloaks bend instead of wrinkling. `0` turns it off (the shading around a moved
+arm gets dark and streaky), `1` is between.
+
+**Posing it yourself in Blender:** open the `_wave.blend` (it opens in Pose Mode), stop the animation (Space), click a
+bone, press **R**, move the mouse, click. Alt+R resets a bone; A then Alt+R resets all.
+
+### Once: the training data and the training
+
+```bash
+# Rig-XL (UniRig's data, huggingface.co/VAST-AI/UniRig, data/rigxl/processed.7z, 4.5 GB) unpacked into datasets/rigxl
+python scripts/rigging/rig_data.py datasets/rigxl --lists mixamo_train vroid_train --out datasets/rig_latents  # ~12 h
+python scripts/rigging/rig_data.py datasets/rigxl --lists mixamo_train vroid_train --out datasets/rig_latents --retry-skipped
+python scripts/rigging/rig_head.py train --data datasets/rig_latents --out local_ai_models/rig_head --steps 20000  # ~4.5 h
+```
+
+On the uni server (A40): 8,750 rigs usable (958 have no hands, a head or a whole skeleton), training 4 h 50 min.
+Result on 253 rigs it never saw: 85.6 % of the voxels get the right bone; body joints ~2.7 cm and finger joints
+~2.2 cm off (for a person of 1.70 m). The log: `local_ai_models/rig_head/log.txt`.
+

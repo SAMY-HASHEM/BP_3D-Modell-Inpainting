@@ -64,18 +64,38 @@ SAMPLES = 200_000  # surface points for the voxels' skin weights
 
 
 def plain(name):
-    """A bone's name without the rig's prefix ("mixamorig:Hips", "mixamorig1:Hips", "mixamorigHips" -> "hips")."""
-    return re.sub(r"^mixamorig\d*", "", str(name).rsplit(":", 1)[-1]).lower()
+    """A bone's name without the rig's prefix or numbering: "mixamorig:Hips", "mixamorig1:Hips", "mixamorigHips",
+    "_Hips" (the ":" made "_"), "FBXASC058Hips" (FBX's code for ":") and "Hips_01" (numbered bones) -> "hips"."""
+    name = str(name).rsplit(":", 1)[-1].lower()
+    name = re.sub(r"^mixamorig\d*", "", name)
+    name = re.sub(r"^(fbxasc\d{3})+", "", name)
+    return re.sub(r"_\d+$", "", name.lstrip("_"))
+
+
+TOES = [BONES.index("toe_l"), BONES.index("toe_r")]
 
 
 def body_bones(names):
-    """The index of each of the 22 body bones in this rig, or None if it lacks one."""
+    """The index of each of the 22 body bones in this rig (None for toes it lacks: they are placed from the feet's
+    mesh), or None if it lacks another one."""
     where = {plain(n): i for i, n in enumerate(names)}
     for kind in NAMES.values():
-        found = [where.get(n.lower()) for n in kind]
-        if None not in found:
+        found = [where.get(plain(n)) for n in kind]
+        if all(j is not None for k, j in enumerate(found) if k not in TOES):
             return found
     return None
+
+
+def place_toe(vertices, body_skin, joints, foot, up):
+    """A toe joint for a rig without one: on the way from the ankle to the tip of the foot's mesh (the foot's vertex
+    farthest from the ankle across the ground), where Mixamo puts its toe bone (about 60% of the way)."""
+    mine = vertices[body_skin[:, foot] > 0.5]
+    if len(mine) < 4:
+        return None
+    away = mine - joints[foot]
+    across = away - np.outer(away @ up, up)
+    tip = mine[np.argmax(np.linalg.norm(across, axis=1))]
+    return joints[foot] + 0.6 * (tip - joints[foot])
 
 
 def finger_bones(names):
@@ -92,7 +112,7 @@ def finger_bones(names):
 
 def fold(parents, body):
     """For every bone of the rig: the body bone (0..21) it is or hangs from; above the hips (a root): the hips."""
-    of = {j: k for k, j in enumerate(body)}
+    of = {j: k for k, j in enumerate(body) if j is not None}
     out = []
     for j in range(len(parents)):
         b = j
@@ -155,10 +175,6 @@ def prepare(raw):
         return "not all 22 body bones"
     parents = [None if p is None else int(p) for p in raw["parents"]]
     vertices, faces = raw["vertices"].astype(np.float64), raw["faces"].astype(np.int64)
-    joints = raw["joints"].astype(np.float64)[body]
-    turn = upright(joints)
-    if turn is None:
-        return "no front from the feet"
     skin = raw["skin"].astype(np.float32)
     if skin.shape != (len(vertices), len(names)):
         return f"skin {skin.shape} does not fit {len(vertices)} vertices, {len(names)} bones"
@@ -169,12 +185,25 @@ def prepare(raw):
         return f"{unweighted.mean():.0%} of the vertices without weights"
     body_skin[unweighted, 0] = 1.0  # a few loose vertices: the hips
     body_skin /= body_skin.sum(1, keepdims=True)
+    all_joints = raw["joints"].astype(np.float64)
+    joints = np.array([all_joints[j] if j is not None else np.zeros(3) for j in body])
+    has_toes = all(body[k] is not None for k in TOES)
+    if not has_toes:  # their skin stays in the feet; the trainer leaves the toes' skin out for these models
+        up = snap(joints[5] - joints[0])
+        for toe in TOES:
+            if body[toe] is None:
+                joints[toe] = place_toe(vertices, body_skin, joints, toe - 1, up)
+                if joints[toe] is None:
+                    return "no toe bone and too little foot"
+    turn = upright(joints)
+    if turn is None:
+        return "no front from the feet"
     finger_index = finger_bones(names)
     fingers = np.where(finger_index[:, None] >= 0, raw["joints"].astype(np.float64)[np.maximum(finger_index, 0)], 0)
-    return vertices @ turn.T, faces, joints @ turn.T, body_skin, fingers @ turn.T, finger_index >= 0
+    return vertices @ turn.T, faces, joints @ turn.T, body_skin, fingers @ turn.T, finger_index >= 0, has_toes
 
 
-def encode(encoder, vertices, faces, joints, skin, fingers, has_fingers):
+def encode(encoder, vertices, faces, joints, skin, fingers, has_fingers, has_toes=True):
     """The latent and the labels of one prepared model. The fingers' skin stays in the hand's (a finger is about one
     voxel thick in the 64^3 latent); their joints are kept for the finer step on the mesh."""
     import torch
@@ -192,7 +221,7 @@ def encode(encoder, vertices, faces, joints, skin, fingers, has_fingers):
     bary = trimesh.triangles.points_to_barycentric(mesh.triangles[face_index], points)
     point_skin = np.einsum("pk,pkb->pb", bary, skin[corner])
     return {"coords": coords, "feats": feats, "joints": cube_joints.astype(np.float32),
-            "fingers": place.to_cube(fingers).astype(np.float32), "has_fingers": has_fingers,
+            "fingers": place.to_cube(fingers).astype(np.float32), "has_fingers": has_fingers, "has_toes": has_toes,
             "skin": voxel_skin(coords.astype(int), points, point_skin).astype(np.float16)}
 
 
@@ -202,6 +231,7 @@ def main():
     parser.add_argument("--lists", nargs="+", default=["mixamo_train", "vroid_train"], help="datalist/<name>.txt")
     parser.add_argument("--out", default="datasets/rig_latents")
     parser.add_argument("--limit", type=int, help="only the first N models (a test)")
+    parser.add_argument("--retry-skipped", action="store_true", help="try the skipped models again (after a fix)")
     args = parser.parse_args()
 
     ids = []
@@ -211,6 +241,9 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     report_path = os.path.join(args.out, "report.json")
     report = json.load(open(report_path)) if os.path.exists(report_path) else {"done": [], "skipped": {}}
+    if args.retry_skipped:
+        ids = [i for i in ids if i.strip("/").replace("/", "_") in report["skipped"]]
+        report["skipped"] = {}
 
     import torch
     import trellis2.models as models

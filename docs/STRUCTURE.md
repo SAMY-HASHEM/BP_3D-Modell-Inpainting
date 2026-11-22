@@ -202,6 +202,9 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | Qwen-Image-Edit 2511 (ComfyUI) | paints a prompt into a picture; missing sides; reworks the picture of a change | `picture_from_prompt.py`, `views_from_picture.py`, `picture_check.py` |
 | Grounding DINO + SAM 2.1 | a word → the part on a picture | `find_part.py` |
 | Qwen3-VL-8B | sorts the pictures of the character pipeline | `sort_pictures.py`, `organise_pictures.py` |
+| Rig head (ours, trained on Rig-XL from UniRig) | a humanoid's skeleton (22 body + 30 finger bones) and skin weights from TRELLIS.2's shape latent | `rig_head.py`, `rig_from_glb.py` |
+| Pixal3D (+ MoGe-2, NAF) | TRELLIS.2 retrained with the camera: follows the picture more closely; compared, not yet in the flows | `compare_pixal3d.py` |
+| Hi3D 1.0 | a finer shape from TRELLIS.2's structure; compared: TRELLIS.2 stays | `compare_hi3d.py` |
 
 ## 5. The files by layer
 
@@ -213,7 +216,11 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | **Front ends** | `blender/inpaint_addon.py`; `user_interface_model/app.html`, `login.html`, `old/` + `pipeline/flow_page.py`, `accounts.py`; `blender/pipeline_nodes.py`; `comfyui/` | ~8,700 |
 | **Character pipeline** | `pipeline/correct.py`, `auto_pipeline.py`, `run_pipeline.py`, `sort_pictures.py`, `grid_judge.py`, `refine_region.py`, `combine_parts.py`, `hair_strands.py`, `preview.py`; `generation/organise_pictures.py` | ~2,800 |
 | **Helpers** | `tools/render_views.py`, `render_preview.py`, `project_texture.py`, `compare_in_blender.py`; `generation/views_from_picture.py`, `views_from_video.py`, `fix_normals.py`, `run_tests.py` | ~1,700 |
+| **Rigging** | `rigging/rig_data.py` (training data), `rig_head.py` (the model, its training), `rig_from_glb.py` (a .glb → rigged .glb), `wave_demo.py`, `rig_picture.py` | ~950 |
+| **Comparing generators** | `generation/compare_hi3d.py`, `compare_pixal3d.py`, `clay_views.py` (grey renders side by side) | ~350 |
 | **Kept for an open task** | `generation/try_settings.py` (requirement 2: the best settings), `tools/compare_models.sh` | ~80 |
+
+How the rig head works and how to run it: [HOW-TO.md](HOW-TO.md#5-rigging-a-model).
 
 Paths are under `scripts/` unless they start with `blender/`, `user_interface_model/` or `comfyui/`.
 
