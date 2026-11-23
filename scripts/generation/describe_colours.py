@@ -5,6 +5,7 @@ could not see (the motorcycle girl's bike came out green, Nov 23); a hand-writte
     python scripts/generation/describe_colours.py front.png side.png back.png [--out colours.txt]
 
 Prints the description (at most ~60 words: SDXL reads 77 tokens) and writes it to --out.
+--parts: instead the parts and their materials -> detail_normals.py's --parts (one per line in --out).
 """
 import argparse
 import os
@@ -28,16 +29,44 @@ confused (e.g. an orange helmet with a pale green visor). One sentence, at most 
 background. Answer only with JSON: {"description": "..."}"""
 
 
+PARTS_QUESTION = """These pictures show one object from different sides. List its main visible PARTS (at most 5,
+each a word a part finder can look for: "helmet", "shirt", "face", "crown", "boots" ...) and each one's material, one
+of: skin, cotton, denim, wool, satin, leather, metal, plastic, stone, rubber, hair. Answer only with JSON:
+{"parts": [{"word": "...", "material": "..."}]}"""
+
+# material -> a detail map (local_ai_models/detail_maps or noise), its strength, its tile (share of the model)
+DETAIL = {"skin": ("noise", 0.35, 0.012), "cotton": ("cotton_jersey", 0.6, 0.03), "denim": ("denim_fabric", 0.6, 0.03),
+          "wool": ("caban", 0.7, 0.03), "satin": ("crepe_satin", 0.4, 0.03), "leather": ("brown_leather", 0.6, 0.03),
+          "metal": ("noise", 0.3, 0.03), "plastic": ("noise", 0.15, 0.05), "stone": ("noise", 0.4, 0.015),
+          "rubber": ("rubberized_track", 0.5, 0.03)}
+
+
+def parts_for_detail(pictures, model_name="Qwen/Qwen3-VL-8B-Instruct", cpu=False):
+    """detail_normals.py's --parts from the pictures: Qwen3-VL names the parts and their materials, DETAIL gives
+    each material's map (hair: none)."""
+    model, processor = load(model_name, cpu)
+    answer, raw = ask(model, processor, [shrink(on_grey(Image.open(p)), 768) for p in pictures], PARTS_QUESTION,
+                      max_tokens=300)
+    specs = []
+    for part in answer.get("parts", [])[:5]:
+        material = str(part.get("material", "")).lower()
+        if material in DETAIL and part.get("word"):
+            name, strength, tile = DETAIL[material]
+            specs.append(f"{part['word']}={name}:{strength}:{tile}")
+    return specs
+
+
+def on_grey(im):
+    if im.mode == "RGBA":  # cut-outs: on grey, as MV-Adapter sees them
+        bg = Image.new("RGB", im.size, (127, 127, 127))
+        bg.paste(im, mask=im.getchannel("A"))
+        return bg
+    return im.convert("RGB")
+
+
 def describe(pictures, model_name="Qwen/Qwen3-VL-8B-Instruct", cpu=False):
     model, processor = load(model_name, cpu)
-    images = []
-    for path in pictures:
-        im = Image.open(path)
-        if im.mode == "RGBA":  # cut-outs: on grey, as MV-Adapter sees them
-            bg = Image.new("RGB", im.size, (127, 127, 127))
-            bg.paste(im, mask=im.getchannel("A"))
-            im = bg
-        images.append(shrink(im.convert("RGB"), 768))
+    images = [shrink(on_grey(Image.open(path)), 768) for path in pictures]
     answer, raw = ask(model, processor, images, QUESTION, max_tokens=300)
     text = (answer.get("description") or raw).strip().replace("\n", " ")
     words = text.split()
@@ -50,7 +79,15 @@ def main():
     p.add_argument("--out")
     p.add_argument("--model", default="Qwen/Qwen3-VL-8B-Instruct")
     p.add_argument("--cpu", action="store_true")
+    p.add_argument("--parts", action="store_true", help="instead: the parts and their detail maps for detail_normals.py")
     a = p.parse_args()
+    if a.parts:
+        specs = parts_for_detail(a.pictures, a.model, a.cpu)
+        print(" ".join(f'"{x}"' for x in specs))
+        if a.out:
+            with open(a.out, "w") as f:
+                f.write("\n".join(specs) + "\n")
+        return
     text = describe(a.pictures, a.model, a.cpu)
     print(text)
     if a.out:

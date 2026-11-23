@@ -30,6 +30,14 @@ pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shap
 | 8 | **Surface detail** | `detail_normals.py --parts "face=noise:0.35:0.012" "veil=caban:0.8:0.03"` | Poly Haven CC0 maps (`local_ai_models/detail_maps`), Grounding DINO + SAM 2.1 for the parts | votes per texel (speckled) | as artists do it (Marmoset detail normals): Erik's face got a stone grain, the veil a weave; the parts voted per face from 9 views |
 | 9 | **Rig** | `rig_from_glb.py` (rig head + `fit_hands.py`), `hold_item.py` | our rig head | UniRig, GEM-X joints on pictures | hands fitted to the mesh; the grip checked on the skin |
 
+## Lessons from Erik's bust (one picture, fine detail)
+
+- TRELLIS.2 1536 beat Pixal3D on it: the whole crown in 3D, the face sharper (Pixal3D won on the girl's face alone).
+- The seed decides the face: three seeds of the one picture gave three faces (one close to the sculpt, one doll-like,
+  one with an eye missing). Next: a few seeds at 1024 (~4 min each), scored, the best one made at 1536.
+- Partial views hurt: two video frames whose crown was cut off by the picture's edge tore the hood into strips.
+  Only whole views for the shape; close-ups for detail (paint_front.py --closeup, picture_normals.py).
+
 ## The numbers (`scripts/tools/score_model.py`)
 
 The motorcycle girl's models against her de-lit front, side and back (outline: intersection over union; colour: median

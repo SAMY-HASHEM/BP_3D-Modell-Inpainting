@@ -60,7 +60,8 @@ def main():
                    "the outline's width: front, back, sides, two ¾)")
     p.add_argument("--out", required=True)
     p.add_argument("--resolution", help="default: the machine's profile")
-    p.add_argument("--parts", nargs="+", help="stage 8: word=map:strength:tile (no --parts: no stage 8)")
+    p.add_argument("--parts", nargs="+", help="stage 8: word=map:strength:tile, or auto (Qwen3-VL names the parts "
+                   "and their materials); no --parts: no stage 8")
     p.add_argument("--retopo", action="store_true", help="stage 6 (closed bodies)")
     p.add_argument("--rig", action="store_true", help="stage 9 (humanoids)")
     p.add_argument("--no-mvadapter", action="store_true", help="stage 7: the shape stage's own colours only")
@@ -135,7 +136,12 @@ def main():
         models += [("7 MV-Adapter", o("mvadapter.glb")), ("7 colours (merged)", o("colours.glb"))]
         current = o("colours.glb")
 
-    # 8 surface detail
+    # 8 surface detail (--parts auto: the parts and materials named by Qwen3-VL)
+    if a.parts == ["auto"]:
+        run("8 parts", [PY, S("generation", "describe_colours.py"), *colour[:4], "--parts", "--out", o("parts.txt")],
+            o("parts.txt"), out)
+        a.parts = [line.strip() for line in open(o("parts.txt")) if line.strip()]
+        print("parts:", a.parts, flush=True)
     if a.parts:
         run("8 detail", [PY, S("generation", "detail_normals.py"), current, "--out", o("detail.glb"), "--parts",
                          *a.parts], o("detail.glb"), out)
