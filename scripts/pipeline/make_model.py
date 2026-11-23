@@ -68,6 +68,7 @@ def main():
     p.add_argument("--no-mvadapter", action="store_true", help="stage 7: the shape stage's own colours only")
     p.add_argument("--seeds", type=int, default=1, help="try this many seeds at 1024 first, scored against the "
                    "pictures (score_model.py); the best one is made at full resolution")
+    p.add_argument("--face", help="with --seeds: pick the seed whose part (e.g. face) is likest the picture's")
     a = p.parse_args()
     out = os.path.abspath(a.out)
     views = os.path.join(out, "views")
@@ -127,10 +128,14 @@ def main():
             tried.append(path)
         views_for_score = colour[:3]
         angles = ["0", "side", "180"][:len(views_for_score)] if len(views_for_score) > 1 else ["0"]
+        face = ["--face", a.face] if a.face else []
         run("4 seed scores", [PY, S("tools", "score_model.py"), *tried, "--pictures", *views_for_score, "--views",
-                              *angles, "--out", o("seed_scores.json")], o("seed_scores.json"), out)
+                              *angles, "--out", o("seed_scores.json"), *face], o("seed_scores.json"), out)
         scores = json.load(open(o("seed_scores.json")))
-        best = min(range(len(scores)), key=lambda i: (scores[i]["mean"]["colour"], -scores[i]["mean"]["outline"]))
+        if a.face:  # the likest face (Erik: the overall score picked the cleanest bust, the face score his likest face)
+            best = max(range(len(scores)), key=lambda i: scores[i]["mean"].get("face", 0))
+        else:
+            best = min(range(len(scores)), key=lambda i: (scores[i]["mean"]["colour"], -scores[i]["mean"]["outline"]))
         seed = best
         print(f"seed {seed} scored best: {scores[best]['mean']}", flush=True)
     run("4 shape", cmd + ["--resolution", resolution, "--seed", str(seed), "--out", o("shape.glb")], o("shape.glb"),
