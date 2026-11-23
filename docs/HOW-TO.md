@@ -638,6 +638,31 @@ python scripts/rigging/rig_from_glb.py $O/whole.glb --out $O/rigged
 The head's cut-out: the close-up from the hair to the collar, background away (RMBG-2.0), the halo and other things
 at its edges taken out. Only front and back views: the 3/4 views of a sheet have angles nobody wrote down.
 
+### The whole pipeline in one command
+
+```bash
+# pictures (front first); add --grey with clay renders of the same views to de-light
+python scripts/pipeline/make_model.py --pictures front.png side.png back.png --out outputs/x
+# two turntable videos (colour and clay, the same turn), the frames that show front, back, sides ...
+python scripts/pipeline/make_model.py --video painted.mp4 --grey-video clay.mp4 --frames 108 199 58 149 0 87 \
+    --out outputs/y --parts "skin=noise:0.35:0.012" "shirt=cotton_jersey:0.6:0.03" [--retopo] [--rig]
+```
+
+Stages: de-light, shape (TRELLIS.2; 1536 on the server, 1024 on a 24 GB PC: the profile), colours (Qwen3-VL's
+description → MV-Adapter → merged with the shape's own), surface detail (`--parts`), retopology, rig. A stage whose
+file is in --out is skipped: delete it to redo it. `compare.jpg` shows every stage's model; `make_model.json` the times
+(Erik's bust: 22 min on the server). What each stage is and why: [PIPELINE.md](PIPELINE.md).
+
+```bash
+# how good is a model, in numbers (outline, colour, sharpness) against pictures it was NOT painted from
+python scripts/tools/score_model.py a.glb b.glb --pictures front.png side.png --views 0 side
+# surface detail alone (stage 8): word = detail map (or noise) : strength : tile size (share of the model)
+python scripts/generation/detail_normals.py model.glb --out detailed.glb --parts "face=noise:0.35:0.012" "veil=caban:0.8:0.03"
+# a character's clean quads with its rig: rig the dense model, then carry the weights over
+blender -b --python scripts/generation/retopo.py -- model.glb quads.glb --faces 40000 --voxel 4
+blender -b --python scripts/rigging/transfer_rig.py -- model_rigged.blend quads.glb quads_rigged.blend
+```
+
 ### Colours without the light: de-lighting with a clay render
 
 When the views exist twice, grey (clay) and coloured, with the same lights and camera (a turntable video of each, a
