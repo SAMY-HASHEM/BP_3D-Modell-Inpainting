@@ -638,6 +638,20 @@ python scripts/rigging/rig_from_glb.py $O/whole.glb --out $O/rigged
 The head's cut-out: the close-up from the hair to the collar, background away (RMBG-2.0), the halo and other things
 at its edges taken out. Only front and back views: the 3/4 views of a sheet have angles nobody wrote down.
 
+### Colours without the light: de-lighting with a clay render
+
+When the views exist twice, grey (clay) and coloured, with the same lights and camera (a turntable video of each, a
+character sheet in both), the shadows can be taken out of the colours before TRELLIS.2 sees them:
+
+```bash
+python scripts/generation/delight.py --video painted.mp4 grey.mp4 --frames 108 199 58 149 0 87 --out views/ \
+    --names front back side_a side_b rear34 front34
+python scripts/generation/multi_image.py --shape-only views/grey_*.png --colour-only views/delit_*.png --resolution 1536
+```
+
+It prints how well each grey frame lies on its coloured one (under 0.95: not the same view). The motorcycle girl's
+model came out with 31 % brighter, cleaner colours and a third of the fake metal.
+
 ### An item in the hand
 
 In one go, from pictures (character: its views, front first; the item: one picture), ~15 min:
