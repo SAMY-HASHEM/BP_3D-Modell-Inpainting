@@ -5,7 +5,9 @@ colours (no light: its base colour), and then
   outline     intersection over union of the model's outline and the picture's (the shape)
   colour      the median CIELAB distance between the two where both are (the colours; under ~10 hard to see)
   sharpness   the model's fine detail against the picture's (high frequencies of both, 1.0 = as sharp)
-and the mean over the pictures.
+and the mean over the pictures. --face face: also how alike that part is (on the first picture: found by
+Grounding DINO + SAM, the same box of the model's picture, compared by DINOv3; 1.0 = the same): the seed search
+picked Erik's cleanest bust, not his likest face (Nov 23).
 
     python scripts/tools/score_model.py model.glb [more.glb ...] --pictures front.png side.png ... \\
         --views 0 side [...] [--out scores.json]
@@ -55,10 +57,49 @@ def detail(gray, mask):
     return float(np.abs(high[mask]).mean()) if mask.any() else 0.0
 
 
+BOXES = {}
 CAMERAS = {}  # (the shape's point count, size, picture) -> its camera: models that differ only in colour share it
 
 
-def score(path, pictures, views, ctx):
+PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_dino = {}
+
+
+def dino_embed(image):
+    """DINOv3's summary of a picture (its CLS token), for comparing two pictures of the same thing."""
+    import glob
+    from transformers import AutoImageProcessor, AutoModel
+    if not _dino:
+        path = glob.glob(os.path.join(PROJECT, "local_ai_models", "models--facebook--dinov3-vitl16-pretrain-lvd1689m",
+                                      "snapshots", "*"))[0]
+        _dino["proc"] = AutoImageProcessor.from_pretrained(path)
+        _dino["model"] = AutoModel.from_pretrained(path).cuda().eval()
+    inputs = _dino["proc"](images=image, return_tensors="pt").to("cuda")
+    with torch.no_grad():
+        out = _dino["model"](**inputs).last_hidden_state[:, 0]
+    return torch.nn.functional.normalize(out, dim=-1)[0]
+
+
+def find_box(picture_path, word):
+    """The box around `word` in a picture (find_part.py: Grounding DINO + SAM 2.1, its own environment)."""
+    import json as js
+    import shutil
+    import subprocess
+    import tempfile
+    folder = tempfile.mkdtemp()
+    shutil.copy(picture_path, os.path.join(folder, "view.png"))
+    js.dump({"word": word, "views": [{"picture": "view.png", "clicks": []}]}, open(os.path.join(folder, "views.json"), "w"))
+    subprocess.run([os.path.join(PROJECT, "conda", "envs", "mask-ai", "bin", "python"),
+                    os.path.join(PROJECT, "scripts", "inpainting", "find_part.py"), folder], capture_output=True)
+    try:
+        m = np.load(os.path.join(folder, "masks.npz"))["view"]
+    except Exception:
+        return None
+    ys, xs = np.nonzero(m)
+    return (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1) if len(xs) else None
+
+
+def score(path, pictures, views, ctx, face=None):
     import cv2
     scene = trimesh.load(path)
     mesh = list(scene.geometry.values())[0]
@@ -81,11 +122,24 @@ def score(path, pictures, views, ctx):
         photo = rgba[..., :3].astype(np.float32) / 255
         de = np.linalg.norm(to_lab(colour) - to_lab(photo), axis=-1)
         g_model, g_photo = colour.mean(-1), photo.mean(-1)
-        rows.append({"picture": os.path.basename(pic), "outline": round(float(iou), 3),
-                     "colour": round(float(np.median(de[inner])), 1) if inner.any() else None,
-                     "sharpness": round(detail(g_model, inner) / max(detail(g_photo, inner), 1e-6), 2)})
-    mean = {k: round(float(np.mean([r[k] for r in rows if r[k] is not None])), 3) for k in
-            ("outline", "colour", "sharpness")}
+        row = {"picture": os.path.basename(pic), "outline": round(float(iou), 3),
+               "colour": round(float(np.median(de[inner])), 1) if inner.any() else None,
+               "sharpness": round(detail(g_model, inner) / max(detail(g_photo, inner), 1e-6), 2)}
+        if face and pic == pictures[0]:  # the face (or another part) alone: how alike, by DINOv3's eyes
+            key = (pic, face)
+            if key not in BOXES:
+                BOXES[key] = find_box(pic, face)
+            box = BOXES[key]
+            if box is not None:
+                x0, y0, x1, y1 = box
+                grey = np.full_like(photo, 0.5)
+                a_photo = np.where(mask[..., None], photo, grey)[y0:y1, x0:x1]
+                a_model = np.where(seen[..., None], colour, grey)[y0:y1, x0:x1]
+                to_pil = lambda x: Image.fromarray((np.clip(x, 0, 1) * 255).astype(np.uint8))
+                row["face"] = round(float((dino_embed(to_pil(a_photo)) * dino_embed(to_pil(a_model))).sum()), 3)
+        rows.append(row)
+    mean = {k: round(float(np.mean([r[k] for r in rows if r.get(k) is not None])), 3) for k in
+            ("outline", "colour", "sharpness") + (("face",) if any("face" in r for r in rows) else ())}
     return {"model": path, "mean": mean, "pictures": rows}
 
 
@@ -95,14 +149,17 @@ def main():
     p.add_argument("--pictures", nargs="+", required=True)
     p.add_argument("--views", nargs="+", required=True)
     p.add_argument("--out")
+    p.add_argument("--face", help="also how alike one part is (e.g. face): found on the first picture, compared by "
+                   "DINOv3 (1.0 = the same)")
     a = p.parse_args()
     import nvdiffrast.torch as dr
     ctx = dr.RasterizeCudaContext()
-    results = [score(m, a.pictures, a.views, ctx) for m in a.models]
-    print(f"{'model':48s} {'outline':>8s} {'colour dE':>10s} {'sharpness':>10s}")
+    results = [score(m, a.pictures, a.views, ctx, a.face) for m in a.models]
+    print(f"{'model':48s} {'outline':>8s} {'colour dE':>10s} {'sharpness':>10s}" + (f" {a.face:>8s}" if a.face else ""))
     for r in results:
         m = r["mean"]
-        print(f"{os.path.basename(r['model'])[:48]:48s} {m['outline']:8.3f} {m['colour']:10.1f} {m['sharpness']:10.2f}")
+        print(f"{os.path.basename(r['model'])[:48]:48s} {m['outline']:8.3f} {m['colour']:10.1f} {m['sharpness']:10.2f}"
+              + (f" {m.get('face', float('nan')):8.3f}" if a.face else ""))
     if a.out:
         json.dump(results, open(a.out, "w"), indent=1)
 

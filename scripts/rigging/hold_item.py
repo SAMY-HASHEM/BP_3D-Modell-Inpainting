@@ -316,13 +316,16 @@ def close_thumb(rig, hand, grip_point, axis, radius, closer=0.0, thick=None):
         turn_bone(rig, names[2], axis, c23)
 
     def cost():
-        for nm in names:
+        # going into the handle costs by how deep (a hard "not allowed" left no pose at all when the thumb started at
+        # the limit: the knight made in one go kept it straight, 0.44 radii off, Nov 23); the first bone lies inside
+        # the palm, under its skin: only the outer two count
+        into = 0.0
+        for nm in names[1:]:
             h, e = world(rig, nm), world(rig, nm, "tail")
-            if min(to_axis(e), to_axis((h + e) / 2)) < radius + skin * 0.7:
-                return np.inf  # through the handle
+            into = max(into, radius + skin * 0.7 - min(to_axis(e), to_axis((h + e) / 2)))
         tip = world(rig, names[2], "tail")
         off = abs((tip - grip_point).dot(axis))
-        return abs(to_axis(tip) - goal) + 0.3 * max(0.0, off - 2 * radius)
+        return abs(to_axis(tip) - goal) + 0.3 * max(0.0, off - 2 * radius) + 3 * max(0.0, into)
 
     best = (np.inf, 0, 0, 0)
     for swing in range(-60, 61, 15):
