@@ -20,11 +20,12 @@ Samy Hashem
 | `scripts/inpainting/` | changing one area of a model: the core (`inpaint.py`, `inversion.py`) and what makes its pictures and masks |
 | `scripts/pipeline/` | the node flows (`flow.py`, `nodes_core.py`), their web page's back end, the character pipeline |
 | `scripts/server/` | where the AI runs: this PC (`inpaint_server.py`) or the uni server through Sciebo (`cloud.py`, `cloud_worker.py`) |
-| `scripts/rigging/` | a skeleton for a generated humanoid: the rig head (trained on TRELLIS.2's shape latent) and `rig_from_glb.py` |
+| `scripts/rigging/` | a skeleton for a generated humanoid: the rig head (trained on TRELLIS.2's shape latent), `rig_from_glb.py`, the hands, an item in the hand |
+| `configs/hardware/` | the two machines' profiles: the home PC (24 GB) and the uni server (48 GB) |
 | `scripts/tools/` | renders and comparisons |
 | `blender/` | the Blender add-on (`inpaint_addon.py`) and the node editor (`pipeline_nodes.py`) |
 | `user_interface_model/`, `flows/`, `comfyui/` | the web app's pages (a chat, the data, the city), the node flows as files, the same nodes in ComfyUI |
-| `docs/` | `STRUCTURE.md` (how it works), `REQUIREMENTS.md` (progress), `HOW-TO.md` (running it, settings), `FLOWS.md` (the pipelines in detail) |
+| `docs/` | `STRUCTURE.md` (how it works), `PIPELINE.md` (the pipeline in stages, what won), `REQUIREMENTS.md` (progress), `HOW-TO.md` (running it, settings), `FLOWS.md` (the flows in detail) |
 
 Setup: `./install.sh` (TRELLIS.2) and `./install_mask.sh` (mask AI); then `source activate.sh`.
 All AI models are in `local_ai_models/` (not in Git); `./download_models.sh` gets them, and `source activate.sh` runs it by itself when something is missing.

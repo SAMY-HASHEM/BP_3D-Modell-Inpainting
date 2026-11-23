@@ -204,8 +204,11 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | Qwen3-VL-8B | sorts the pictures of the character pipeline | `sort_pictures.py`, `organise_pictures.py` |
 | Rig head (ours, trained on Rig-XL from UniRig) | a humanoid's skeleton (22 body + 30 finger bones) and skin weights from TRELLIS.2's shape latent | `rig_head.py`, `rig_from_glb.py` |
 | GEM-X (NVIDIA) | a person's motion from a video: 77 joints in 3D (body, fingers, face), frame by frame; its 2D point finder also finds a model's joints on pictures of it | `motion_track.py`, `motion_from_video.py`, `rig_views.py` |
-| Pixal3D (+ MoGe-2, NAF) | TRELLIS.2 retrained with the camera: follows the picture more closely, its camera lets the picture be painted on; 31 GB GPU; compared, not yet in the flows | `compare_pixal3d.py`, `paint_front.py` |
+| Pixal3D (+ MoGe-2, NAF) | TRELLIS.2 retrained with the camera: follows the picture more closely, its camera lets the picture be painted on; 35 GB at 1536 on the server, 19 GB in low VRAM (the 24 GB profile); not yet in the flows | `compare_pixal3d.py`, `paint_front.py` |
 | Hi3D 1.0 | a finer shape from TRELLIS.2's structure; compared: TRELLIS.2 stays | `compare_hi3d.py` |
+| MV-Adapter (ig2mv, on SDXL) | colours for a given mesh: six views painted for its own shape (its own venv) | `texture_mvadapter.py`, `merge_textures.py` |
+| Instant Meshes | retopology: clean quads on a closed surface | `retopo.py` |
+| Poly Haven maps (12 materials, CC0) | detail normals per material (cloth, leather, metal) | (stage 8, next) |
 
 ## 5. The files by layer
 
@@ -216,7 +219,7 @@ Both servers read the same job .zip. How to use them: [HOW-TO.md](HOW-TO.md#1-th
 | **Running it** | `server/inpaint_server.py`, `run_job.py`, `cloud.py`, `cloud_worker.py`; `pipeline/flow.py`, `nodes_core.py` | ~2,000 |
 | **Front ends** | `blender/inpaint_addon.py`; `user_interface_model/app.html`, `login.html`, `old/` + `pipeline/flow_page.py`, `accounts.py`; `blender/pipeline_nodes.py`; `comfyui/` | ~8,700 |
 | **Character pipeline** | `pipeline/correct.py`, `auto_pipeline.py`, `run_pipeline.py`, `sort_pictures.py`, `grid_judge.py`, `refine_region.py`, `combine_parts.py`, `hair_strands.py`, `preview.py`; `generation/organise_pictures.py` | ~2,800 |
-| **Pipeline stages (Nov 23)** | `generation/delight.py` (colours without the light, by a clay render), `texture_mesh.py` (TRELLIS.2's texturing: colours for any mesh), `texture_mvadapter.py` (MV-Adapter, its own venv), `retopo.py` and `paint_views.py` (experiments, worse on the motorcycle girl: kept for the lesson) | ~550 |
+| **Pipeline stages (Nov 23)** | `generation/delight.py` (colours without the light, by a clay render), `texture_mesh.py` (TRELLIS.2's texturing: colours for any mesh), `texture_mvadapter.py` (MV-Adapter, its own venv), `describe_colours.py` (its colour description, Qwen3-VL), `merge_textures.py` (faithful colours + crisp detail), `retopo.py` (Instant Meshes), `paint_views.py` (an experiment: photos projected ghost) | ~550 |
 | **Hardware** | `hardware.py` (the machine's profile: `configs/hardware/local_24gb.json` for the home PC's RTX 3090, `server_48gb.json` for the A40), `tools/as_24gb.py` (a step run as on a 24 GB GPU) | ~110 |
 | **Helpers** | `tools/render_views.py`, `render_preview.py`, `project_texture.py`, `compare_in_blender.py`; `generation/views_from_picture.py`, `views_from_video.py`, `fix_normals.py`, `run_tests.py` | ~1,700 |
 | **Rigging** | `rigging/rig_data.py` (training data), `rig_head.py` (the model, its training), `rig_from_glb.py` (a .glb → rigged .glb), `fit_hands.py` (the finger bones and their skin fitted to the mesh's own fingers), `hold_item.py` (an item in the hand), `wave_demo.py`, `rig_picture.py`; `motion_track.py` (a video → the person's joints, GEM-X), `motion_to_rig.py` (the joints → the rigged model's animation), `motion_from_video.py` (both and a side-by-side video), `install_gemx.sh`; `rig_views.py` (a model's joints found on 12 pictures of it, for poses the rig head does not know) | ~1,900 |
@@ -253,4 +256,5 @@ used: `outputs/cloud/` (job packages for the uni server), `blender/` (the add-on
 | [REQUIREMENTS.md](REQUIREMENTS.md) | what is done, how far, and what is next |
 | [HOW-TO.md](HOW-TO.md) | running it: this PC, the uni server, what every setting does |
 | [FLOWS.md](FLOWS.md) | the node flows, the character pipeline and the web app in detail |
+| [PIPELINE.md](PIPELINE.md) | the pipeline in stages: each stage's tool, model, what was tried and what won |
 | [FIRST-SUCCESS.md](FIRST-SUCCESS.md) | the first structure that worked (Nov 16): a part replaced by another one, step by step, with its commands and numbers |
