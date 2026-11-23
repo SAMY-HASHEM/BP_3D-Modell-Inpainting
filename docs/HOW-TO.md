@@ -17,6 +17,38 @@ no uni server, no cloud. The add-on starts and stops the server by itself.
 
 For the uni GPU server see [HOW-TO.md](#2-the-uni-server-from-anywhere).
 
+### Your PC (24 GB) or the server (48 GB): the hardware profiles
+
+Every GPU step reads the machine's profile, so the same commands run on both:
+
+| profile | machine | picked when |
+|---|---|---|
+| `configs/hardware/local_24gb.json` | the home PC: RTX 3090 24 GB, Ryzen 9 5950X, 64 GB RAM | the GPU has under 30 GB, or `HARDWARE_PROFILE=local` |
+| `configs/hardware/server_48gb.json` | the uni server: A40 46 GB | the GPU has more, or `HARDWARE_PROFILE=server` |
+
+```bash
+python scripts/hardware.py          # which profile this machine gets, and its settings
+```
+
+On 24 GB the models wait in RAM (~25 GB of it) and go to the GPU one at a time (low VRAM); the results are the
+same as the server's (the same model from the same picture and seed, at the same speed). Measured with the GPU
+capped at 22.5 GB (Nov 23):
+
+| step | GPU on 24 GB | time |
+|---|---|---|
+| TRELLIS.2 item / 3-view character, 1024 | 2.9 / 4.5 GB | 3.5 / 7 min |
+| TRELLIS.2 one view, 1536 | 7.3 GB | 11 min |
+| Pixal3D 1024 / 1536 (server: 35 GB at 1536) | 14.2 / 18.7 GB | 4 / 6 min |
+| multi-view Pixal3D 1024 / 1536 | 15.3 / 20.1 GB | 5 / 8 min |
+| painting, rig, rig head training | 0.8 / 6.4 / 6.9 GB | |
+
+Multi-view Pixal3D at 1536 leaves ~1.5 GB: close other programs that use the GPU (videos, games) while it runs.
+A command-line setting (e.g. `--resolution 1536`) wins over the profile. To test a step for 24 GB on the server:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/tools/as_24gb.py scripts/generation/compare_pixal3d.py picture.png --name x --out outputs/x
+```
+
 ### A computer without a GPU: everything on the uni server
 
 A weak laptop only sends the data and shows the result: the whole flow (the data sheet, the base model, the edit, the
@@ -586,7 +618,7 @@ Good to know:
   median "up" of all frames), and puts the hands, feet and knees that rest on the floor onto it, frame by frame.
 - The model is not the person: its arms and legs have other lengths, so a hand can end a little above or in the floor.
 
-### A character with a detailed face (Pixal3D on the uni server, 35 GB GPU)
+### A character with a detailed face (Pixal3D: the server, or a 24 GB PC with its profile)
 
 ```bash
 G=grey_views; C=colour_views; O=outputs/<name>

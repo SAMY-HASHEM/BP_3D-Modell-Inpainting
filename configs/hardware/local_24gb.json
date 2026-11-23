@@ -1,0 +1,130 @@
+{
+ "name": "local_24gb",
+ "machine": "the home PC: NVIDIA RTX 3090 24 GB, AMD Ryzen 9 5950X (16 cores / 32 threads), 64 GB DDR4, Fedora 44",
+ "gpu_gb": 24,
+ "ram_gb": 64,
+ "cpu_threads": 32,
+ "rules": [
+  "one GPU job at a time (the desktop also uses the GPU: ~1-1.5 GB of it)",
+  "the models wait in RAM between their stages (low VRAM): a job needs ~20-25 GB of RAM, so close big programs",
+  "a step that needs more than ~22 GB of GPU fails with 'out of memory'; scripts/tools/as_24gb.py tests that on the server",
+  "multi-view Pixal3D at 1536 fits with ~1.5 GB to spare: close other GPU programs (browser video, games)"
+ ],
+ "trellis2": {
+  "low_vram": true,
+  "resolution": "1024",
+  "max_resolution": "1536"
+ },
+ "multi_image": {
+  "low_vram": true,
+  "resolution": "1024"
+ },
+ "pixal3d": {
+  "low_vram": true,
+  "resolution": "1024",
+  "max_resolution": "1536"
+ },
+ "pixal3d_mv": {
+  "low_vram": true,
+  "resolution": "1024",
+  "lean_projection": true,
+  "max_resolution": "1536"
+ },
+ "mesh": {
+  "decimation_target": 1000000,
+  "texture_size": 4096
+ },
+ "rig_head": {
+  "train_budget_voxels": 60000
+ },
+ "blender": {
+  "threads": 32
+ },
+ "measured": {
+  "how": "on the server's A40 with PyTorch capped at 22.5 GB (scripts/tools/as_24gb.py), Nov 23 2026; GPU GB = PyTorch's peak",
+  "steps": [
+   {
+    "step": "item, TRELLIS.2 1024 (generate.py)",
+    "gpu_gb": 2.9,
+    "minutes": 3.5,
+    "ram_gb": 23.7,
+    "fits": true
+   },
+   {
+    "step": "character from 3 views, TRELLIS.2 1024 (multi_image.py)",
+    "gpu_gb": 4.5,
+    "minutes": 7.0,
+    "ram_gb": 24.0,
+    "fits": true
+   },
+   {
+    "step": "character, one view, TRELLIS.2 1536 (generate.py)",
+    "gpu_gb": 7.3,
+    "minutes": 11.2,
+    "ram_gb": 22.4,
+    "fits": true
+   },
+   {
+    "step": "Pixal3D 1024 (compare_pixal3d.py), all models on the GPU",
+    "gpu_gb": "over 22.5",
+    "fits": false
+   },
+   {
+    "step": "Pixal3D 1024, low VRAM",
+    "gpu_gb": 14.2,
+    "minutes": 3.8,
+    "ram_gb": 23.2,
+    "fits": true
+   },
+   {
+    "step": "Pixal3D 1536, low VRAM",
+    "gpu_gb": 18.7,
+    "minutes": 6.1,
+    "ram_gb": 24.7,
+    "fits": true,
+    "note": "the same model as the server's (35.2 GB there), the same speed"
+   },
+   {
+    "step": "multi-view Pixal3D 1024 (compare_pixal3d_mv.py), low VRAM + lean projection",
+    "gpu_gb": 15.3,
+    "minutes": 4.9,
+    "ram_gb": 24.1,
+    "fits": true
+   },
+   {
+    "step": "multi-view Pixal3D 1536, low VRAM, without the lean projection",
+    "gpu_gb": "over 22.5",
+    "fits": false
+   },
+   {
+    "step": "multi-view Pixal3D 1536, low VRAM + lean projection",
+    "gpu_gb": 20.1,
+    "minutes": 8.2,
+    "ram_gb": 25.8,
+    "fits": true
+   },
+   {
+    "step": "painting (paint_front.py)",
+    "gpu_gb": 0.8,
+    "minutes": 0.3,
+    "fits": true
+   },
+   {
+    "step": "rig (rig_from_glb.py: rig head, Blender, hands fitted)",
+    "gpu_gb": 6.4,
+    "minutes": 3.2,
+    "fits": true
+   },
+   {
+    "step": "rig head training (rig_head.py train, 60000 voxels a batch)",
+    "gpu_gb": 6.9,
+    "fits": true
+   },
+   {
+    "step": "hold, video (Blender)",
+    "gpu_gb": 0,
+    "note": "CPU only"
+   }
+  ]
+ }
+}

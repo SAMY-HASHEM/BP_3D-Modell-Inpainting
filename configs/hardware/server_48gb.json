@@ -1,0 +1,57 @@
+{
+ "name": "server_48gb",
+ "machine": "the uni server: NVIDIA A40 46 GB (3 of them, shared: use one, CUDA_VISIBLE_DEVICES), Linux",
+ "gpu_gb": 46,
+ "rules": [
+  "one GPU job at a time, on a free GPU (nvidia-smi: others share the server)",
+  "the models may all stay on the GPU (faster); TRELLIS.2 keeps its own low-VRAM way (it needs little anyway)"
+ ],
+ "trellis2": {
+  "low_vram": true,
+  "resolution": "1024",
+  "max_resolution": "1536"
+ },
+ "multi_image": {
+  "low_vram": true,
+  "resolution": "1024"
+ },
+ "pixal3d": {
+  "low_vram": false,
+  "resolution": "1536",
+  "max_resolution": "1536"
+ },
+ "pixal3d_mv": {
+  "low_vram": false,
+  "resolution": "1024",
+  "lean_projection": true,
+  "max_resolution": "1536"
+ },
+ "mesh": {
+  "decimation_target": 1000000,
+  "texture_size": 4096
+ },
+ "rig_head": {
+  "train_budget_voxels": 60000
+ },
+ "blender": {
+  "threads": 0
+ },
+ "measured": {
+  "how": "on the A40, Nov 22-23 2026 (each script's own report)",
+  "steps": [
+   {
+    "step": "Pixal3D 1536, all models on the GPU",
+    "gpu_gb": 35.2,
+    "minutes": 2.9
+   },
+   {
+    "step": "Pixal3D 1536 at its worst before free_gpu / free_before_decoding (Nov 22)",
+    "gpu_gb": "out of 46"
+   },
+   {
+    "step": "everything else",
+    "note": "as local_24gb's (the same code; TRELLIS.2 is low VRAM on both)"
+   }
+  ]
+ }
+}

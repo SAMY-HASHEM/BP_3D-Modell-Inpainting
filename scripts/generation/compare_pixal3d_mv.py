@@ -37,9 +37,70 @@ from PIL import Image  # noqa: E402
 import inference_mv as pixal_mv  # noqa: E402  (Pixal3D's own multi-view script, on single's sys.path)
 
 
+def lean_projection():
+    """Pixal3D's multi-view projection, the same numbers in less GPU memory (for the 24 GB PC: at 1536 the grid is
+    96^3 and one view's features are 2 x 3.4 GB; its code glued them into a new 6.75 GB block and added that to a
+    6.75 GB sum: ~20 GB at once, out of memory on 24 GB, Nov 23). Here each half goes straight into its part of the
+    sum and is freed: ~10 GB. Only the 'average' fusion (the released weights' own); 'attention' stays as it was."""
+    import torch
+    from pixal3d.trainers.flow_matching.mixins import image_conditioned_proj as icp
+    from pixal3d.trainers.flow_matching.mixins.image_conditioned_proj import compute_relative_calc_mat
+    original = icp.DinoV3ProjMultiViewFeatureExtractor.forward
+
+    def forward(self, image, camera_angle_x=None, distance=None, mesh_scale=None, transform_matrix=None):
+        if self.multiview_fusion != "average":
+            return original(self, image, camera_angle_x, distance, mesh_scale, transform_matrix)
+        B, V = image.shape[:2]
+        calc_mat = compute_relative_calc_mat(transform_matrix, distance, self.proj_grid.front_view_transform_matrix)
+        img_flat = image.reshape(B * V, *image.shape[2:])
+        image_for_naf = img_flat.clone() if self.use_naf_upsample else None
+        img_norm = self.transform(img_flat)
+        with torch.no_grad():
+            z = self.extract_features(img_norm)
+            num_reg = getattr(self.model.config, "num_register_tokens", 4)
+            z_global_all = z[:, :1 + num_reg]
+            spatial = z[:, 1 + num_reg:].reshape(B * V, self.patch_number, self.patch_number, -1)
+            fov, dist = camera_angle_x.reshape(B * V), distance.reshape(B * V)
+            scale = mesh_scale[:, None].expand(B, V).reshape(B * V)
+            calc = calc_mat.reshape(B * V, 4, 4)
+            acc = None
+            for v in range(V):
+                idx = torch.arange(v, B * V, V, device=z.device)
+                lr = self.proj_grid(spatial[idx], fov[idx], dist[idx], scale[idx], calc[idx])
+                d = lr.shape[-1]
+                if acc is None:
+                    acc = torch.empty(*lr.shape[:-1], d * (2 if self.use_naf_upsample else 1), dtype=lr.dtype,
+                                      device=lr.device)
+                    acc[..., :d].copy_(lr)
+                else:
+                    acc[..., :d].add_(lr)
+                del lr
+                if self.use_naf_upsample:
+                    self._load_naf()
+                    hr_feat = self.naf_model(image_for_naf[idx], spatial[idx].permute(0, 3, 1, 2), self.naf_target_size)
+                    hr = self.proj_grid(hr_feat, fov[idx], dist[idx], scale[idx], calc[idx], BHWC=False)
+                    del hr_feat
+                    if v == 0:
+                        acc[..., d:].copy_(hr)
+                    else:
+                        acc[..., d:].add_(hr)
+                    del hr
+                torch.cuda.empty_cache()
+            z_global = z_global_all.reshape(B, V, z_global_all.shape[-2], z_global_all.shape[-1]).mean(dim=1)
+        return z_global, acc.div_(V)
+
+    icp.DinoV3ProjMultiViewFeatureExtractor.forward = forward
+
+
 def cut(pipeline, path):
     """The view without its background (RGBA, uncropped)."""
-    return pipeline.rembg_model(Image.open(path).convert("RGB")).convert("RGBA")
+    if getattr(pipeline, "low_vram", False):  # it waits on the CPU (the 24 GB profile)
+        pipeline.rembg_model.to("cuda")
+    rgba = pipeline.rembg_model(Image.open(path).convert("RGB")).convert("RGBA")
+    if getattr(pipeline, "low_vram", False):
+        pipeline.rembg_model.cpu()
+        torch.cuda.empty_cache()
+    return rgba
 
 
 def box(rgba):
@@ -132,12 +193,13 @@ def main():
     parser.add_argument("--fit", help="a model of her (glTF axes) to find the 'auto' angles by")
     parser.add_argument("--name", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--resolution", default="1024", choices=["1024", "1536"])
+    parser.add_argument("--resolution", default=None, choices=["1024", "1536"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rig", action="store_true", help="also rig it (a humanoid): <name>_rigged.glb, <name>_pose.png "
                         "(Pixal3D's cube is turned to its camera, so the finished model is read in again for it)")
     parser.add_argument("--fov", type=float, default=-1, help="radians; default: MoGe-2's on the front view")
     args = parser.parse_args()
+    args.resolution = args.resolution or single.setting("pixal3d_mv", "resolution", "1024")
     os.makedirs(args.out, exist_ok=True)
     path = lambda ext: os.path.join(args.out, args.name + ext)
     pictures = [v.rsplit(":", 1)[0] for v in args.views]
@@ -148,7 +210,11 @@ def main():
         config["model_name"] = single.DINOV3
     torch.cuda.reset_peak_memory_stats()
     start = time.time()
-    pipeline = pixal_mv.init_pipeline(single.PIXAL3D, "pipeline_mv.json")
+    low_vram = single.setting("pixal3d", "low_vram", False)  # the machine's profile (scripts/hardware.py)
+    if single.setting("pixal3d_mv", "lean_projection", True):
+        lean_projection()
+    pipeline = pixal_mv.init_pipeline(single.PIXAL3D, "pipeline_mv.json", low_vram=low_vram)
+    report["low_vram"] = low_vram
     report["load_seconds"] = round(time.time() - start)
 
     views = frame([cut(pipeline, p) for p in pictures])

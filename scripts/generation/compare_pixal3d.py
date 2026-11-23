@@ -28,6 +28,8 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ.setdefault("HF_HUB_CACHE", os.path.join(PROJECT_DIR, "local_ai_models"))
 os.environ["HF_HUB_OFFLINE"] = "1"  # the server can't reach Hugging Face's file servers anyway
 sys.path.insert(0, CODE)
+sys.path.insert(0, os.path.join(PROJECT_DIR, "scripts"))
+from hardware import setting  # noqa: E402
 # MoGe-2 wants utils3d_moge (newer than TRELLIS.2's utils3d, under its own name: no clash; from jsDelivr's GitHub copy)
 sys.path.insert(0, os.path.join(PIXAL3D, "helpers", "utils3d_moge_src"))
 
@@ -97,7 +99,12 @@ def cut_out(pipeline, picture):
         scale = min(1, 1024 / max(picture.size))
         if scale < 1:
             picture = picture.resize((int(picture.width * scale), int(picture.height * scale)), Image.LANCZOS)
+        if getattr(pipeline, "low_vram", False):  # it waits on the CPU (the 24 GB profile)
+            pipeline.rembg_model.to("cuda")
         rgba = pipeline.rembg_model(picture)
+        if getattr(pipeline, "low_vram", False):
+            pipeline.rembg_model.cpu()
+            torch.cuda.empty_cache()
     ys, xs = np.nonzero(np.asarray(rgba)[..., 3] > 0.8 * 255)
     cx, cy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
     size = int(max(xs.max() - xs.min(), ys.max() - ys.min()) * 1.1)
@@ -139,7 +146,8 @@ def main():
     parser.add_argument("picture")
     parser.add_argument("--name", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--resolution", default="1024", choices=list(PIPELINE_TYPES))
+    parser.add_argument("--resolution", default=None, choices=list(PIPELINE_TYPES),
+                        help="default: the machine's profile (scripts/hardware.py): 1536 on the server, 1024 on a 24 GB PC")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rig", action="store_true", help="also rig it (a humanoid): <name>_rigged.glb, <name>_pose.png "
                         "(Pixal3D's cube is turned to its camera, so the finished model is read in again for it)")
@@ -148,6 +156,7 @@ def main():
                         "painted version of a grey sculpt): the shape comes from `picture`, the colour step sees this "
                         "one, lined up on the first by its outline")
     args = parser.parse_args()
+    args.resolution = args.resolution or setting("pixal3d", "resolution", "1024")
     os.makedirs(args.out, exist_ok=True)
     path = lambda ext: os.path.join(args.out, args.name + ext)
     report = {"picture": args.picture, "seed": args.seed, "resolution": args.resolution}
@@ -156,7 +165,10 @@ def main():
         config["model_name"] = DINOV3  # the same DINOv3 weights, from our own copy
     torch.cuda.reset_peak_memory_stats()
     start = time.time()
-    pipeline = pixal.init_pipeline(PIXAL3D, low_vram=False)
+    low_vram = setting("pixal3d", "low_vram", False)  # the machine's profile (scripts/hardware.py): on a 24 GB GPU
+    # the models wait in RAM and go to the GPU one at a time (all on it at once needed 22+ GB at 1024: out of memory)
+    pipeline = pixal.init_pipeline(PIXAL3D, low_vram=low_vram)
+    report["low_vram"] = low_vram
     free_before_decoding(pipeline)
     report["load_seconds"] = round(time.time() - start)
 
