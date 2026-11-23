@@ -10,7 +10,7 @@
   3 bake      the bumps added to the surface's own normals, written as the glTF normal map (tangent space)
 
     python scripts/generation/detail_normals.py model.glb --out detailed.glb \\
-        --parts "skin=noise:0.35:0.02" "cloth=cotton_jersey:0.6:0.04" "metal=metal_plate_02:0.4:0.08"
+        --parts "skin=noise:0.35:0.012" "cloth=cotton_jersey:0.6:0.03" "metal=noise:0.3:0.03"
     (word=map:strength:tile size, a share of the model's size)
 
 Writes detailed.glb, detailed_parts.jpg (the views, each material in its colour) and detailed_normal.png.
@@ -33,24 +33,32 @@ FIND_PART = os.path.join(PROJECT, "scripts", "inpainting", "find_part.py")
 COLOURS = [(230, 60, 60), (60, 170, 230), (240, 200, 40), (90, 200, 90), (200, 90, 220), (240, 140, 40)]
 
 
-def noise_map(size=1024, grain=6.0, seed=0):
-    """A tileable normal map of fine random bumps (skin pores, stone grain): filtered noise as a height."""
+def noise_map(size=1024, bumps=90.0, seed=0):
+    """A tileable normal map of fine random bumps (skin pores, stone grain): noise filtered to about `bumps` bumps
+    across the tile, as a height; its slopes scaled to a steady strength (the first try, 6 across, was nearly flat:
+    0.004 of bending, Nov 23)."""
     rng = np.random.default_rng(seed)
     f = np.fft.fftfreq(size)
-    r = np.sqrt(f[:, None] ** 2 + f[None, :] ** 2)
-    spectrum = np.fft.fft2(rng.standard_normal((size, size))) * np.exp(-(r * size / grain) ** 2)
+    r = np.sqrt(f[:, None] ** 2 + f[None, :] ** 2) * size
+    spectrum = np.fft.fft2(rng.standard_normal((size, size))) * np.exp(-(r / bumps) ** 2)
     height = np.real(np.fft.ifft2(spectrum))
-    height = (height - height.mean()) / (height.std() + 1e-9)
     dx = (np.roll(height, -1, 1) - np.roll(height, 1, 1)) * 0.5
     dy = (np.roll(height, -1, 0) - np.roll(height, 1, 0)) * 0.5
-    n = np.stack([-dx, -dy, np.ones_like(height) * 2.0], -1)
+    scale = 0.6 / (np.sqrt((dx ** 2 + dy ** 2).mean()) + 1e-12)
+    n = np.stack([-dx * scale, -dy * scale, np.ones_like(height)], -1)
     return n / np.linalg.norm(n, axis=-1, keepdims=True)
 
 
-def load_map(name):
-    """A detail normal map as unit vectors (x right, y up: OpenGL), size x size x 3."""
-    if name == "noise":
-        return noise_map()
+def load_map(name, slope=0.4):
+    """A detail normal map as unit vectors (x right, y up: OpenGL), its bumps scaled to the same mean slope (Poly
+    Haven's go from 0.03 (a metal plate) to 0.17 (leather): one strength meant something else for each)."""
+    n = noise_map() if name == "noise" else read_map(name)
+    xy = n[..., :2] * slope / (np.linalg.norm(n[..., :2], axis=-1).mean() + 1e-9)
+    n = np.concatenate([xy, np.ones_like(xy[..., :1])], -1)
+    return n / np.linalg.norm(n, axis=-1, keepdims=True)
+
+
+def read_map(name):
     index = json.load(open(os.path.join(MAPS, "index.json")))
     for items in index.values():
         for it in items:
@@ -73,7 +81,7 @@ def sample(tex, u, v):
 
 def views_of(mesh, texture, folder, size=768):
     """The model from 8 sides (around, a little from above) and from above, orthographic: the pictures (for the
-    part finder) and, per pixel, which texel it shows (row, column) or -1."""
+    part finder) and, per pixel, which face it shows (or -1)."""
     import nvdiffrast.torch as dr
     ctx = dr.RasterizeCudaContext()
     v = mesh.vertices - (mesh.vertices.max(0) + mesh.vertices.min(0)) / 2
@@ -101,10 +109,8 @@ def views_of(mesh, texture, folder, size=768):
         picture = np.where(hit[..., None], colour, 0.5)
         name = f"view_{k:02d}.png"
         Image.fromarray((np.clip(picture, 0, 1) * 255).astype(np.uint8)).save(os.path.join(folder, name))
-        rows = np.where(hit, np.clip((tuv[..., 1] * th).astype(int), 0, th - 1), -1)
-        cols = np.where(hit, np.clip((tuv[..., 0] * tw).astype(int), 0, tw - 1), -1)
         views.append(name)
-        lookups.append((rows, cols))
+        lookups.append((rast[0, ..., 3].flip(0).cpu().numpy().astype(np.int64) - 1))  # each pixel's face, or -1
     return views, lookups
 
 
@@ -138,34 +144,37 @@ def main():
 
     # 1 parts: votes per texel
     views, lookups = views_of(mesh, texture, work)
-    votes = np.zeros((len(parts), th, tw), np.float32)
-    seen = np.zeros((th, tw), np.float32)
-    for rows, cols in lookups:
-        ok = rows >= 0
-        np.add.at(seen, (rows[ok], cols[ok]), 1)
+    # votes per face (per texel, most texels got no picture's pixel: filled from neighbours in the texture image,
+    # which in a mosaic of UV islands are anywhere on the model, the labels came out speckled, Nov 23)
+    nf = len(mesh.faces)
+    votes = np.zeros((len(parts), nf), np.float32)
+    seen = np.zeros(nf, np.float32)
+    for ids in lookups:
+        seen += np.bincount(ids[ids >= 0], minlength=nf)
     for i, (word, *_rest) in enumerate(parts):
         masks = find(work, views, word)
         found = 0
-        for (rows, cols), m in zip(lookups, masks):
+        for ids, m in zip(lookups, masks):
             if m is None:
                 continue
-            ok = (rows >= 0) & np.asarray(Image.fromarray(m.astype(np.uint8) * 255).resize(rows.shape[::-1])) > 0
-            np.add.at(votes[i], (rows[ok], cols[ok]), 1)
+            hit = np.asarray(Image.fromarray(m.astype(np.uint8) * 255).resize(ids.shape[::-1])) > 0
+            votes[i] += np.bincount(ids[(ids >= 0) & hit], minlength=nf)
             found += 1
         print(f"{word}: found on {found} of {len(views)} pictures", flush=True)
     share = votes / np.maximum(seen, 1)[None]
-    label = np.where((seen > 0) & (share.max(0) >= 0.5), share.argmax(0), -1)
-    # texels no picture saw (folds, the inside): the material of the nearest texel a picture saw
-    from scipy.ndimage import distance_transform_edt
-    if (seen > 0).any():
-        _, (iy, ix) = distance_transform_edt(seen == 0, return_indices=True)
-        label = np.where(seen > 0, label, label[iy, ix])
+    face_label = np.where((seen > 0) & (share.max(0) >= 0.5), share.argmax(0), -1)
+    # faces no picture saw (folds, the inside): the label of the nearest face a picture saw, in 3D
+    from scipy.spatial import cKDTree
+    centres = mesh.vertices[mesh.faces].mean(1)
+    if (seen > 0).any() and (seen == 0).any():
+        _, near = cKDTree(centres[seen > 0]).query(centres[seen == 0])
+        face_label[seen == 0] = face_label[seen > 0][near]
 
     # the views with the parts in colour (a check)
     sheet = []
-    for name, (rows, cols) in zip(views, lookups):
+    for name, ids in zip(views, lookups):
         im = np.asarray(Image.open(os.path.join(work, name)).convert("RGB")).astype(np.float32)
-        lab = np.where(rows >= 0, label[np.clip(rows, 0, th - 1), np.clip(cols, 0, tw - 1)], -1)
+        lab = np.where(ids >= 0, face_label[np.clip(ids, 0, nf - 1)], -1)
         for i in range(len(parts)):
             im[lab == i] = im[lab == i] * 0.45 + np.array(COLOURS[i % len(COLOURS)]) * 0.55
         sheet.append(Image.fromarray(im.astype(np.uint8)).resize((384, 384)))
@@ -173,7 +182,7 @@ def main():
     for k, im in enumerate(sheet):
         out.paste(im, (384 * k, 0))
     out.save(os.path.splitext(a.out)[0] + "_parts.jpg", quality=85)
-    print("parts (share of the texture):", {w: f"{(label == i).mean():.1%}" for i, (w, *_r) in enumerate(parts)},
+    print("parts (share of the faces):", {w: f"{(face_label == i).mean():.1%}" for i, (w, *_r) in enumerate(parts)},
           flush=True)
 
     # 2-3 detail: per texel its place, normal and tangent frame (rasterised in UV space)
@@ -206,7 +215,7 @@ def main():
     B = np.cross(N, T) * handed
 
     size = float(np.ptp(mesh.vertices, axis=0).max())
-    lab = label[covered]
+    lab = face_label[face]
     detailed = N.copy()
     axes = np.eye(3)
     for i, (word, name, strength, tile) in enumerate(parts):
@@ -224,8 +233,8 @@ def main():
         bump -= (bump * n).sum(1, keepdims=True) * n
         nn = n + strength * bump
         detailed[sel] = nn / np.linalg.norm(nn, axis=1, keepdims=True)
-        print(f"{word}: {name}, strength {strength}, tile {tile} of the model: {sel.mean():.1%} of the texels",
-              flush=True)
+        print(f"{word}: {name}, strength {strength}, tile {tile} of the model: {sel.mean():.1%} of the texels, "
+              f"bending {np.linalg.norm(bump, axis=1).mean() * strength:.3f}", flush=True)
 
     # tangent space, as the glTF normal map wants it
     ts = np.stack([(detailed * T).sum(1), (detailed * B).sum(1), (detailed * N).sum(1)], 1)
