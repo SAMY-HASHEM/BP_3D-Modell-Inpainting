@@ -284,8 +284,8 @@ def main():
     s.cycles.samples = 1
     s.render.bake.use_selected_to_active = True
     s.render.bake.use_cage = False
-    s.render.bake.cage_extrusion = 0.01
-    s.render.bake.max_ray_distance = 0.03
+    s.render.bake.cage_extrusion = 0.002  # the quads lie on the original surface (shrinkwrap): short rays, no neighbour hit
+    s.render.bake.max_ray_distance = 0.006  # (0.01 / 0.03 smeared thin parts: the motorcycle girl, Nov 23)
     s.render.bake.margin = 8
     s.render.bake.use_pass_direct = False
     s.render.bake.use_pass_indirect = False
