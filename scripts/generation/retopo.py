@@ -6,8 +6,9 @@ at 144 k (voxel 2) 3 without the thumb; the grip check failed where the dense me
 retopologise and carry the weights over (rigging/transfer_rig.py: the 39 k quads then pass the grip check). Runs in
 Blender; the quads by Instant Meshes (local_ai_models/instant_meshes, BSD).
 
-  1 clean     a closed copy: voxel remesh (--voxel thousandths of the model's size, default 6), small loose bits
-              dropped, reduced to --pre faces (QuadriFlow is slow on big meshes), degenerate edges removed
+  1 clean     a closed outer skin (skin_surface.py: surface points -> voxels of --voxel thousandths of the model's
+              size, default 6 -> filled -> the outside; no inside needed, TRELLIS.2's 1536 export is open patches),
+              reduced to --pre faces, degenerate edges removed
   2 quads     Instant Meshes: quad loops following the shape, about --faces faces (--method im); without it, or
               failing, QuadriFlow in its own Blender with a limit (--seconds, 300; --method quadriflow), and last an
               even triangle mesh (--faces x 2)
@@ -20,6 +21,7 @@ weigh less, and a fresh UV layout is what stage 7 paints the views onto (paintin
 throw the paint away).
 
     blender -b --python scripts/generation/retopo.py -- model.glb out.glb [--faces 60000] [--pre 100000] [--voxel 6] [--seconds 300] [--texture 4096]
+        [--shape shape.glb]      (the body from this plain shape, the colours from model.glb)
 
 Writes out.glb and out_wire.png (the new quads, front and side).
 """
@@ -40,7 +42,7 @@ def args():
     i = 0
     while i < len(a):
         if a[i].startswith("--"):
-            opt[a[i][2:]] = a[i + 1] if a[i][2:] == "method" else int(a[i + 1])
+            opt[a[i][2:]] = a[i + 1] if a[i][2:] in ("method", "shape") else int(a[i + 1])
             i += 2
         else:
             pos.append(a[i])
@@ -82,6 +84,21 @@ def main():
         bpy.ops.object.join()
     original = bpy.context.view_layer.objects.active
     original.name = "original"
+    geometry = original
+    if opt.get("shape"):  # the body from the plain shape (a model whose UVs are a mosaic, MV-Adapter's, shredded in the
+        # voxel step even welded: the knight made in one go); the colours still baked from the model itself
+        before = set(bpy.context.scene.objects)
+        bpy.ops.import_scene.gltf(filepath=os.path.abspath(opt["shape"]))
+        parts = [o for o in bpy.context.scene.objects if o not in before and o.type == "MESH"]
+        for o in parts:
+            o.data.transform(o.matrix_world)
+            o.parent = None
+            o.matrix_world.identity()
+        select_only(parts, parts[0])
+        if len(parts) > 1:
+            bpy.ops.object.join()
+        geometry = bpy.context.view_layer.objects.active
+        geometry.name = "shape"
 
     # 1 clean: a closed surface QuadriFlow accepts (it wants a manifold, consistently facing mesh with no edge shorter
     # than 1e-4 units, a fixed number: our models are 1 unit tall, so the work is done 100 x bigger). A plain copy
@@ -89,14 +106,43 @@ def main():
     # big meshes: 418 k faces ran > 28 min, 132 k 97 s), degenerate edges out (one edge of 600 k blocked it)
     import bmesh
     scale = 100.0
-    size = max(original.dimensions)
+    size = max(geometry.dimensions)
     mesh = bpy.data.meshes.new("retopo")
-    mesh.from_pydata([v.co * scale for v in original.data.vertices], [], [p.vertices[:] for p in original.data.polygons])
+    mesh.from_pydata([v.co * scale for v in geometry.data.vertices], [], [p.vertices[:] for p in geometry.data.polygons])
     work = bpy.data.objects.new("retopo", mesh)
     bpy.context.scene.collection.objects.link(work)
+    if geometry is not original:
+        bpy.data.objects.remove(geometry)
     select_only([work], work)
-    work.data.remesh_voxel_size = opt["voxel"] / 1000 * size * scale
-    bpy.ops.object.voxel_remesh()
+    # the points welded first: a model whose UVs are a mosaic (MV-Adapter's) is split along thousands of seams, and the
+    # voxel step can't tell inside from outside on such loose pieces (the knight made in one go came out shredded)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.remove_doubles(threshold=1e-4 * size * scale)
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    # a closed outer skin without needing an inside (skin_surface.py: points -> voxels -> filled -> outer surface).
+    # Blender's voxel remesh needs to know inside from outside; TRELLIS.2's 1536 export is open patches facing any
+    # way (fix_normals.py), and it came out as lace (the knight made in one go, Nov 23)
+    import subprocess
+    import tempfile
+    skin_dir = tempfile.mkdtemp()
+    raw, skin_path = os.path.join(skin_dir, "raw.ply"), os.path.join(skin_dir, "skin.ply")
+    select_only([work], work)
+    bpy.ops.wm.ply_export(filepath=raw, export_selected_objects=True, apply_modifiers=False, export_normals=False,
+                          export_uv=False, export_colors="NONE", export_triangulated_mesh=True)
+    venv = os.path.join(PROJECT, "conda", "envs", "mvadapter-venv", "bin", "python")
+    done = subprocess.run([venv, os.path.join(PROJECT, "scripts", "generation", "skin_surface.py"), raw, skin_path,
+                           "--voxel", str(opt["voxel"] / 1000 * size * scale)], capture_output=True, text=True)
+    print((done.stdout + done.stderr).strip().splitlines()[-1:], flush=True)
+    bpy.ops.wm.ply_import(filepath=skin_path)
+    skin = bpy.context.view_layer.objects.active
+    old_data = work.data
+    work.data = skin.data
+    bpy.data.objects.remove(skin)
+    bpy.data.meshes.remove(old_data)
+    select_only([work], work)
+    print(f"skin: {len(work.data.polygons)} faces", flush=True)
     bm = bmesh.new()
     bm.from_mesh(work.data)
     seen, small = set(), []
@@ -140,11 +186,28 @@ def main():
                           export_normals=False, export_uv=False, export_colors="NONE", export_triangulated_mesh=True)
     kind = None
     if os.path.isfile(INSTANT_MESHES) and opt["method"] != "quadriflow":
-        try:  # its -v gives about 4 x as many points as asked (calibrated on the knight): -v faces / 4 ~ faces quads
-            subprocess.run([INSTANT_MESHES, "-o", out_obj, "-v", str(max(500, opt["faces"] // 4)), "-t", "16",
-                            src_ply], timeout=opt["seconds"], capture_output=True, text=True)
-        except subprocess.TimeoutExpired:
-            print(f"Instant Meshes over {opt['seconds']} s: stopped", flush=True)
+        # its -v gives about 4 x as many points as asked (calibrated on the knight): -v faces / 4 ~ faces quads.
+        # It sometimes stops ("Internal error in extraction": the knight made in one go, Nov 23): then again,
+        # quad-dominant (-D), then a little denser
+        v = max(500, opt["faces"] // 4)
+        faces = lambda path: sum(1 for line in open(path) if line.startswith("f ")) if os.path.isfile(path) else 0
+        for k, extra in enumerate(([], ["-D"], [], ["-D"])):
+            vk = v * (1, 1, 2, 2)[k]
+            command = [INSTANT_MESHES, "-o", out_obj, "-v", str(vk), "-t", "16"] + extra + [src_ply]
+            if os.path.isfile(out_obj):
+                os.remove(out_obj)
+            try:
+                done = subprocess.run(command, timeout=opt["seconds"], capture_output=True, text=True)
+            except subprocess.TimeoutExpired:
+                print(f"Instant Meshes over {opt['seconds']} s: stopped", flush=True)
+                continue
+            got = faces(out_obj)
+            if got >= 0.5 * opt["faces"]:  # its -v means more or fewer faces from mesh to mesh (3.5 k for 40 k once)
+                break
+            print(f"Instant Meshes -v {vk} {' '.join(extra)}: {got} faces" +
+                  ("" if got else f" ({(done.stdout + done.stderr).strip().splitlines()[-1:]})"), flush=True)
+            if os.path.isfile(out_obj):
+                os.remove(out_obj)
         if os.path.isfile(out_obj):
             bpy.ops.wm.obj_import(filepath=out_obj, forward_axis="Y", up_axis="Z")
             quads = bpy.context.view_layer.objects.active
@@ -176,6 +239,10 @@ def main():
         dec.ratio = min(1.0, 2 * opt["faces"] / max(len(work.data.polygons), 1))
         select_only([work], work)
         bpy.ops.object.modifier_apply(modifier="even")
+        bpy.ops.object.mode_set(mode="EDIT")  # all faces outward (reduced, some turned: dark and light at random)
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+        bpy.ops.object.mode_set(mode="OBJECT")
         kind = "even triangles (fallback)"
     work.data.transform(__import__("mathutils").Matrix.Scale(1 / scale, 4))
     # the corners back onto the original surface (the voxel surface has terraces of its voxels: they showed on the

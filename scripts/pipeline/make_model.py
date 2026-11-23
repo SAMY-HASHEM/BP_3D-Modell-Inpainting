@@ -173,7 +173,8 @@ def main():
         run("9 rig", [PY, S("rigging", "rig_from_glb.py"), current, "--out", o("rig")], o("rig_rigged.blend"), out)
     if a.retopo:
         run("6 retopology", [BLENDER, "-b", "--python", S("generation", "retopo.py"), "--", current,
-                             o("retopo.glb"), "--faces", "40000", "--voxel", "4"], o("retopo.glb"), out)
+                             o("retopo.glb"), "--faces", "40000", "--voxel", "4", "--shape", o("shape.glb")],
+            o("retopo.glb"), out)
         models.append(("6 retopology", o("retopo.glb")))
         if a.rig:
             run("9 rig onto the quads", [BLENDER, "-b", "--python", S("rigging", "transfer_rig.py"), "--",
