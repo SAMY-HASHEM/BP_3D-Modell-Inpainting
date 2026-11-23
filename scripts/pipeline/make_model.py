@@ -128,7 +128,7 @@ def main():
             run(f"4 seed {k}", cmd + ["--resolution", "1024", "--seed", str(k), "--out", path], path, out)
             tried.append(path)
         views_for_score = colour[:3]
-        angles = ["0", "side", "180"][:len(views_for_score)] if len(views_for_score) > 1 else ["0"]
+        angles = ["0", "side", "180"][:len(views_for_score)] if len(views_for_score) > 1 else ["any"]
         face = ["--face", a.face] if a.face else []
         run("4 seed scores", [PY, S("tools", "score_model.py"), *tried, "--pictures", *views_for_score, "--views",
                               *angles, "--out", o("seed_scores.json"), *face], o("seed_scores.json"), out)

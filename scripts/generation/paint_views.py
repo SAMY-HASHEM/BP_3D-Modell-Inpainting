@@ -131,7 +131,8 @@ def find_camera(sil, mask, view, size, centre):
     h, w = mask.shape
     k = sil.size / max(h, w)
     small = np.asarray(Image.fromarray(mask).resize((max(1, round(w * k)), max(1, round(h * k))))) > 0
-    starts = [90, -90] if view == "side" else [float(view)]
+    starts = {"side": [90, -90], "any": [0, 90, 180, -90]}.get(view) or [float(view)]  # any: all around (one
+    # picture of a figure: TRELLIS.2 turns it differently seed by seed; front +-50 alone scored Malenia's seeds unfairly)
     best = (-1, None)
     sample = sil.v[np.random.default_rng(0).choice(len(sil.v), min(len(sil.v), 30000), replace=False)]
     for start in starts:
