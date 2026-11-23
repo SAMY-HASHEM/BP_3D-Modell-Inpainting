@@ -608,6 +608,14 @@ at its edges taken out. Only front and back views: the 3/4 views of a sheet have
 
 ### An item in the hand
 
+In one go, from pictures (character: its views, front first; the item: one picture), ~15 min:
+
+```bash
+python scripts/pipeline/armed_character.py front.png side.png back.png --item axe.png --out outputs/knight_axe --size 0.5
+```
+
+Or the hold alone, onto a rigged character:
+
 ```bash
 blender -b --python scripts/rigging/hold_item.py -- outputs/x/rigged_rigged.blend axe.glb outputs/x/with_axe --size 0.5 --swing
 ```
