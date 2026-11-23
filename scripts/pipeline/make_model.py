@@ -68,6 +68,7 @@ def main():
     p.add_argument("--no-mvadapter", action="store_true", help="stage 7: the shape stage's own colours only")
     p.add_argument("--seeds", type=int, default=1, help="try this many seeds at 1024 first, scored against the "
                    "pictures (score_model.py); the best one is made at full resolution")
+    p.add_argument("--seed", type=int, default=42, help="the seed (without --seeds)")
     p.add_argument("--face", help="with --seeds: pick the seed whose part (e.g. face) is likest the picture's")
     a = p.parse_args()
     out = os.path.abspath(a.out)
@@ -119,7 +120,7 @@ def main():
         cmd = [PY, S("generation", "multi_image.py"), *colour]
     else:
         cmd = [PY, S("generation", "generate.py"), colour[0]]
-    seed = 42
+    seed = a.seed
     if a.seeds > 1:  # the seed decides a face (Erik: three seeds, three faces): quick ones at 1024, scored, the best
         tried = []
         for k in range(a.seeds):
