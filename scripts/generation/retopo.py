@@ -3,7 +3,8 @@ baked over from the original. For closed bodies (characters): the knight 950 k t
 same shape and colours (Nov 23). Not for hard surfaces with thin open parts (the motorcycle girl's panels): the voxel
 step makes them double-walled. Not before rigging (Nov 23): the knight at 39 k quads (voxel 4) kept 1 finger per hand,
 at 144 k (voxel 2) 3 without the thumb; the grip check failed where the dense mesh passed. Rig the dense mesh, then
-retopologise and carry the weights over (next). Runs in Blender; the quads by Instant Meshes (local_ai_models/instant_meshes, BSD).
+retopologise and carry the weights over (rigging/transfer_rig.py: the 39 k quads then pass the grip check). Runs in
+Blender; the quads by Instant Meshes (local_ai_models/instant_meshes, BSD).
 
   1 clean     a closed copy: voxel remesh (--voxel thousandths of the model's size, default 6), small loose bits
               dropped, reduced to --pre faces (QuadriFlow is slow on big meshes), degenerate edges removed
