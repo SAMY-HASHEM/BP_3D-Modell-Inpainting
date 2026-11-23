@@ -74,6 +74,9 @@ def main():
     parser.add_argument("--out", help="folder for the pictures (default: pictures/<video name>/)")
     parser.add_argument("--cutout", action="store_true",
                         help="remove the background and keep only the object (needs the TRELLIS.2 environment)")
+    parser.add_argument("--frames", type=int, nargs="+",
+                        help="exactly these frames (front first), instead of evenly spaced ones: a turn is not always "
+                             "even (the motorcycle girl: side to side 87 frames one way, 163 the other)")
     parser.add_argument("--search", type=float, default=8,
                         help="with --cutout: look for the cleanest frame up to this many degrees around each "
                              "view (default 8)")
@@ -98,15 +101,19 @@ def main():
         remover.cuda()
         torch.set_grad_enabled(False)
 
+    if args.frames:
+        args.views = len(args.frames)
     views = []
     for k in range(args.views):
         angle = 360 * k / args.views
         index = (args.front + round(turn * k / args.views)) % count
+        if args.frames:
+            index, angle = args.frames[k] % count, 360 * ((args.frames[k] - args.frames[0]) % turn) / turn
         if remover is None:
             picture, note = read_frame(video, index), ""
         else:
             # frames around the angle, nearest first; stop at the first clean one
-            reach = round(turn * args.search / 360)
+            reach = 2 if args.frames else round(turn * args.search / 360)  # given frames: their next neighbours only
             offsets = sorted(range(-reach, reach + 1, max(1, reach // 5)), key=abs)
             best = None
             for offset in offsets:

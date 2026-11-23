@@ -126,5 +126,8 @@
     "note": "CPU only"
    }
   ]
+ },
+ "make_model": {
+  "resolution": "1024"
  }
 }

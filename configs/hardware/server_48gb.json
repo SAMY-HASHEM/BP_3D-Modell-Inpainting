@@ -53,5 +53,8 @@
     "note": "as local_24gb's (the same code; TRELLIS.2 is low VRAM on both)"
    }
   ]
+ },
+ "make_model": {
+  "resolution": "1536"
  }
 }
