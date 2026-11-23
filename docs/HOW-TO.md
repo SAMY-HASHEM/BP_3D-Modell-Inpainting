@@ -652,6 +652,19 @@ python scripts/generation/multi_image.py --shape-only views/grey_*.png --colour-
 It prints how well each grey frame lies on its coloured one (under 0.95: not the same view). The motorcycle girl's
 model came out with 31 % brighter, cleaner colours and a third of the fake metal.
 
+### New colours for a mesh (painters)
+
+```bash
+# TRELLIS.2's texturing (main environment): any mesh, from one or several pictures
+python scripts/generation/texture_mesh.py model.glb --pictures front.png side.png back.png --out textured.glb
+# MV-Adapter (its own environment; the best reference is the view that shows the most, plus a colour description)
+conda/envs/mvadapter-venv/bin/python scripts/generation/texture_mvadapter.py model.glb --picture side.png \
+    --text "orange body panels, dark grey engine, ..." --out textured.glb
+```
+
+MV-Adapter's models (11 GB) were downloaded on the home PC (`local_ai_models/mv_adapter`); its venv is the main
+environment plus diffusers 0.32.2, cvcuda, open3d, pymeshlab 2022.2.post4, gltflib, jaxtyping.
+
 ### An item in the hand
 
 In one go, from pictures (character: its views, front first; the item: one picture), ~15 min:
