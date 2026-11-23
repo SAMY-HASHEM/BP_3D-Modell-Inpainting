@@ -38,6 +38,17 @@ pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shap
 - Partial views hurt: two video frames whose crown was cut off by the picture's edge tore the hood into strips.
   Only whole views for the shape; close-ups for detail (paint_front.py --closeup, picture_normals.py).
 
+## Lessons from Malenia (one 3/4 picture + its grey render, a whole statue)
+
+- The hardest so far: thin sword, a ring of spikes, flying hair, a torn cape; one picture from the side-front.
+- `make_model.py --pictures colour.png --grey grey.png --seeds 3 --parts auto` made her in 38 min (3 seeds at 1024, the
+  best at 1536, MV-Adapter, merge, detail); `--seed 2` alone in 20 min.
+- The seed turns the figure: TRELLIS.2 put the 3/4 picture's front at a different angle for each seed. The score's
+  camera search started at the front (±50°) only and gave seed 0 an outline of 0.79; searched all around (`any`,
+  now the default for one picture) 0.866. Seeds: 0 → 0.866, 2 → 0.852, 1 → 0.676 (seed 1 also looks worst).
+- Seed 0 (scored best) and seed 2 look about as good; seed 2 has the fuller hair and cape, seed 0 the cleaner front.
+- The automatic parts (Qwen3-VL) found helmet, boots, sword, cape; the hair and the ring got no detail map.
+
 ## The numbers (`scripts/tools/score_model.py`)
 
 The motorcycle girl's models against her de-lit front, side and back (outline: intersection over union; colour: median
