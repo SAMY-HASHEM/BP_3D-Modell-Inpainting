@@ -625,6 +625,15 @@ character's height, the grip --grip of its length from the handle's end; the fin
 a raise-and-chop animation. Writes <out>.blend (press Space), <out>.glb, close-ups of the grip (<out>_hand_*.png, cut
 away so a sleeve does not hide the hand) and the whole body.
 
+It prints a grip check from the posed mesh itself (each finger's skin: its gap to the handle, how much is inside it)
+as PASS / FAIL per finger, also in <out>_grip.json. Believe this, not the bones' numbers.
+
+The hands must be fitted to the mesh first (every rig made since Nov 23 is; an older one, or a rig from elsewhere):
+
+```bash
+python scripts/rigging/fit_hands.py old_rigged.blend fitted.blend [--glb]
+```
+
 ### Once: the training data and the training
 
 ```bash

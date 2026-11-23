@@ -646,7 +646,14 @@ def rig(model_path, out, checkpoint=None, latent=None, joints="head", skin=None)
         d["gltf_joints"], d["gltf_fingers"] = found["gltf_joints"], found["gltf_fingers"]
         np.savez(out + ".npz", **d)
     subprocess.run([BLENDER, "-b", "--python", os.path.abspath(__file__), "--", model_path, out, skin], check=True)
+    if FIT_HANDS:  # the finger bones into the mesh's fingers and their skin from the mesh (fit_hands.py, Nov 23)
+        sys.path.insert(0, HERE)
+        from fit_hands import fit
+        fit(out + "_rigged.blend", out + "_rigged.blend", glb=True)
     return out + "_rigged.glb"
+
+
+FIT_HANDS = os.environ.get("RIG_FIT_HANDS", "1") == "1"  # 0: the rig head's fingers as they come (before Nov 23)
 
 
 def main():

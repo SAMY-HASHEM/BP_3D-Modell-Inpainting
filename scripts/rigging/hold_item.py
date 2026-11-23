@@ -10,15 +10,18 @@
                 (little1 -> index1), and the palm's side (where the thumb sits); the palm's surface found with a ray
   the hold      the handle across the palm, along the knuckles, the head out on the thumb's side, the blade
                 pointing where the fingers point; the item a child of the hand bone (it goes wherever the hand goes)
-  the fingers   each finger's three joints bent in turn, a few degrees at a time, until that segment touches the
-                handle (its tip within the handle's radius + a finger's thickness of the handle's axis) or reaches
-                its limit; the thumb wraps from the other side
+  the fingers   each finger's three joints bent together, a few degrees at a time, until its skin meets the
+                handle (its bones within the handle's radius + the finger's own thickness, measured on the mesh)
+                or a joint reaches its limit; the thumb: the pose of it (swung, bent) whose skin rests on the handle
+  the check     on the posed mesh: each finger's skin gap to the handle and how much of it is inside: PASS / FAIL
+                (<out>_grip.json). The hands must fit the mesh (fit_hands.py; every rig since Nov 23 does)
   --swing       an animation to check the hold: the arm down, raised, a chop (48 frames)
 
 Writes <out>.blend (press Space with --swing), <out>.glb (the character, its armature and the item on the hand) and
-<out>_hand_<k>.png, <out>_body_<k>.png (the grip close up from 3 sides, the whole body).
+<out>_hand_<k>.png, <out>_body_<k>.png (the grip close up from 3 sides, the whole body), <out>_grip.json.
 The rigged .blend keeps the twist bones' constraints and preserve volume (rig_from_glb.py); a .glb is set up again.
 """
+import json
 import math
 import os
 import sys
@@ -26,7 +29,6 @@ import sys
 import bpy
 import numpy as np
 from mathutils import Matrix, Quaternion, Vector
-from mathutils.bvhtree import BVHTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FINGER_NAMES = ("index", "middle", "ring", "little")
@@ -155,7 +157,13 @@ def place_item(rig, body, item, hand, size, grip):
     # From the hand's own joints, not a ray (the knight's ray hit his sleeve: the handle 4 cm off, the fingers short)
     K = (I + L) / 2
     seg = (world(rig, "middle2_" + hand) - M).length
-    target = K + f * seg * 0.35 + n * (radius + seg * 0.28)
+    # ...moved back into the palm towards the thumb when the thumb grows far back (a chibi's short thumb near the
+    # wrist could not reach a handle at the finger bases: its base 5.3 cm off the handle's axis, it 3.8 cm long)
+    out_along = seg * 0.35
+    if "thumb2_" + hand in rig.pose.bones:
+        thumb_at = (world(rig, "thumb2_" + hand) - K).dot(f)
+        out_along = max(min(out_along, (out_along + thumb_at) / 2), -seg * 1.2)
+    target = K + f * out_along + n * (radius + seg * 0.28)
     dist = (target - K).length
     # turn the item: its axis along the knuckles (head on the index side), its blade where the fingers point
     src = Matrix((Vector(axis), Vector(blade), Vector(np.cross(axis, blade)))).transposed()
@@ -176,8 +184,7 @@ def place_item(rig, body, item, hand, size, grip):
 
 
 CURL = (1.0, 1.1, 0.8)        # how much each joint bends for one step of the whole finger (base, middle, tip)
-LIMIT = (95, 110, 85)         # and at most (degrees); the thumb: its own
-THUMB_CURL, THUMB_LIMIT = (0.6, 1.0, 0.9), (50, 70, 80)
+LIMIT = (95, 110, 85)         # and at most (degrees); the thumb: close_thumb
 
 
 def open_hand(rig, hand):
@@ -194,7 +201,41 @@ def open_hand(rig, hand):
             point_bone(rig, nm, d)
 
 
-def close_fingers(rig, hand, grip_point, axis, radius, palm):
+def finger_thickness(rig, body, hand):
+    """Each finger's own thickness (half of it): its points' (its bones' weight over 0.5) median distance to its bones,
+    at rest. A finger stops when its skin, not its bone, meets the handle (a guess from the bones' lengths, as before
+    Nov 23, stopped the knight's fingers 7 mm short once the handle lay deeper in his palm)."""
+    m = np.array(rig.matrix_world)
+    ends = lambda b: [m[:3, :3] @ np.array(v) + m[:3, 3] for v in (b.head_local, b.tail_local)]
+    out = {}
+    for finger in ("thumb",) + FINGER_NAMES:
+        names = [f"{finger}{k}_{hand}" for k in (1, 2, 3)]
+        if any(nm not in rig.data.bones for nm in names):
+            continue
+        segs = [ends(rig.data.bones[nm]) for nm in names]
+        dists = []
+        for obj in body:
+            ids = {obj.vertex_groups[nm].index for nm in names if nm in obj.vertex_groups}
+            if not ids:
+                continue
+            mw = obj.matrix_world
+            pts = np.array([tuple(mw @ v.co) for v in obj.data.vertices
+                            if sum(g.weight for g in v.groups if g.group in ids) > 0.5])
+            if len(pts) == 0:
+                continue
+            best = np.full(len(pts), np.inf)
+            for h, t in segs:
+                ab = t - h
+                u = np.clip(((pts - h) @ ab) / max(ab @ ab, 1e-12), 0, 1)
+                best = np.minimum(best, np.linalg.norm(pts - (h + u[:, None] * ab), axis=1))
+            dists.append(best)
+        if dists:
+            out[finger] = float(np.median(np.concatenate(dists)))
+    print("finger thickness (half):", {k: round(v, 4) for k, v in out.items()}, flush=True)
+    return out
+
+
+def close_fingers(rig, hand, grip_point, axis, radius, palm, thick=None):
     """Each finger curls all its joints together (CURL), two degrees a step; a segment that touches the handle (its
     middle or its end within the handle's radius + a finger's thickness of the handle's axis) stops its own joint and
     those before it, the joints after it go on, so the finger wraps the handle; each joint stops at its LIMIT.
@@ -202,39 +243,21 @@ def close_fingers(rig, hand, grip_point, axis, radius, palm):
     def to_axis(p):
         d = p - grip_point
         return (d - axis * d.dot(axis)).length
-    for finger in FINGER_NAMES + ("thumb",):
+    for finger in FINGER_NAMES:
         names = [f"{finger}{k}_{hand}" for k in (1, 2, 3)]
         if any(nm not in rig.pose.bones for nm in names):
             continue
-        curl, limit = (THUMB_CURL, THUMB_LIMIT) if finger == "thumb" else (CURL, LIMIT)
+        curl, limit = CURL, LIMIT
         seg = (world(rig, names[0]) - world(rig, names[1])).length
+        skin = (thick or {}).get(finger, max(seg * 0.3, radius * 0.2))  # the finger's half thickness
+        inside_margin = skin * 0.7  # its skin may press in a little, its bone not
         def inside_handle(chain):  # any later segment's middle or end inside the handle (with a finger's half
             for nm in chain:           # thickness): the finger would go through it
                 h, e = world(rig, nm), world(rig, nm, "tail")
-                if min(to_axis(e), to_axis((h + e) / 2)) < radius + max(seg * 0.12, radius * 0.1):
+                if min(to_axis(e), to_axis((h + e) / 2)) < radius + inside_margin:
                     return True
             return False
-        if finger == "thumb":  # first across the palm (about the hand's length), towards the handle, at most 60 deg
-            along = (world(rig, "middle1_" + hand) - world(rig, "hand_" + hand)).normalized()
-            base = world(rig, "hand_" + hand)
-            best, way = to_axis(world(rig, names[2], "tail")), 0
-            for sgn in (1, -1):
-                turn_bone(rig, names[0], along, sgn * 10, pivot=world(rig, names[0]))
-                d = to_axis(world(rig, names[2], "tail"))
-                turn_bone(rig, names[0], along, -sgn * 10, pivot=world(rig, names[0]))
-                if d < best:
-                    best, way = d, sgn
-            swung = 0
-            while way and swung < 60:
-                d0 = to_axis(world(rig, names[2], "tail"))
-                turn_bone(rig, names[0], along, way * 3, pivot=world(rig, names[0]))
-                swung += 3
-                if to_axis(world(rig, names[2], "tail")) > d0 or inside_handle(names):
-                    turn_bone(rig, names[0], along, -way * 3, pivot=world(rig, names[0]))
-                    swung -= 3
-                    break
-            print(f"  thumb: across the palm {swung} degrees", flush=True)
-        touch = radius + max(seg * 0.3, radius * 0.2)
+        touch = radius + skin * 1.1
         tip = lambda: world(rig, names[2], "tail")
 
         before = to_axis(tip())
@@ -264,6 +287,122 @@ def close_fingers(rig, hand, grip_point, axis, radius, palm):
                         active[j] = False
         print(f"  {finger}: bent {[round(x) for x in bent]} degrees, tip {to_axis(tip()) / radius:.2f} handle radii "
               "from its axis", flush=True)
+
+
+def close_thumb(rig, hand, grip_point, axis, radius, closer=0.0, thick=None):
+    """The thumb onto the handle: of its poses (swung across the palm, its base bent, its two outer joints bent
+    together; each way), the one whose tip rests on the handle's surface (its radius + a thumb's thickness from its
+    axis), near the fist along it, no segment inside the handle. (Curling it about the handle's axis like a finger,
+    as before Nov 23, swung it up and away once its first bone sat inside the palm where it belongs: 4.9 radii.)"""
+    names = [f"thumb{k}_{hand}" for k in (1, 2, 3)]
+    if any(nm not in rig.pose.bones for nm in names):
+        return
+    def to_axis(p):
+        d = p - grip_point
+        return (d - axis * d.dot(axis)).length
+    rest = [rig.pose.bones[nm].matrix_basis.copy() for nm in names]
+    along = (world(rig, "middle1_" + hand) - world(rig, "hand_" + hand)).normalized()
+    seg = (world(rig, names[2], "tail") - world(rig, names[1])).length / 2
+    skin = (thick or {}).get("thumb", seg * 0.35)
+    goal = max(radius * 1.05, radius + skin - closer)  # closer: what the skin check found still between
+
+    def pose(swing, c1, c23):
+        for nm, m in zip(names, rest):
+            rig.pose.bones[nm].matrix_basis = m.copy()
+        bpy.context.view_layer.update()
+        turn_bone(rig, names[0], along, swing)
+        turn_bone(rig, names[0], axis, c1)
+        turn_bone(rig, names[1], axis, c23)
+        turn_bone(rig, names[2], axis, c23)
+
+    def cost():
+        for nm in names:
+            h, e = world(rig, nm), world(rig, nm, "tail")
+            if min(to_axis(e), to_axis((h + e) / 2)) < radius + skin * 0.7:
+                return np.inf  # through the handle
+        tip = world(rig, names[2], "tail")
+        off = abs((tip - grip_point).dot(axis))
+        return abs(to_axis(tip) - goal) + 0.3 * max(0.0, off - 2 * radius)
+
+    best = (np.inf, 0, 0, 0)
+    for swing in range(-60, 61, 15):
+        for c1 in range(-45, 46, 15):
+            for c23 in range(-80, 81, 20):
+                pose(swing, c1, c23)
+                best = min(best, (cost(), swing, c1, c23))
+    _, s0, a0, b0 = best
+    for swing in range(s0 - 10, s0 + 11, 5):  # finer around it
+        for c1 in range(a0 - 10, a0 + 11, 5):
+            for c23 in range(b0 - 15, b0 + 16, 5):
+                if abs(c23) <= 90:
+                    pose(swing, c1, c23)
+                    best = min(best, (cost(), swing, c1, c23))
+    pose(*best[1:])
+    print(f"  thumb: swung {best[1]}, base {best[2]}, joints {best[3]} degrees, tip "
+          f"{to_axis(world(rig, names[2], 'tail')) / radius:.2f} handle radii from its axis", flush=True)
+
+
+def mesh_follows(body, on):
+    """The body's armature modifiers on or off: off while only bones are posed and measured (each step otherwise
+    deforms the whole mesh again: 675 000 points of the knight, the thumb's search took minutes)."""
+    for obj in body:
+        for m in obj.modifiers:
+            if m.type == "ARMATURE":
+                m.show_viewport = on
+    bpy.context.view_layer.update()
+
+
+def grip_check(rig, body, hand, grip_point, axis, radius, out):
+    """Does the skin really hold the handle? (Nov 23: the bones said 'bent', the fingers of the mesh did not move:
+    0 points on the knight's middle finger.) The mesh as posed (after the armature), each finger's own points (its
+    bones' weight over 0.5): the nearest one's gap to the handle's surface, in handle radii, and how many lie inside
+    it. A finger holds when its gap is under 0.35 radii and under 2 % of its points are inside. Written to
+    <out>_grip.json, printed as PASS / FAIL."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    g = np.array(grip_point)
+    ax = np.array(axis)
+    result = {}
+    names = ("thumb",) + FINGER_NAMES
+    pts = {f: [] for f in names}
+    for obj in body:
+        groups = {gr.index: gr.name for gr in obj.vertex_groups}
+        weight = {f: np.zeros(len(obj.data.vertices)) for f in names}
+        for v in obj.data.vertices:
+            for gr in v.groups:
+                n = groups[gr.group]
+                if n.endswith("_" + hand) and n[:-3] in names and n[-3] in "123":
+                    weight[n[:-3]][v.index] += gr.weight
+        ev = obj.evaluated_get(dg)
+        me = ev.to_mesh()
+        co = np.empty(len(me.vertices) * 3)
+        me.vertices.foreach_get("co", co)
+        m = np.array(ev.matrix_world)
+        co = co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+        ev.to_mesh_clear()
+        if len(co) != len(obj.data.vertices):
+            continue
+        for f in names:
+            pts[f].append(co[weight[f] > 0.5])
+    ok_all = True
+    for f in names:
+        p = np.concatenate(pts[f]) if pts[f] else np.zeros((0, 3))
+        if len(p) == 0:
+            result[f] = {"points": 0, "holds": None}
+            continue
+        d = p - g
+        r = np.linalg.norm(d - np.outer(d @ ax, ax), axis=1)
+        near = np.abs(d @ ax) < radius * 6  # the part of the handle the hand is at
+        gap = float((r[near].min() - radius) / radius) if near.any() else float("inf")
+        inside = float((r[near] < radius * 0.9).mean()) if near.any() else 0.0
+        holds = gap < 0.35 and inside < 0.02
+        result[f] = {"points": int(len(p)), "gap_radii": round(gap, 2), "inside": round(inside, 3), "holds": holds}
+        ok_all &= holds if f != "little" or result[f]["points"] else True
+        print(f"  check {f}: {len(p)} points, skin {gap:+.2f} handle radii off the handle, {inside:.1%} inside: "
+              f"{'PASS' if holds else 'FAIL'}", flush=True)
+    result["all_hold"] = bool(ok_all)
+    print(f"grip check: {'PASS' if ok_all else 'FAIL'}", flush=True)
+    json.dump(result, open(out + "_grip.json", "w"), indent=1)
+    return result
 
 
 def keyframe_all(rig, frame):
@@ -372,9 +511,26 @@ def main():
 
     if o["pose"] == "down":
         arm_down(rig, hand)
+    mesh_follows(body, False)
     open_hand(rig, hand)
     grip_point, axis, radius, palm = place_item(rig, body, item, hand, o["size"], o["grip"])
-    close_fingers(rig, hand, grip_point, axis, radius, palm)
+    thick = finger_thickness(rig, body, hand)
+    close_fingers(rig, hand, grip_point, axis, radius, palm, thick)
+    close_thumb(rig, hand, grip_point, axis, radius, thick=thick)
+    closer = 0.0
+    for _ in range(3):  # the thumb's skin onto the handle: its bones' goal moved by the gap the skin still shows
+        mesh_follows(body, True)
+        check = grip_check(rig, body, hand, grip_point, axis, radius, out)
+        t = check["thumb"]
+        if not t.get("points") or t["holds"] or t["inside"] >= 0.02:
+            break
+        closer += t["gap_radii"] * radius
+        mesh_follows(body, False)
+        close_thumb(rig, hand, grip_point, axis, radius, closer, thick)
+    else:
+        mesh_follows(body, True)
+        grip_check(rig, body, hand, grip_point, axis, radius, out)
+    mesh_follows(body, True)
     bpy.context.scene.frame_set(1)
     keyframe_all(rig, 1)
 
