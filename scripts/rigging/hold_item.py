@@ -131,8 +131,9 @@ def handle_at(pts, centre, axis, t, at):
 
 
 def place_item(rig, body, item, hand, size, grip):
-    height = max((o.matrix_world @ Vector(c)).z for o in body for c in o.bound_box) - \
-        min((o.matrix_world @ Vector(c)).z for o in body for c in o.bound_box)
+    z = np.concatenate([[(o.matrix_world @ v.co).z for v in o.data.vertices] for o in body])
+    height = float(np.percentile(z, 99.5) - np.percentile(z, 0.5))  # the mesh's own points (the Sister's glb's
+    # objects' boxes said 2.0 for a model 1 tall: her axe came out as long as she is)
     pts, centre, axis, t, lo, hi, blade = item_axes(item)
     scale = size * height / (hi - lo)
     item.scale = item.scale * scale
@@ -179,6 +180,20 @@ LIMIT = (95, 110, 85)         # and at most (degrees); the thumb: its own
 THUMB_CURL, THUMB_LIMIT = (0.6, 1.0, 0.9), (50, 70, 80)
 
 
+def open_hand(rig, hand):
+    """The fingers straightened before the item goes in: each finger's first segment pointing from the hand bone's
+    head through its own base, the next two in line with it (a generated hand is often half curled at rest: the
+    Sister of War's was, and the handle landed between her fingers, which then could not close)."""
+    H = world(rig, "hand_" + hand)
+    for finger in FINGER_NAMES:
+        names = [f"{finger}{k}_{hand}" for k in (1, 2, 3)]
+        if any(nm not in rig.pose.bones for nm in names):
+            continue
+        d = (world(rig, names[0]) - H).normalized()
+        for nm in names:
+            point_bone(rig, nm, d)
+
+
 def close_fingers(rig, hand, grip_point, axis, radius, palm):
     """Each finger curls all its joints together (CURL), two degrees a step; a segment that touches the handle (its
     middle or its end within the handle's radius + a finger's thickness of the handle's axis) stops its own joint and
@@ -193,6 +208,12 @@ def close_fingers(rig, hand, grip_point, axis, radius, palm):
             continue
         curl, limit = (THUMB_CURL, THUMB_LIMIT) if finger == "thumb" else (CURL, LIMIT)
         seg = (world(rig, names[0]) - world(rig, names[1])).length
+        def inside_handle(chain):  # any later segment's middle or end inside the handle (with a finger's half
+            for nm in chain:           # thickness): the finger would go through it
+                h, e = world(rig, nm), world(rig, nm, "tail")
+                if min(to_axis(e), to_axis((h + e) / 2)) < radius + max(seg * 0.12, radius * 0.1):
+                    return True
+            return False
         if finger == "thumb":  # first across the palm (about the hand's length), towards the handle, at most 60 deg
             along = (world(rig, "middle1_" + hand) - world(rig, "hand_" + hand)).normalized()
             base = world(rig, "hand_" + hand)
@@ -208,13 +229,14 @@ def close_fingers(rig, hand, grip_point, axis, radius, palm):
                 d0 = to_axis(world(rig, names[2], "tail"))
                 turn_bone(rig, names[0], along, way * 3, pivot=world(rig, names[0]))
                 swung += 3
-                if to_axis(world(rig, names[2], "tail")) > d0:
+                if to_axis(world(rig, names[2], "tail")) > d0 or inside_handle(names):
                     turn_bone(rig, names[0], along, -way * 3, pivot=world(rig, names[0]))
                     swung -= 3
                     break
             print(f"  thumb: across the palm {swung} degrees", flush=True)
         touch = radius + max(seg * 0.3, radius * 0.2)
         tip = lambda: world(rig, names[2], "tail")
+
         before = to_axis(tip())
         turn_bone(rig, names[0], axis, 4)
         sign = 1 if to_axis(tip()) < before else -1
@@ -228,6 +250,10 @@ def close_fingers(rig, hand, grip_point, axis, radius, palm):
                 if active[k]:
                     step = 2 * curl[k]
                     turn_bone(rig, names[k], axis, sign * step)
+                    if inside_handle(names[k:]):  # into the handle: undo, this joint is done
+                        turn_bone(rig, names[k], axis, -sign * step)
+                        active[k] = False
+                        continue
                     bent[k] += step
                     if bent[k] >= limit[k]:
                         active[k] = False
@@ -346,6 +372,7 @@ def main():
 
     if o["pose"] == "down":
         arm_down(rig, hand)
+    open_hand(rig, hand)
     grip_point, axis, radius, palm = place_item(rig, body, item, hand, o["size"], o["grip"])
     close_fingers(rig, hand, grip_point, axis, radius, palm)
     bpy.context.scene.frame_set(1)
@@ -364,9 +391,9 @@ def main():
     side = Vector((1 if hand == "l" else -1, 0, 0))
     for k, d in enumerate((Vector((0, -1, 0)), side + Vector((0, -0.3, 0.1)), side * 0.3 + Vector((0, 0, -1)))):
         render(f"{out}_hand_{k}.png", hand_at, span, d, cut=span * 0.45)
-    lo = min((ob.matrix_world @ Vector(c)).z for ob in body + [item] for c in ob.bound_box)
-    hi = max((ob.matrix_world @ Vector(c)).z for ob in body + [item] for c in ob.bound_box)
-    mid = Vector((0, 0, (lo + hi) / 2))
+    pts = np.concatenate([[tuple(ob.matrix_world @ v.co) for v in ob.data.vertices] for ob in body + [item]])
+    lo, hi = np.percentile(pts[:, 2], 0.5), np.percentile(pts[:, 2], 99.5)  # the points, not the objects' boxes
+    mid = Vector((float(np.median(pts[:, 0])), float(np.median(pts[:, 1])), (lo + hi) / 2))
     for k, d in enumerate((Vector((0, -1, 0)), Vector((-0.7, -0.7, 0.2)))):
         render(f"{out}_body_{k}.png", mid, (hi - lo) * 1.25, d)
 
