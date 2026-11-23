@@ -352,25 +352,21 @@ def mesh_follows(body, on):
     bpy.context.view_layer.update()
 
 
-def grip_check(rig, body, hand, grip_point, axis, radius, out):
-    """Does the skin really hold the handle? (Nov 23: the bones said 'bent', the fingers of the mesh did not move:
-    0 points on the knight's middle finger.) The mesh as posed (after the armature), each finger's own points (its
-    bones' weight over 0.5): the nearest one's gap to the handle's surface, in handle radii, and how many lie inside
-    it. A finger holds when its gap is under 0.35 radii and under 2 % of its points are inside. Written to
-    <out>_grip.json, printed as PASS / FAIL."""
+def posed_parts(body, hand):
+    """The mesh as posed (after the armature), by part: each finger's own points and the palm's (the hand bone's), a
+    bone's weight over 0.5."""
     dg = bpy.context.evaluated_depsgraph_get()
-    g = np.array(grip_point)
-    ax = np.array(axis)
-    result = {}
     names = ("thumb",) + FINGER_NAMES
-    pts = {f: [] for f in names}
+    pts = {f: [] for f in names + ("palm",)}
     for obj in body:
         groups = {gr.index: gr.name for gr in obj.vertex_groups}
-        weight = {f: np.zeros(len(obj.data.vertices)) for f in names}
+        weight = {f: np.zeros(len(obj.data.vertices)) for f in pts}
         for v in obj.data.vertices:
             for gr in v.groups:
                 n = groups[gr.group]
-                if n.endswith("_" + hand) and n[:-3] in names and n[-3] in "123":
+                if n == "hand_" + hand:
+                    weight["palm"][v.index] += gr.weight
+                elif n.endswith("_" + hand) and n[:-3] in names and n[-3] in "123":
                     weight[n[:-3]][v.index] += gr.weight
         ev = obj.evaluated_get(dg)
         me = ev.to_mesh()
@@ -381,8 +377,57 @@ def grip_check(rig, body, hand, grip_point, axis, radius, out):
         ev.to_mesh_clear()
         if len(co) != len(obj.data.vertices):
             continue
-        for f in names:
+        for f in pts:
             pts[f].append(co[weight[f] > 0.5])
+    return {f: (np.concatenate(v) if v else np.zeros((0, 3))) for f, v in pts.items()}
+
+
+def to_handle(p, grip_point, axis, radius):
+    """Points' distance from the handle's axis, and which lie by the part of the handle the hand is at."""
+    d = p - np.array(grip_point)
+    ax = np.array(axis)
+    return np.linalg.norm(d - np.outer(d @ ax, ax), axis=1), np.abs(d @ ax) < radius * 6
+
+
+def clear_palm(rig, body, item, hand, grip_point, axis, radius, n):
+    """The handle out of the palm: moved along the palm's side (n, away from the hand) until no more than 1 % of
+    the palm's points by it lie inside it (Nov 23: set back in the palm for the thumb, the knight's handle went
+    through the back of his hand, the skin torn around it; the check then only looked at the fingers)."""
+    moved = 0.0
+    for _ in range(12):
+        palm = posed_parts(body, hand)["palm"]
+        if len(palm) == 0:
+            break
+        r, near = to_handle(palm, grip_point, axis, radius)
+        inside = r[near] < radius
+        if not near.any() or inside.mean() <= 0.01:
+            break
+        step = max(float(np.percentile(radius - r[near][inside], 90)), radius * 0.1)
+        item.matrix_world = Matrix.Translation(n * step) @ item.matrix_world
+        grip_point = grip_point + n * step
+        moved += step
+        bpy.context.view_layer.update()
+    print(f"handle moved {moved / radius:.2f} handle radii out of the palm", flush=True)
+    return grip_point
+
+
+def grip_check(rig, body, hand, grip_point, axis, radius, out):
+    """Does the skin really hold the handle? (Nov 23: the bones said 'bent', the fingers of the mesh did not move:
+    0 points on the knight's middle finger.) The mesh as posed, each finger's own points: the nearest one's gap to
+    the handle's surface, in handle radii, and how many lie inside it. A finger holds when its gap is under 0.35
+    radii and under 2 % of its points are inside; the palm when under 2 % are inside (it need not touch). Written
+    to <out>_grip.json, printed as PASS / FAIL."""
+    names = ("thumb",) + FINGER_NAMES
+    parts = posed_parts(body, hand)
+    pts = {f: [parts[f]] for f in names}
+    result = {}
+    pr, pnear = to_handle(parts["palm"], grip_point, axis, radius)
+    palm_inside = float((pr[pnear] < radius * 0.9).mean()) if pnear.any() else 0.0
+    result["palm"] = {"points": int(len(parts["palm"])), "inside": round(palm_inside, 3), "holds": palm_inside < 0.02}
+    print(f"  check palm: {len(parts['palm'])} points, {palm_inside:.1%} inside the handle: "
+          f"{'PASS' if palm_inside < 0.02 else 'FAIL'}", flush=True)
+    g = np.array(grip_point)
+    ax = np.array(axis)
     ok_all = True
     for f in names:
         p = np.concatenate(pts[f]) if pts[f] else np.zeros((0, 3))
@@ -399,6 +444,7 @@ def grip_check(rig, body, hand, grip_point, axis, radius, out):
         ok_all &= holds if f != "little" or result[f]["points"] else True
         print(f"  check {f}: {len(p)} points, skin {gap:+.2f} handle radii off the handle, {inside:.1%} inside: "
               f"{'PASS' if holds else 'FAIL'}", flush=True)
+    ok_all &= result["palm"]["holds"]
     result["all_hold"] = bool(ok_all)
     print(f"grip check: {'PASS' if ok_all else 'FAIL'}", flush=True)
     json.dump(result, open(out + "_grip.json", "w"), indent=1)
@@ -514,6 +560,9 @@ def main():
     mesh_follows(body, False)
     open_hand(rig, hand)
     grip_point, axis, radius, palm = place_item(rig, body, item, hand, o["size"], o["grip"])
+    mesh_follows(body, True)
+    grip_point = clear_palm(rig, body, item, hand, grip_point, axis, radius, palm)
+    mesh_follows(body, False)
     thick = finger_thickness(rig, body, hand)
     close_fingers(rig, hand, grip_point, axis, radius, palm, thick)
     close_thumb(rig, hand, grip_point, axis, radius, thick=thick)
