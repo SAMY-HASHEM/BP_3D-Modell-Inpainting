@@ -185,14 +185,14 @@ def at(line, s):
     return line[k] + t * (line[k + 1] - line[k])
 
 
-def find_fingers(q, g, step):
+def find_fingers(q, g, step, edge=0.0):
     """Fingers on the hand's points q (g: their distance from the wrist along the surface): rings of `step`, each in
     pieces; followed from the tips down as branches: a piece touching one branch above goes on with it (several pieces
     of one branch: its ring broke in two, still the one finger), touching none starts one (a tip), touching two
     or more that are each 3 rings long or more is where they join (their knuckles; a shorter one is noise and
     goes on in the other). Returns [(point ids, ring middles from knuckle to tip, tip point, knuckle distance)]."""
     from scipy.spatial import cKDTree
-    radius = step * 0.9
+    radius = max(step * 0.9, edge * 2.0)  # a coarse mesh: the ring's points further apart than the ring is thick
     levels = []
     for lv in range(int(g.max() / step) + 1):
         ids = np.nonzero((g >= lv * step) & (g < (lv + 1) * step))[0]
@@ -266,15 +266,19 @@ def fit_side(side, p, edges, hand_w, bones):
     start = np.argsort(np.linalg.norm(q - wrist, axis=1))[:max(10, len(hand) // 50)]
     g = dijkstra(a, directed=False, indices=start, min_only=True)
     g[~np.isfinite(g)] = 0
-    step = g.max() / LEVELS
-    found = find_fingers(q, g, step)
+    edge = float(np.mean(a.data))
+    step = max(g.max() / LEVELS, edge * 1.5)  # rings at least 1.5 edges thick (the Sister's hand: 2.5 mm edges)
+    found = find_fingers(q, g, step, edge)
     report = {"hand points": int(len(hand)), "fingers found": len(found)}
     if len(found) < 2:
         print(f"hand {side}: only {len(found)} fingers found; left as it was", flush=True)
         return None, None, report
     # the thumb: the finger that parts from the palm nearest to the wrist (when it is clearly the earliest)
     by_knuckle = sorted(range(len(found)), key=lambda i: found[i][3])
-    thumb = by_knuckle[0] if len(found) >= 3 and found[by_knuckle[0]][3] < 0.8 * found[by_knuckle[1]][3] else None
+    thumb = by_knuckle[0] if found[by_knuckle[0]][3] < 0.8 * found[by_knuckle[1]][3] else None
+    size = [len(f[0]) for f in found]
+    if len(found) == 2 and max(size) >= 3 * min(size):  # a mitten and a thumb: the small one is the thumb
+        thumb = int(np.argmin(size))
     rest = [i for i in range(len(found)) if i != thumb]
     if thumb is not None:
         t0 = found[thumb][1][0]
@@ -282,10 +286,13 @@ def fit_side(side, p, edges, hand_w, bones):
     else:  # no thumb: across the hand, from one side
         across = np.cross(arm, [0, 0, 1])
         rest.sort(key=lambda i: found[i][1][0] @ across)
-    names = ["index", "middle", "ring", "little"]
+    # fewer than 4 fingers apart: 1 = a mitten (the fingers fused into one block: the Sister of War's), it is the
+    # middle finger; 2 = index, middle; 3 = index, middle, ring. The others' bones on the nearest one, moving nothing
+    slots = {1: ["middle"], 2: ["index", "middle"], 3: ["index", "middle", "ring"]}.get(
+        len(rest), ["index", "middle", "ring", "little"])
     assign = {"thumb": thumb} if thumb is not None else {}
-    for k, nm in enumerate(names):
-        assign[nm] = rest[min(k, len(rest) - 1)] if k < len(rest) else None
+    for nm, i in zip(slots, rest):
+        assign[nm] = i
     lines, new_bones = {}, {}
     for nm in FINGERS:
         i = assign.get(nm)
@@ -307,9 +314,13 @@ def fit_side(side, p, edges, hand_w, bones):
             new_bones[f"{nm}{k + 1}_{side}"] = (pts[k].tolist(), pts[k + 1].tolist())
         report[nm] = {"length": round(float(np.linalg.norm(np.diff(line, axis=0), axis=1).sum()), 4),
                       "points": int(len(ids))}
-    for nm in ("ring", "little"):  # a hand of fewer fingers: these on the last one found
+    order_across = ["index", "middle", "ring", "little"]
+    for nm in order_across:  # a hand of fewer fingers: these on the nearest one found
         if nm not in lines and lines:
-            src = "ring" if nm == "little" and "ring" in lines else ("middle" if "middle" in lines else "index")
+            have = [x for x in order_across if x in lines]
+            if not have:
+                break
+            src = min(have, key=lambda x: abs(order_across.index(x) - order_across.index(nm)))
             for k in range(3):
                 new_bones[f"{nm}{k + 1}_{side}"] = new_bones[f"{src}{k + 1}_{side}"]
             report[nm] = f"none (on the {src} finger, moving nothing)"
