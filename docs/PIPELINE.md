@@ -30,6 +30,24 @@ pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shap
 | 8 | **Surface detail** | `detail_normals.py --parts "face=noise:0.35:0.012" "veil=caban:0.8:0.03"` | Poly Haven CC0 maps (`local_ai_models/detail_maps`), Grounding DINO + SAM 2.1 for the parts | votes per texel (speckled) | as artists do it (Marmoset detail normals): Erik's face got a stone grain, the veil a weave; the parts voted per face from 9 views |
 | 9 | **Rig** | `rig_from_glb.py` (rig head + `fit_hands.py`), `hold_item.py` | our rig head | UniRig, GEM-X joints on pictures | hands fitted to the mesh; the grip checked on the skin |
 
+## The numbers (`scripts/tools/score_model.py`)
+
+The motorcycle girl's models against her de-lit front, side and back (outline: intersection over union; colour: median
+CIELAB distance; sharpness: fine detail against the photo's):
+
+| model | outline | colour ΔE | sharpness |
+|---|---|---|---|
+| A (grey shape, 1024) | 0.844 | 26.7 | 0.58 |
+| B (colour views for the shape) | 0.833 | 25.6 | 0.53 |
+| A at 1536 | 0.841 | 25.6 | 0.67 |
+| N4 (de-lit colours, 1536) | 0.841 | 23.3 | 0.74 |
+| TRELLIS.2 texturing | 0.840 | 24.7 | 0.67 |
+| MV-Adapter, side view + text | 0.841 | 23.9 | 1.30 |
+| **merged** (N4 + MV-Adapter) | 0.841 | **23.2** | **1.45** |
+| merged, the text by Qwen3-VL | 0.840 | 23.4 | 1.43 |
+
+(The photo painter's 16.3 does not count: it was scored on the very pictures it projected.)
+
 ## Models and licences
 
 All local; nothing in a cloud. Downloaded on the home PC where the server can't reach the files (Hugging Face's and
