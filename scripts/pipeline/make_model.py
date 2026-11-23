@@ -8,15 +8,15 @@ the tool that won on Nov 23 (the motorcycle girl, Erik's bust, the Plague Knight
   7 colours       describe_colours.py (Qwen3-VL) -> texture_mvadapter.py (MV-Adapter, from the view that shows the
                   most) -> merge_textures.py (the shape stage's faithful colours + MV-Adapter's crisp detail)
   8 detail        detail_normals.py, with --parts (e.g. "skin=noise:0.35:0.012" "cloth=cotton_jersey:0.6:0.03")
-  6 retopology    retopo.py (--retopo; closed bodies only)
-  9 rig           rig_from_glb.py (--rig; humanoids)
+  9 rig           rig_from_glb.py (--rig; humanoids), on the dense mesh
+  6 retopology    retopo.py (--retopo; closed bodies only); with --rig the rig carried onto the quads (transfer_rig.py)
 
     python scripts/pipeline/make_model.py --pictures front.png side.png back.png --out outputs/x
     python scripts/pipeline/make_model.py --video painted.mp4 --grey-video clay.mp4 --frames 108 199 58 149 \\
         --out outputs/moto --parts "skin=noise:0.35:0.012" "cloth=cotton_jersey:0.6:0.03" --rig
 
 Front first (the model's front, and the colours' main view). A stage whose result is there is skipped (delete it
-to redo it). Writes into --out: views/, shape.glb, colours.glb (merged), detail.glb, retopo.glb, rig_rigged.blend,
+to redo it). Writes into --out: views/, shape.glb, colours.glb (merged), detail.glb, rig_rigged.blend, retopo.glb, retopo_rigged.blend,
 compare.jpg (every stage's model side by side) and make_model.json (what ran, how long).
 """
 import argparse
@@ -167,14 +167,19 @@ def main():
         models.append(("8 detail", o("detail.glb")))
         current = o("detail.glb")
 
-    # 6 retopology (after the colours: they are baked over), 9 rig
+    # 9 rig on the dense mesh (fit_hands.py needs its fingers), then 6 retopology; with both, the rig is carried
+    # onto the quads (transfer_rig.py: rigged directly, the knight's quads lost their fingers, Nov 23)
+    if a.rig:
+        run("9 rig", [PY, S("rigging", "rig_from_glb.py"), current, "--out", o("rig")], o("rig_rigged.blend"), out)
     if a.retopo:
         run("6 retopology", [BLENDER, "-b", "--python", S("generation", "retopo.py"), "--", current,
                              o("retopo.glb"), "--faces", "40000", "--voxel", "4"], o("retopo.glb"), out)
         models.append(("6 retopology", o("retopo.glb")))
+        if a.rig:
+            run("9 rig onto the quads", [BLENDER, "-b", "--python", S("rigging", "transfer_rig.py"), "--",
+                                         o("rig_rigged.blend"), o("retopo.glb"), o("retopo_rigged.blend")],
+                o("retopo_rigged.blend"), out)
         current = o("retopo.glb")
-    if a.rig:
-        run("9 rig", [PY, S("rigging", "rig_from_glb.py"), current, "--out", o("rig")], o("rig_rigged.blend"), out)
 
     # every stage's model side by side
     if not os.path.exists(o("compare.jpg")):
