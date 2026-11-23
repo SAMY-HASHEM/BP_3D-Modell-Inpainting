@@ -1,11 +1,7 @@
-"""(An experiment, Nov 23: on the motorcycle girl worse than the original. QuadriFlow wants a closed mesh, so the
-model is voxel-remeshed first; that turns thin open parts (panels, cloth, a visor) into double walls, which break
-when reduced: dark blotches, softer edges. QuadriFlow itself took 97 s once and hung > 25 min the next time on
-the same mesh (one CPU core): it runs in its own Blender with a time limit. Maybe for closed bodies (a character
-to rig); not for hard surfaces.)
-
-Retopology (pipeline stage 6): a generated model's dense triangles -> clean quads with a fresh UV layout, its colours
-baked over from the original. Runs in Blender (QuadriFlow is built in; nothing to download).
+"""Retopology (pipeline stage 6): a generated model's dense triangles -> clean quads with a fresh UV layout, its colours
+baked over from the original. For closed bodies (characters): the knight 950 k triangles -> 39 k quads in 14 s, the
+same shape and colours (Nov 23). Not for hard surfaces with thin open parts (the motorcycle girl's panels): the voxel
+step makes them double-walled. Runs in Blender (QuadriFlow is built in; nothing to download).
 
   1 clean     a closed copy: voxel remesh (--voxel thousandths of the model's size, default 6), small loose bits
               dropped, reduced to --pre faces (QuadriFlow is slow on big meshes), degenerate edges removed
@@ -29,15 +25,18 @@ import sys
 
 import bpy
 
+PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+INSTANT_MESHES = os.path.join(PROJECT, "local_ai_models", "instant_meshes", "Instant Meshes")
+
 
 def args():
     a = sys.argv[sys.argv.index("--") + 1:]
-    opt = {"faces": 60000, "pre": 100000, "texture": 4096, "voxel": 6, "seconds": 300}
+    opt = {"faces": 60000, "pre": 100000, "texture": 4096, "voxel": 6, "seconds": 300, "method": "auto"}
     pos = []
     i = 0
     while i < len(a):
         if a[i].startswith("--"):
-            opt[a[i][2:]] = int(a[i + 1])
+            opt[a[i][2:]] = a[i + 1] if a[i][2:] == "method" else int(a[i + 1])
             i += 2
         else:
             pos.append(a[i])
@@ -124,38 +123,56 @@ def main():
     bpy.ops.object.mode_set(mode="OBJECT")
     print(f"clean: {len(work.data.polygons)} faces", flush=True)
 
-    # 2 quads: QuadriFlow in its own Blender, with a time limit (on one CPU core it took 97 s for this mesh once and
-    # hung > 25 min the next time, Nov 23); over the limit or refused: an even triangle mesh instead (the voxel
-    # surface reduced to --faces x 2 triangles), always done in seconds
+    # 2 quads: Instant Meshes (its own program, local_ai_models/instant_meshes; BSD) when it is there: on the closed
+    # voxel surface a clean quad mesh in seconds (the knight: 3 s, Nov 23; on the raw generated mesh it cracked into
+    # pieces). Else QuadriFlow in its own Blender with a time limit (97 s once, > 25 min the next time on the same
+    # mesh). Either failing: an even triangle mesh (the voxel surface reduced to --faces x 2 triangles)
     import subprocess
     import tempfile
     tmp = tempfile.mkdtemp()
-    src_ply, out_ply = os.path.join(tmp, "in.ply"), os.path.join(tmp, "out.ply")
+    src_ply, out_ply, out_obj = (os.path.join(tmp, n) for n in ("in.ply", "out.ply", "out.obj"))
     select_only([work], work)
     bpy.ops.wm.ply_export(filepath=src_ply, export_selected_objects=True, apply_modifiers=False,
-                          export_normals=False, export_uv=False, export_colors="NONE")
-    try:
-        done = subprocess.run([bpy.app.binary_path, "-b", "--python", os.path.abspath(__file__), "--", "--quadriflow",
-                               src_ply, out_ply, str(opt["faces"])], timeout=opt["seconds"],
-                              capture_output=True, text=True)
-        ok = os.path.isfile(out_ply)
-        if not ok:
-            print("QuadriFlow refused:", [l for l in done.stdout.splitlines() if "QuadriFlow" in l][:1], flush=True)
-    except subprocess.TimeoutExpired:
-        ok = False
-        print(f"QuadriFlow over {opt['seconds']} s: stopped", flush=True)
-    if ok:
-        bpy.ops.wm.ply_import(filepath=out_ply)
-        quads = bpy.context.view_layer.objects.active
-        work.data = quads.data
-        bpy.data.objects.remove(quads)
-        kind = "quads (QuadriFlow)"
-    else:
+                          export_normals=False, export_uv=False, export_colors="NONE", export_triangulated_mesh=True)
+    kind = None
+    if os.path.isfile(INSTANT_MESHES) and opt["method"] != "quadriflow":
+        try:  # its -v gives about 4 x as many points as asked (calibrated on the knight): -v faces / 4 ~ faces quads
+            subprocess.run([INSTANT_MESHES, "-o", out_obj, "-v", str(max(500, opt["faces"] // 4)), "-t", "16",
+                            src_ply], timeout=opt["seconds"], capture_output=True, text=True)
+        except subprocess.TimeoutExpired:
+            print(f"Instant Meshes over {opt['seconds']} s: stopped", flush=True)
+        if os.path.isfile(out_obj):
+            bpy.ops.wm.obj_import(filepath=out_obj, forward_axis="Y", up_axis="Z")
+            quads = bpy.context.view_layer.objects.active
+            work.data = quads.data
+            bpy.data.objects.remove(quads)
+            select_only([work], work)
+            bpy.ops.object.mode_set(mode="EDIT")
+            bpy.ops.mesh.select_all(action="SELECT")
+            bpy.ops.mesh.remove_doubles(threshold=1e-4 * scale)  # its OBJ repeats the corners of each quad
+            bpy.ops.object.mode_set(mode="OBJECT")
+            kind = "quads (Instant Meshes)"
+    if kind is None and opt["method"] != "im":
+        try:
+            done = subprocess.run([bpy.app.binary_path, "-b", "--python", os.path.abspath(__file__), "--",
+                                   "--quadriflow", src_ply, out_ply, str(opt["faces"])], timeout=opt["seconds"],
+                                  capture_output=True, text=True)
+            if os.path.isfile(out_ply):
+                bpy.ops.wm.ply_import(filepath=out_ply)
+                quads = bpy.context.view_layer.objects.active
+                work.data = quads.data
+                bpy.data.objects.remove(quads)
+                kind = "quads (QuadriFlow)"
+            else:
+                print("QuadriFlow refused:", [l for l in done.stdout.splitlines() if "QuadriFlow" in l][:1], flush=True)
+        except subprocess.TimeoutExpired:
+            print(f"QuadriFlow over {opt['seconds']} s: stopped", flush=True)
+    if kind is None:
         dec = work.modifiers.new("even", "DECIMATE")
         dec.ratio = min(1.0, 2 * opt["faces"] / max(len(work.data.polygons), 1))
         select_only([work], work)
         bpy.ops.object.modifier_apply(modifier="even")
-        kind = "even triangles (QuadriFlow's fallback)"
+        kind = "even triangles (fallback)"
     work.data.transform(__import__("mathutils").Matrix.Scale(1 / scale, 4))
     print(f"retopology: {len(work.data.polygons)} faces, {kind}", flush=True)
 
