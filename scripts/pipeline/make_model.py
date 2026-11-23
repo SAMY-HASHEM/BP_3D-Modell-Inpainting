@@ -56,7 +56,8 @@ def main():
     p.add_argument("--grey", nargs="+", help="grey (clay) pictures of the same views, same order")
     p.add_argument("--video", help="a colour turntable video (with --frames)")
     p.add_argument("--grey-video", help="its grey (clay) version, the same turn")
-    p.add_argument("--frames", type=int, nargs="+", help="the video frames to use, front first")
+    p.add_argument("--frames", type=int, nargs="+", help="the video frames to use, front first (default: found by "
+                   "the outline's width: front, back, sides, two ¾)")
     p.add_argument("--out", required=True)
     p.add_argument("--resolution", help="default: the machine's profile")
     p.add_argument("--parts", nargs="+", help="stage 8: word=map:strength:tile (no --parts: no stage 8)")
@@ -75,6 +76,12 @@ def main():
 
     # 1-3 views, cut-out, de-light
     colour, grey = [], []
+    if a.video and not a.frames:  # found by the outline's width (front, back, sides, two ¾), Qwen3-VL says the front
+        found = os.path.join(views, "found")
+        run("1 find frames", [PY, S("generation", "views_from_video.py"), a.video, "--auto-frames", "--cutout",
+                              "--out", found], os.path.join(found, "frames.json"), out)
+        a.frames = json.load(open(os.path.join(found, "frames.json")))["frames"]
+        print("frames:", a.frames, flush=True)
     if a.video:
         names = [f"{k:02d}" for k in range(len(a.frames))]
         if a.grey_video:
