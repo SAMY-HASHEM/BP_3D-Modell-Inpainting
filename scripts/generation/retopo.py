@@ -1,12 +1,13 @@
 """Retopology (pipeline stage 6): a generated model's dense triangles -> clean quads with a fresh UV layout, its colours
 baked over from the original. For closed bodies (characters): the knight 950 k triangles -> 39 k quads in 14 s, the
 same shape and colours (Nov 23). Not for hard surfaces with thin open parts (the motorcycle girl's panels): the voxel
-step makes them double-walled. Runs in Blender (QuadriFlow is built in; nothing to download).
+step makes them double-walled. Runs in Blender; the quads by Instant Meshes (local_ai_models/instant_meshes, BSD).
 
   1 clean     a closed copy: voxel remesh (--voxel thousandths of the model's size, default 6), small loose bits
               dropped, reduced to --pre faces (QuadriFlow is slow on big meshes), degenerate edges removed
-  2 quads     QuadriFlow: quad loops following the shape, about --faces faces; in its own Blender with a limit
-              (--seconds, 300): over it, or refused, an even triangle mesh (--faces x 2) instead
+  2 quads     Instant Meshes: quad loops following the shape, about --faces faces (--method im); without it, or
+              failing, QuadriFlow in its own Blender with a limit (--seconds, 300; --method quadriflow), and last an
+              even triangle mesh (--faces x 2)
   3 UVs       Smart UV Project (islands by angle, packed with a margin)
   4 colour    the original's colours (base colour, and metal/roughness as plain values) baked onto the new UVs
               ("selected to active", rays from a little outside), --texture px
