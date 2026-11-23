@@ -4,6 +4,14 @@ From pictures (or a turntable video) to a finished, rigged 3D model, one stage a
 use by default and what else was tried (Nov 23, 2026, on the motorcycle girl, the Plague Knight, Erik's bust). Every
 GPU stage runs on both machines (the hardware profiles: [HOW-TO.md](HOW-TO.md#your-pc-24-gb-or-the-server-48-gb-the-hardware-profiles)).
 
+All of it in one command (each stage skipped when its result is there):
+
+```bash
+python scripts/pipeline/make_model.py --video painted.mp4 --grey-video clay.mp4 --frames 108 199 58 149 \
+    --out outputs/x --parts "skin=noise:0.35:0.012" "cloth=cotton_jersey:0.6:0.03" [--retopo] [--rig]
+python scripts/pipeline/make_model.py --pictures front.png side.png back.png --out outputs/y
+```
+
 ```
 pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shape ─► 5 detail ─► 6 retopology ─► 7 colours ─► 8 surface detail ─► 9 rig
                                                                                                                          └─► check at every stage
@@ -19,7 +27,7 @@ pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shap
 | 6 | **Retopology** | `retopo.py` (voxel surface → Instant Meshes → UVs → colours baked) | Instant Meshes | QuadriFlow (hung), voxel + reduction | closed bodies: the knight 950 k triangles → 39 k quads in 14 s; **not** for thin open parts (doubled walls); for a character **after** rigging: `transfer_rig.py` carries the dense mesh's weights over (rigged directly, the quads lost the fingers: grip FAIL; carried over: PASS) |
 | 7 | **Colours** | the shape stage's own (de-lit views); `merge_textures.py` with MV-Adapter's | TRELLIS.2, MV-Adapter (SDXL) | `texture_mesh.py` (TRELLIS.2 texturing), `paint_views.py` (photos projected: ghosted) | the merge: the faithful colours with MV-Adapter's crisp detail |
 | 7a | | `texture_mvadapter.py --text "$(describe_colours.py views)"` | MV-Adapter, Qwen3-VL-8B | the front picture alone (a green bike) | the view showing the most plus a colour description |
-| 8 | **Surface detail** | (next) detail normals per material | Poly Haven CC0 maps (`local_ai_models/detail_maps`), SAM 2.1 for the parts | — | as artists do it (Marmoset detail normals, Substance materials) |
+| 8 | **Surface detail** | `detail_normals.py --parts "face=noise:0.35:0.012" "veil=caban:0.8:0.03"` | Poly Haven CC0 maps (`local_ai_models/detail_maps`), Grounding DINO + SAM 2.1 for the parts | votes per texel (speckled) | as artists do it (Marmoset detail normals): Erik's face got a stone grain, the veil a weave; the parts voted per face from 9 views |
 | 9 | **Rig** | `rig_from_glb.py` (rig head + `fit_hands.py`), `hold_item.py` | our rig head | UniRig, GEM-X joints on pictures | hands fitted to the mesh; the grip checked on the skin |
 
 ## Models and licences
