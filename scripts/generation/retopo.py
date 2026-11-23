@@ -178,6 +178,17 @@ def main():
         bpy.ops.object.modifier_apply(modifier="even")
         kind = "even triangles (fallback)"
     work.data.transform(__import__("mathutils").Matrix.Scale(1 / scale, 4))
+    # the corners back onto the original surface (the voxel surface has terraces of its voxels: they showed on the
+    # knight's sleeves, Nov 23); the quads' layout stays, their shape is the original's
+    if kind.startswith("quads"):
+        select_only([work], work)
+        wrap = work.modifiers.new("onto", "SHRINKWRAP")
+        wrap.target = original
+        wrap.wrap_method = "NEAREST_SURFACEPOINT"
+        bpy.ops.object.modifier_apply(modifier="onto")
+        smooth = work.modifiers.new("even", "CORRECTIVE_SMOOTH")  # evens out the corners the wrap bunched
+        smooth.iterations, smooth.factor, smooth.use_only_smooth = 3, 0.5, False
+        bpy.ops.object.modifier_apply(modifier="even")
     print(f"retopology: {len(work.data.polygons)} faces, {kind}", flush=True)
 
     # 3 UVs
