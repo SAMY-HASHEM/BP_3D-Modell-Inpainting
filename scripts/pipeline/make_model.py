@@ -3,7 +3,8 @@ the tool that won on Nov 23 (the motorcycle girl, Erik's bust, the Plague Knight
 
   3 de-light      delight.py, when grey (clay) views of the same angles are given
   4 shape         multi_image.py (grey views for the shape, de-lit / colour views for the colours), or generate.py
-                  for one picture; the resolution from the machine's profile (server 1536, a 24 GB PC 1024)
+                  for one picture; the resolution from the machine's profile (server 1536, a 24 GB PC 1024);
+                  --seeds N: N quick seeds at 1024 scored against the pictures, the best one made in full
   7 colours       describe_colours.py (Qwen3-VL) -> texture_mvadapter.py (MV-Adapter, from the view that shows the
                   most) -> merge_textures.py (the shape stage's faithful colours + MV-Adapter's crisp detail)
   8 detail        detail_normals.py, with --parts (e.g. "skin=noise:0.35:0.012" "cloth=cotton_jersey:0.6:0.03")
@@ -65,6 +66,8 @@ def main():
     p.add_argument("--retopo", action="store_true", help="stage 6 (closed bodies)")
     p.add_argument("--rig", action="store_true", help="stage 9 (humanoids)")
     p.add_argument("--no-mvadapter", action="store_true", help="stage 7: the shape stage's own colours only")
+    p.add_argument("--seeds", type=int, default=1, help="try this many seeds at 1024 first, scored against the "
+                   "pictures (score_model.py); the best one is made at full resolution")
     a = p.parse_args()
     out = os.path.abspath(a.out)
     views = os.path.join(out, "views")
@@ -115,7 +118,23 @@ def main():
         cmd = [PY, S("generation", "multi_image.py"), *colour]
     else:
         cmd = [PY, S("generation", "generate.py"), colour[0]]
-    run("4 shape", cmd + ["--resolution", resolution, "--out", o("shape.glb")], o("shape.glb"), out)
+    seed = 42
+    if a.seeds > 1:  # the seed decides a face (Erik: three seeds, three faces): quick ones at 1024, scored, the best
+        tried = []
+        for k in range(a.seeds):
+            path = o(f"seed_{k}.glb")
+            run(f"4 seed {k}", cmd + ["--resolution", "1024", "--seed", str(k), "--out", path], path, out)
+            tried.append(path)
+        views_for_score = colour[:3]
+        angles = ["0", "side", "180"][:len(views_for_score)] if len(views_for_score) > 1 else ["0"]
+        run("4 seed scores", [PY, S("tools", "score_model.py"), *tried, "--pictures", *views_for_score, "--views",
+                              *angles, "--out", o("seed_scores.json")], o("seed_scores.json"), out)
+        scores = json.load(open(o("seed_scores.json")))
+        best = min(range(len(scores)), key=lambda i: (scores[i]["mean"]["colour"], -scores[i]["mean"]["outline"]))
+        seed = best
+        print(f"seed {seed} scored best: {scores[best]['mean']}", flush=True)
+    run("4 shape", cmd + ["--resolution", resolution, "--seed", str(seed), "--out", o("shape.glb")], o("shape.glb"),
+        out)
     models = [("4 shape", o("shape.glb"))]
     current = o("shape.glb")
 
