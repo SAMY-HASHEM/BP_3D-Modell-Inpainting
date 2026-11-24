@@ -287,7 +287,9 @@ panel.addEventListener("dragenter", e => { if ([...e.dataTransfer.types].include
 panel.addEventListener("dragover", e => { if ([...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
 panel.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; panel.classList.remove("drop"); } });
 panel.addEventListener("drop", e => { e.preventDefault(); depth = 0; panel.classList.remove("drop"); attach(e.dataTransfer.files); });
-$("#input").addEventListener("paste", e => { const f = [...e.clipboardData.files]; if (f.length) { e.preventDefault(); attach(f); } });
+document.addEventListener("paste", e => {  // anywhere on the page, not only in the text box
+  if ($("#newbox").open) return;
+  const f = [...(e.clipboardData?.files || [])]; if (f.length) { e.preventDefault(); attach(f); } });
 $("#composer").addEventListener("submit", async e => {
   e.preventDefault(); const t = $("#input").value.trim(); if ((!t && !attached.length) || !current) return;
   $("#send").disabled = true;
