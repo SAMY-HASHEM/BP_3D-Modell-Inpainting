@@ -328,6 +328,8 @@ def boxes_for(picture, words):
     found = []
     for word in words:
         data, text = ask(m, processor, [small], BOXES.format(what=word), max_tokens=200)
+        if not data.get("boxes"):
+            print(time.strftime("%H:%M:%S"), "no boxes for", repr(word), "answer:", text[:200].replace("\n", " "), flush=True)
         for b in data.get("boxes") or []:
             px = to_pixels(b, picture.width, picture.height, (1024, 1024))
             if px is not None:
@@ -446,9 +448,11 @@ def make_step(name, part_id):
                 # not on the A-pose (held items are left out of it, and the A-pose edit sometimes drops a piece:
                 # demon's cape): cut from the uploaded picture instead; it doesn't line up by itself
                 # the uploaded picture itself (square on grey): its background cut-out first lost demon's glass
-                on_grey = sp.square_on_grey(Image.open(os.path.join(PROJECT, raw["sources"][0])))
+                on_grey = sp.square_on_grey(Image.open(os.path.join(PROJECT, raw["sources"][0]))).resize(
+                    (sp.SIZE, sp.SIZE), Image.LANCZOS)  # boxes in the same pixels the cut uses
                 source = on_grey.convert("RGBA")
                 boxes = boxes_for(on_grey, part.get("words") or [part["what"]])
+                print(time.strftime("%H:%M:%S"), "boxes on the uploaded picture", part_id, boxes, flush=True)
                 let_go(quiet=False)
                 made = sp.piece(source, boxes, part["what"], seed) if boxes else None
                 own = made is not None
@@ -472,11 +476,14 @@ def make_step(name, part_id):
             bald, _ = sp.cut_out(bald_raw, keep_frame=True)
             boxes = boxes_for(bald, ["the head with the face and the neck"])
             let_go(quiet=False)
-            colour_clear = sp.cut(bald, boxes[:1]) if boxes else None
-            if colour_clear is None:
+            head = sp.cut(bald, boxes[:1]) if boxes else None
+            if head is None:
                 slicer_says(name, "I couldn't find the head on the bald picture: try Make it again.", part_id=part_id)
                 return
-            colour = Image.new("RGB", colour_clear.size, sp.GREY); colour.paste(colour_clear, (0, 0), colour_clear)
+            head.save(os.path.join(out, "cut.png"))
+            # SAM stops at the chin, leaving bits of the neck: completed like a piece, in place
+            colour_clear, colour = sp.redo(head, sp.COMPLETE.format(piece="the bald head with the face and the whole neck"),
+                                           seed, match="colour", room=1.5)
         if grey_clear is None:  # the same layer as grey clay, lined up by its outline
             let_go(quiet=False)
             grey_clear, grey = sp.redo(colour_clear, request["grey_prompt"], seed, match="shape", room=1.4)
