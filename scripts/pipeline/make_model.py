@@ -196,8 +196,9 @@ def main():
                 o("retopo_rigged.blend"), out)
         current = o("retopo.glb")
 
-    # every stage's model side by side
-    if not os.path.exists(o("compare.jpg")):
+    # every stage's model side by side (redrawn when a stage was added: a later --retopo left the old sheet)
+    newest = max(os.path.getmtime(m) for _, m in models if os.path.exists(m))
+    if not os.path.exists(o("compare.jpg")) or os.path.getmtime(o("compare.jpg")) < newest:
         env = {**os.environ, "CLAY_COLOURS": "1", "CLAY_SIZE": "450"}
         subprocess.run([BLENDER, "-b", "--python", S("generation", "clay_views.py"), "--", o("compare.jpg"),
                         *[m for _, m in models]], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
