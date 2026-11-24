@@ -445,8 +445,9 @@ def make_step(name, part_id):
             if made is None:
                 # not on the A-pose (held items are left out of it, and the A-pose edit sometimes drops a piece:
                 # demon's cape): cut from the uploaded picture instead; it doesn't line up by itself
-                source, _ = sp.cut_out(Image.open(os.path.join(PROJECT, raw["sources"][0])))
-                on_grey = Image.new("RGB", source.size, sp.GREY); on_grey.paste(source, (0, 0), source)
+                # the uploaded picture itself (square on grey): its background cut-out first lost demon's glass
+                on_grey = sp.square_on_grey(Image.open(os.path.join(PROJECT, raw["sources"][0])))
+                source = on_grey.convert("RGBA")
                 boxes = boxes_for(on_grey, part.get("words") or [part["what"]])
                 let_go(quiet=False)
                 made = sp.piece(source, boxes, part["what"], seed) if boxes else None
