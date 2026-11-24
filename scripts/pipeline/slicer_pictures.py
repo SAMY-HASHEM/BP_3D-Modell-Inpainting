@@ -93,3 +93,17 @@ def stop():
             _comfy.kill()
     _comfy = None
     _remover = None
+    import subprocess  # also a ComfyUI of ours this worker didn't start (left from before a restart): our port only
+    from picture_from_prompt import COMFYUI
+    port = COMFYUI.rsplit(":", 1)[1]
+    found = subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", f"main.py --listen 127.0.0.1 --port {port}"],
+                           capture_output=True, text=True).stdout.split()
+    for pid in found:
+        subprocess.run(["kill", pid])
+    if found:
+        import time
+        time.sleep(3)
+    import gc
+    import torch
+    gc.collect()
+    torch.cuda.empty_cache()

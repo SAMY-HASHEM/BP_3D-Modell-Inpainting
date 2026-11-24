@@ -7,7 +7,8 @@ Every second it looks into outputs/slicer/*/:
 - a picture asked for in the chat, or a step's Make it (parts/<id>/request.json): Qwen-Image-Edit makes it and
   BiRefNet cuts it out (slicer_pictures.py); Qwen3-VL leaves the GPU meanwhile. The 3D models come next.
 
-Qwen3-VL stays loaded while you chat (about 17 GB on the GPU) and is let go after 10 quiet minutes.
+One model on the GPU at a time: Qwen3-VL (about 17 GB) for the chat, or ComfyUI's Qwen-Image-Edit (about 32 GB)
+for a picture; each one is stopped before the other loads. Whatever is loaded is let go after 10 quiet minutes.
 
     python scripts/pipeline/slicer_worker.py          # keeps running; Ctrl+C stops it
 """
@@ -61,8 +62,12 @@ Answer with JSON only: {{"reply": "...", "new_prompt": "", "picture": {{"from": 
 
 
 def model():
+    """Qwen3-VL on the GPU. Only one model at a time: the picture model (ComfyUI, about 32 GB once it has made a
+    picture: it keeps its weights) is stopped first, or both together overflow the GPU (45 of 44 GB, Nov 24)."""
     global _model
     if _model is None:
+        if "slicer_pictures" in sys.modules:
+            sys.modules["slicer_pictures"].stop()
         from organise_pictures import load
         _model = load("Qwen/Qwen3-VL-8B-Instruct", False)
     return _model
