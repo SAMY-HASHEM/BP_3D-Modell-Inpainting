@@ -1,8 +1,9 @@
 """The Slicer's plan for any character: Qwen3-VL looks at the picture(s) and says what is there; the parts and
 their prompts are then written from one fixed template, so every project has the same locks.
 
-Always: 00 the whole character in an A-pose (the base), 01 the centre (the torso without head, arms and legs),
-then the parts Qwen3-VL finds (head, hair, arms, legs, loose clothes, props), each made alone.
+Always: 00 the whole character in an A-pose, 01 the base body (the same body without its outfit and accessories, in
+plain underwear: what every piece is put on), then every piece Qwen3-VL finds made alone: hair, what is worn on the
+head, each piece of clothing (empty, as on an invisible mannequin), gloves, shoes, accessories, props.
 
     python scripts/pipeline/slicer_plan.py outputs/slicer/<name>      # reads its sources/, writes its slicer.json
 """
@@ -29,21 +30,30 @@ GREY = ("The same picture as an unpainted grey clay sculpt: every shape, fold an
         "material, no colours, no patterns.")
 EDITOR = "Qwen-Image-Edit 2511 (local, ComfyUI), made at about 1024 and brought to 2048 by Real-ESRGAN"
 
-QUESTION = """You prepare this character for 3D modelling, one part at a time. Look at the picture(s) and answer
-with JSON only:
+ALONE = ('as a ghost-mannequin product photo: only the item itself, hollow and empty inside, keeping its worn 3D shape, with empty openings where the body would be; no person, no mannequin, no skin, no head, no arms, no legs; '
+         'large, filling most of the picture; nothing else in the picture')
+BASE = ("the same character as a 3D base body: exactly the same face, skin, body shape and proportions, standing in "
+        "the same A-pose, wearing only plain tight-fitting neutral grey underwear (a simple sports top and short "
+        "briefs), barefoot, hair tied back close to the head, no clothes, no armour, no jewellery, no accessories, "
+        "nothing in the hands")
+
+QUESTION = """You prepare this character for 3D modelling in layers: first a base body, then every piece of clothing
+and every accessory made alone, to be put on the body afterwards. Look at the picture(s) and answer with JSON only:
 {"name": "a short name for the character, 2 to 4 words",
  "keep": "one short phrase: what must stay exactly the same (face, hair, the outfit's main pieces)",
  "props": ["items held or separate from the body: weapons, bags, shields ...; [] if none"],
- "center": "what the torso shows without head, arms and legs: the clothes on the chest, waist and neck",
- "parts": [{"name": "a short name", "show": "what the picture of this part alone shows, e.g. 'her long red hair as a wig, hanging straight down'"}]}
-Rules for "parts", in this order, each only if the character has it:
-1. "head": the head with what is worn on it (helmet, ears, crown); short hair stays with the head.
-2. "hair": long or big hair alone, as a wig.
-3. "arms": both arms together in one picture, with gloves, sleeves, bracelets.
-4. "legs": both legs together in one picture, with the shoes or boots.
-5. each loose piece of clothing that hangs free: a cape, a long skirt, a coat tail.
-6. each prop, one part each.
-Never a part for the torso, the upper body or the chest: that is "center". Never left and right as two parts."""
+ "body": "one short phrase about the body under the clothes: build, skin tone",
+ "parts": [{"name": "a short name", "show": "what the picture of this piece alone shows, e.g. 'the white bodysuit with gold trim'"}]}
+Rules for "parts": one part for each piece the character wears or has on top of the bare body, in this order, each
+only if the character has it:
+1. the hair, alone, as a wig (any length);
+2. each thing worn on the head (helmet, ears, crown, headband);
+3. each piece of clothing (bodysuit, top, jacket, dress, skirt, trousers, cape ...), shown alone and empty, keeping its 3D shape;
+4. gloves, sleeves, cuffs (a pair together in one picture);
+5. shoes or boots (the pair together);
+6. jewellery and other accessories (collar, belt, necklace);
+7. each prop, one part each.
+Never a part for the body itself or for body parts (head, arms, legs, torso): the body is made separately."""
 
 
 def the(text):
@@ -67,13 +77,12 @@ def plan_from(answer, name, sources):
          "prompt": "Show this character alone in an A-pose: standing straight, facing the camera, arms down and away "
                    "from the body at about 45 degrees, palms toward the body, legs slightly apart, feet flat. "
                    f"Keep {keep} exactly as they are.{leave} {LOCK}"},
-        {"id": "01_center", "name": "Centre: torso",
-         "what": f"always first: {answer.get('center') or 'the torso'}; no head, no arms, no legs",
-         "prompt": f"Show only the torso: {the(answer.get('center') or 'clothes on the chest, waist and neck')}, as on "
-                   "a tailor's dummy, front view, upright. No head, no arms, no legs. Keep the fabric, its seams and "
-                   f"details exactly. {LOCK}"},
+        {"id": "01_base_body", "name": "Base body",
+         "what": "always first after the A-pose: the same body without its outfit and accessories (plain underwear), "
+                 "the base every piece is put on" + (f"; {answer['body']}" if answer.get("body") else ""),
+         "prompt": f"Show {BASE}. {LOCK}"},
     ]
-    used = {"apose", "center"}
+    used = {"apose", "base_body"}
     found = [p for p in answer.get("parts") or [] if isinstance(p, dict)]
     named = " ".join(str(p.get("name", "")) + " " + str(p.get("show", "")) for p in found).lower()
     for prop in props:  # every prop is a part of its own (the model sometimes lists them only as props)
@@ -86,22 +95,23 @@ def plan_from(answer, name, sources):
         if not label or label.lower() in ("prop", "props", "item", "weapon part"):
             label = " ".join(re.sub(r"(?i)^(a|an|the)\s+", "", part["show"]).split()[:3])
         s = slug(label)
-        if s in used or any(w in s for w in ("torso", "upper_body", "chest", "center", "centre")):
+        if s in used or s in ("torso", "upper_body", "chest", "center", "centre", "body", "bare_body", "head",
+                              "face", "arms", "legs", "hands", "feet"):
             continue
         used.add(s)
         parts.append({"id": f"{len(parts):02d}_{s}", "name": label.capitalize(),
                       "what": part["show"],
-                      "prompt": f"Show only {the(part['show'])}, nothing else, seen from the front. Keep its shape, "
-                                f"colours and details exactly. {LOCK}"})
+                      "prompt": f"Show only {the(part['show'])}, {ALONE}, seen from the front. Keep its shape, "
+                                f"colours and details exactly as on the character. {LOCK}"})
         if len(parts) >= 10:
             break
     for p in parts:
         p["grey_prompt"] = GREY
     return {"name": name, "character": answer.get("name", ""), "sources": sources, "source": sources[0],
             "locked": LOCKED, "editor": EDITOR,
-            "instruction": "Slice this character into parts that are best made alone in 3D. First the whole "
-                           "character in an A-pose (the base), then always the centre (the torso without head, arms "
-                           "and legs), then the rest one by one. For every part: one coloured picture and the same "
+            "instruction": "Slice this character into layers for 3D. First the whole character in an A-pose, then "
+                           "the base body (the same body without outfit and accessories), then every piece of "
+                           "clothing and every accessory alone, one by one. For every part: one coloured picture and the same "
                            f"as grey clay, both locked to {LOCKED['size']} on a flat grey background.",
             "parts": parts}
 

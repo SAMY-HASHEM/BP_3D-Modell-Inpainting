@@ -51,13 +51,64 @@ def remover():
     return _remover
 
 
-def cut_out(image):
-    """The figure alone: (transparent RGBA, the same on #808080), both SIZE x SIZE, the figure centred with a margin."""
+def clean_alpha(alpha):
+    """Only the figure: faint pixels (BiRefNet's half-sure ghosts of what the edit removed: a body around a lone
+    bodysuit, Nov 24) go, and so do pieces much smaller than the main one, unless they are solid and near it."""
+    from scipy import ndimage
+    alpha = alpha.copy()
+    alpha[alpha < 96] = 0
+    labels, n = ndimage.label(alpha > 128)
+    if n > 1:
+        sizes = ndimage.sum(np.ones_like(labels), labels, range(1, n + 1))
+        main = sizes.max()
+        keep = np.zeros(n + 1, bool)
+        keep[1:] = sizes >= 0.02 * main  # small specks go; real separate pieces (two boots, two gloves) stay
+        solid = keep[labels] | (labels == 0)
+        alpha[~solid] = 0
+        alpha[(labels == 0) & ~ndimage.binary_dilation(keep[labels], iterations=6)] = 0  # soft edges only next to kept pieces
+    return alpha
+
+
+MASK_PYTHON = os.path.join(PROJECT, "conda", "envs", "mask-ai", "bin", "python")
+FIND_PART = os.path.join(PROJECT, "scripts", "inpainting", "find_part.py")
+
+
+def find(image, word):
+    """Where `word` is in the picture (Grounding DINO + SAM 2.1, find_part.py in its own environment): a yes/no
+    array, or None if it isn't found (or the finder isn't there)."""
+    import json
+    import subprocess
+    import tempfile
+    if not word or not os.path.isfile(MASK_PYTHON):
+        return None
+    with tempfile.TemporaryDirectory() as folder:
+        image.convert("RGB").save(os.path.join(folder, "picture.png"))
+        json.dump({"word": word, "views": [{"picture": "picture.png", "clicks": []}]},
+                  open(os.path.join(folder, "views.json"), "w"))
+        run = subprocess.run([MASK_PYTHON, FIND_PART, folder], capture_output=True, text=True)
+        masks = os.path.join(folder, "masks.npz")
+        if run.returncode != 0 or not os.path.isfile(masks):
+            return None
+        found = np.load(masks)
+        return found["picture"].astype(bool) if "picture" in found.files and found["picture"].any() else None
+
+
+def cut_out(image, only=None):
+    """The figure alone: (transparent RGBA, the same on #808080), both SIZE x SIZE, the figure centred with a margin.
+    only: a word ("bodysuit"); then only that thing stays (the edit model leaves other pieces floating around a
+    piece asked for alone: the ears and hair strands around Lou's bodysuit, Nov 24)."""
     import torch
     with torch.no_grad():
         rgba = remover()(image.convert("RGB"))
-    alpha = np.asarray(rgba.getchannel("A"))
-    ys, xs = np.nonzero(alpha > 20)
+    alpha = clean_alpha(np.asarray(rgba.getchannel("A")))
+    if only:
+        from scipy import ndimage
+        mask = find(image, only)
+        if mask is not None:
+            mask = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize(rgba.size)) > 127
+            alpha = np.where(ndimage.binary_dilation(mask, iterations=4), alpha, 0).astype(np.uint8)
+    rgba.putalpha(Image.fromarray(alpha))
+    ys, xs = np.nonzero(alpha > 128)
     if len(xs) == 0:
         raise ValueError("nothing was left after cutting the background out")
     box = rgba.crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
@@ -79,7 +130,16 @@ def edit(image, instruction, seed=1):
     text = instruction.strip()
     if "background" not in text.lower():
         text += ALWAYS
-    return comfy_edit(square_on_grey(image), text, seed, report=lambda *a: None, template="{prompt}")
+    try:
+        return comfy_edit(square_on_grey(image), text, seed, report=lambda *a: None, template="{prompt}")
+    except RuntimeError as e:  # mostly out of memory right after another model left the GPU: once more, fresh
+        if "execution_error" not in str(e) and "OutOfMemory" not in str(e):
+            raise
+        import time
+        stop()
+        time.sleep(10)
+        _comfy = start_comfyui(lambda *a: None)
+        return comfy_edit(square_on_grey(image), text, seed, report=lambda *a: None, template="{prompt}")
 
 
 def stop():

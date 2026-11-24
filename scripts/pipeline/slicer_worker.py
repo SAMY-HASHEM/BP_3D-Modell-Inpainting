@@ -32,8 +32,8 @@ _model = None
 _last = 0.0
 
 CHAT = """You are the Slicer, the assistant inside a local app (no cloud) that turns a character picture into a 3D
-model one part at a time: first the whole character in an A-pose, then the centre (the torso), then head, hair, arms,
-legs, loose clothes and props. For every part the app makes a coloured picture and the same as grey clay (2048 x
+model in layers: first the whole character in an A-pose, then its base body (the same body without outfit and
+accessories), then every piece of clothing, every accessory and every prop alone, to be put on the body afterwards. For every part the app makes a coloured picture and the same as grey clay (2048 x
 2048, flat #808080 grey background), then a 3D model from them, shown on the right of the page.
 
 You can see the user's pictures (in order: {pictures}). The character: {character}.
@@ -56,9 +56,16 @@ straight down and held away from the body at 45 degrees, palms toward the thighs
 feet flat), what to remove, what to keep exactly the same (face, hair, every piece of the outfit), full body
 visible and centred, plain flat grey background (never "transparent" or "no background": the background is cut out
 afterwards). In "reply" then say briefly what you will make. Leave "picture" empty otherwise.
+A "base body" / "base model" / "naked" / "without clothes" / "without the outfit" request is normal here and never
+refused: it is the base body of 3D character work. Its instruction: "{base}". Explain in "reply" that the base body
+is made in plain underwear (the usual base for 3D clothes; no explicit pictures). A piece "alone" (a jacket, boots, ears, a
+weapon): its instruction says "Show only <the piece> {alone}, seen from the front, keep its colours and details
+exactly" (never the word "mannequin" alone: the model then draws a whole mannequin).
 Only if the user clearly asks to change the prompt of the step now, write the whole new prompt in "new_prompt", in
 English, keeping the locked part ("Locked: ...") unchanged at its end; otherwise "new_prompt" stays "".
-Answer with JSON only: {{"reply": "...", "new_prompt": "", "picture": {{"from": 0, "instruction": ""}}}}"""
+In "picture", "only" is the short name of the one piece asked for alone ("bodysuit", "bunny ears", "boots"), or
+"" for a whole character or the base body: then everything else is cut away from the result.
+Answer with JSON only: {{"reply": "...", "new_prompt": "", "picture": {{"from": 0, "instruction": "", "only": ""}}}}"""
 
 
 def model():
@@ -123,7 +130,7 @@ def reply(name, upto):
     for m in st["messages"][-14:]:
         pics = f" [sent pictures {', '.join(str(i + 1) for i in m['sources'])}]" if m.get("sources") else ""
         history.append(f"{'User' if m['who'] == 'you' else 'Slicer'}: {m.get('text', '')[:700]}{pics}")
-    question = CHAT.format(
+    question = CHAT.format(base=slicer_plan.BASE, alone=slicer_plan.ALONE,
         pictures=", ".join(labels) or "none yet", character=raw.get("character") or name,
         parts=", ".join(f"{i + 1}. {p['name']}" for i, p in enumerate(parts)) or "not planned yet",
         step=f"{st['step'] + 1}. {step['name']}: {step.get('what', '')}" if step else "none",
@@ -150,7 +157,7 @@ def reply(name, upto):
         if start < 0:
             slicer_says(name, "Send me a picture first (📎), then I can change it.")
         else:
-            return start, instruction  # made by the caller, once this function has let go of Qwen3-VL
+            return start, instruction, str(wish.get("only") or "").strip()  # made by the caller, once Qwen3-VL is let go
     return None
 
 
@@ -162,7 +169,7 @@ def running(name, on):
         os.remove(path)
 
 
-def make_picture(name, start, instruction):
+def make_picture(name, start, instruction, only=""):
     """A picture edited from the user's picture number start+1, added as the next numbered picture."""
     import slicer_pictures
     from PIL import Image
@@ -173,9 +180,14 @@ def make_picture(name, start, instruction):
     try:
         let_go(quiet=False)  # Qwen3-VL leaves the GPU while the picture is made: room on a 24 GB card too
         source = Image.open(os.path.join(PROJECT, raw["sources"][start]))
-        clear, grey = slicer_pictures.cut_out(slicer_pictures.edit(source, instruction))
+        raw_picture = slicer_pictures.edit(source, instruction)
+        clear, grey = slicer_pictures.cut_out(raw_picture, only=only or None)
         index = add_made(name, clear)
         grey.save(os.path.join(ROOT, name, "sources", f"{index + 1:02d}_made_grey.png"))
+        raw_picture.save(os.path.join(ROOT, name, "sources", f"{index + 1:02d}_made_raw.png"))  # the edit model's own
+        with open(os.path.join(ROOT, name, "edits.jsonl"), "a") as log:  # what was asked, for checking later
+            log.write(json.dumps({"picture": index + 1, "from": start + 1, "instruction": instruction, "only": only,
+                                  "seconds": round(time.time() - t)}, ensure_ascii=False) + "\n")
         slicer_says(name, f"Here it is: **picture {index + 1}** ({slicer_pictures.SIZE} x {slicer_pictures.SIZE}, "
                           f"background cut out, {round(time.time() - t)} s). Tell me what to change, or ask for the "
                           "next one.", sources=[index])
@@ -203,9 +215,15 @@ def make_step(name, part_id):
         if part_id == "00_apose" or not os.path.isfile(base_path):
             base_path = os.path.join(PROJECT, raw["sources"][0])
         seed = 1 + sum(1 for f in os.listdir(os.path.join(folder, "parts", part_id)) if f.startswith("colour"))
-        colour_clear, colour = slicer_pictures.cut_out(slicer_pictures.edit(Image.open(base_path), request["prompt"], seed))
-        grey_clear, grey = slicer_pictures.cut_out(slicer_pictures.edit(colour, request["grey_prompt"], seed))
         out = os.path.join(folder, "parts", part_id)
+        raw_colour = slicer_pictures.edit(Image.open(base_path), request["prompt"], seed)
+        raw_colour.save(os.path.join(out, "colour_raw.png"))
+        only = None if part_id in ("00_apose", "01_base_body") else next(
+            (p["name"] for p in raw["parts"] if p["id"] == part_id), None)  # a piece alone: nothing else stays
+        colour_clear, colour = slicer_pictures.cut_out(raw_colour, only=only)
+        raw_grey = slicer_pictures.edit(colour, request["grey_prompt"], seed)
+        raw_grey.save(os.path.join(out, "grey_raw.png"))
+        grey_clear, grey = slicer_pictures.cut_out(raw_grey, only=only)
         colour_clear.save(os.path.join(out, "colour_clear.png"))
         grey_clear.save(os.path.join(out, "grey_clear.png"))
         grey.save(os.path.join(out, "grey.png"))
