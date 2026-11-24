@@ -47,8 +47,9 @@ ALONE = ("exactly where it is in the picture, at exactly the same size, position
 BASE = ("Turn the character into a smooth matte light-grey plastic shop-window mannequin with exactly the same body: "
         "remove all the clothes, the hair and all accessories (headwear, gloves, cuffs, jewellery, weapons and the "
         "shoes). The mannequin has the exact face shape, the exact body shape with the same width of shoulders, chest, "
-        "waist, hips and thighs, the same height, the same A-pose, the same size and position in the picture and the "
-        "same camera. Like every shop mannequin it has no anatomical details: a smooth plain chest, rounded without "
+        "waist, hips, bottom and thighs, the same height, the same A-pose, the same size and position in the picture "
+        "and the same camera. The chest, the bottom, the hips and the legs keep exactly their size and shape, even when "
+        "they are big: 1 to 1 the same outline. Like every shop mannequin it has no anatomical details: a smooth plain chest, rounded without "
         "any points or bumps at the tips, a smooth plain crotch, a smooth bald head, one even matte grey plastic "
         "everywhere.")
 
@@ -60,23 +61,32 @@ BASE_UNDERWEAR = ("Change only the clothes, the accessories and the hairstyle, n
                   "same body shape with the same width of shoulders, chest, waist, hips and thighs, the same height, "
                   "the same A-pose, the same size and position in the picture and the same camera.")
 
-QUESTION = """You prepare this character for 3D modelling in layers: first a base body, then every piece of clothing
-and every accessory made alone, to be put on the body afterwards. Look at the picture(s) and answer with JSON only:
+QUESTION = """You prepare this character for 3D modelling in layers, from the inside to the outside: first the bare
+body, then every piece made alone and put on it. Look at the picture(s) and answer with JSON only:
 {"name": "a short name for the character, 2 to 4 words",
  "keep": "one short phrase: what must stay exactly the same (face, hair, the outfit's main pieces)",
- "props": ["items held or separate from the body: weapons, bags, shields ...; [] if none"],
- "body": "one short phrase about the body under the clothes: build, skin tone",
- "parts": [{"name": "a short name", "show": "what the picture of this piece alone shows, e.g. 'the white bodysuit with gold trim'"}]}
-Rules for "parts": one part for each piece the character wears or has on top of the bare body, in this order, each
-only if the character has it:
-1. the hair, alone, as a wig (any length);
-2. each thing worn on the head (helmet, ears, crown, headband);
-3. each piece of clothing (bodysuit, top, jacket, dress, skirt, trousers, cape ...), shown alone and empty, keeping its 3D shape;
-4. gloves, sleeves, cuffs (a pair together in one picture);
-5. shoes or boots (the pair together);
-6. jewellery and other accessories (collar, belt, necklace);
-7. each prop, one part each.
-Never a part for the body itself or for body parts (head, arms, legs, torso): the body is made separately."""
+ "props": ["items held in the hands: weapons, glasses, bags, shields ...; [] if none"],
+ "parts": [{"name": "a short name", "show": "what this piece alone is, with its colours, e.g. 'the black leather corset with a heart cut-out'", "category": "..."}]}
+One part for each separate thing the character wears or has on top of the bare body. "category" is one of:
+"clothing" (bodysuit, corset, top, shirt, dress, skirt, trousers, leggings, shorts), "jewellery" (necklace, choker,
+belt, collar, piercings), "outerwear" (cape, coat, jacket, cloak), "footwear" (shoes, boots, sandals: the pair in one
+part), "handwear" (gloves, sleeves, cuffs, bracelets, arm bands: a pair in one part), "hand item" (what is held in a
+hand), "hair" (the hair), "headwear" (anything worn on the head: hat, crown, headband, ears, horns, small wings on
+the head), "attachment" (wings on the back, a tail). Never a part for the body or for body parts (head, face, arms,
+legs, torso): the body is made separately."""
+
+COMPLETE_TEXT = ("This picture shows {piece} cut out from a character: the parts of it that were hidden behind other "
+                 "things are missing. Complete it into the whole {piece}, empty, nobody wearing it: fill in only the "
+                 "missing parts in the same style, colours and material, and keep every visible part exactly as it is. "
+                 "Nothing else in the picture: no body, no skin, no head, no other clothes. Plain flat #808080 grey "
+                 "background, soft even studio light, no shadow, no text.")
+
+# the order the layers are made in, inside to outside (the user's, Nov 24): body, clothes, shoes, hands, what the
+# hands hold, the bald head, the hair with what is worn on the head, then wings and tails
+ORDER = ["clothing", "jewellery", "outerwear", "footwear", "handwear", "hand item", "head", "hair", "attachment"]
+HEAD = ("Make the character bald: remove all the hair and everything worn on the head (hats, crowns, headbands, ears, "
+        "horns, head wings). Keep the face, the skin, the head shape and everything else exactly as it is, at the "
+        "same size and position.")
 
 
 def the(text):
@@ -90,59 +100,70 @@ def slug(text):
 
 
 def plan_from(answer, name, sources):
+    """The plan: 00 the A-pose (the reference: no 3D), 01 the base body, then every piece from the inside to the
+    outside (ORDER), with the bald head before the hair, and what is worn on the head made with the hair."""
     keep = answer.get("keep") or "the face, the hair and the outfit"
     props = [p for p in answer.get("props") or [] if isinstance(p, str) and p.strip()]
     leave = f" Leave out {', '.join(props)}." if props else ""
     parts = [
-        {"id": "00_apose", "name": "Whole character, A-pose",
-         "what": "the base all slices come from: alone, standing straight, arms down and out at about 45 degrees, "
-                 "legs a little apart, front view" + (", without " + ", ".join(props) if props else ""),
+        {"id": "00_apose", "name": "Whole character, A-pose", "kind": "apose", "no3d": True,
+         "what": "the reference every layer is cut from and lined up with: alone, standing straight, arms down and out "
+                 "at about 45 degrees, legs a little apart, front view" + (", without " + ", ".join(props) if props else ""),
          "prompt": "Show this character alone in an A-pose: standing straight, facing the camera, arms down and away "
                    "from the body at about 45 degrees, palms toward the body, legs slightly apart, feet flat. "
                    f"Keep {keep} exactly as they are.{leave} {LOCK}"},
-        {"id": "01_base_body", "name": "Base body",
-         "what": "always first after the A-pose: the same body without outfit, hair and accessories, as a matte grey "
-                 "shop mannequin (no anatomy), "
-                 "the base every piece is put on" + (f"; {answer['body']}" if answer.get("body") else ""),
+        {"id": "01_base_body", "name": "Base body", "kind": "base",
+         "what": "the same body as the A-pose, 1 to 1 (chest, hips, bottom, legs the same size), with her skin colour, "
+                 "smooth (no nipples, no genitals), bald: what every piece is put on",
          "prompt": f"{BASE} {FRAME}"},
     ]
-    used = {"apose", "base_body"}
-    found = [p for p in answer.get("parts") or [] if isinstance(p, dict)]
+    found = [p for p in answer.get("parts") or [] if isinstance(p, dict) and p.get("show")]
     named = " ".join(str(p.get("name", "")) + " " + str(p.get("show", "")) for p in found).lower()
-    def known(text):  # already a part: one of its longer words is in a part's name or description
+    def known(text):
         return any(w in named for w in re.findall(r"[a-z]{4,}", text.lower()) if w not in ("with", "giant", "large", "small"))
-    for prop in props:  # every prop is a part of its own (the model sometimes lists them only as props)
+    for prop in props:  # every held item is a part of its own (the model sometimes lists it only as a prop)
         if not known(prop):
-            found.append({"name": prop, "show": f"the {prop} alone, whole, no hands"})
+            found.append({"name": prop, "show": f"the {prop}", "category": "hand item"})
             named += " " + prop.lower()
-    if "hair" not in named and "bald" not in (answer.get("keep") or "").lower():
-        # the base body has its hair in a bun: the hair itself is always a piece (the model sometimes leaves it out)
-        found.insert(0, {"name": "hair", "show": "the hair alone as a wig, in its own style, colour and length, as it falls in the A-pose"})
-    for i, part in enumerate(found):
-        if not isinstance(part, dict) or not part.get("show"):
-            continue
-        label = str(part.get("name") or "").strip()
-        if not label or label.lower() in ("prop", "props", "item", "weapon part"):
-            label = " ".join(re.sub(r"(?i)^(a|an|the)\s+", "", part["show"]).split()[:3])
+    hair = [p for p in found if str(p.get("category", "")).lower() == "hair"]
+    headwear = [p for p in found if str(p.get("category", "")).lower() == "headwear"]
+    if not hair and "bald" not in keep.lower():
+        hair = [{"name": "hair", "show": "the hair", "category": "hair"}]
+    # the hair with what is worn on the head: one part, as it sits on the head (the user's order)
+    if hair or headwear:
+        shows = [h["show"] for h in hair] + [h["show"] for h in headwear]
+        found = [p for p in found if p not in hair and p not in headwear]
+        found.append({"name": "Hair" + (" with " + ", ".join(h["name"] for h in headwear) if headwear else ""),
+                      "show": " with ".join([shows[0], ", ".join(shows[1:])]) if len(shows) > 1 else shows[0],
+                      "category": "hair", "words": shows})
+    found.append({"name": "Head, bald", "show": "the bald head with the face and the neck", "category": "head",
+                  "kind": "head"})
+    rank = lambda p: ORDER.index(p.get("category", "clothing")) if p.get("category") in ORDER else 1
+    found.sort(key=rank)  # a stable sort: the model's order stays within a category
+    used = {"apose", "base_body"}
+    for part in found:
+        label = str(part.get("name") or "").strip() or " ".join(part["show"].split()[:3])
         s = slug(label)
-        if s in used or s in ("torso", "upper_body", "chest", "center", "centre", "body", "bare_body", "head",
-                              "face", "arms", "legs", "hands", "feet"):
+        if s in used or s in ("torso", "upper_body", "chest", "center", "centre", "body", "bare_body", "face",
+                              "arms", "legs", "hands", "feet"):
             continue
         used.add(s)
-        parts.append({"id": f"{len(parts):02d}_{s}", "name": label.capitalize(),
-                      "what": part["show"],
-                      "prompt": f"Keep only {the(part['show'])}, {ALONE}. {FRAME}"})
-        if len(parts) >= 10:
+        kind = part.get("kind", "piece")
+        parts.append({"id": f"{len(parts):02d}_{s}", "name": label[:1].upper() + label[1:], "kind": kind,
+                      "category": part.get("category", "clothing"), "what": part["show"],
+                      "words": part.get("words") or [part["show"]],
+                      "prompt": HEAD if kind == "head" else COMPLETE_TEXT.format(piece=the(part["show"]))})
+        if len(parts) >= 14:
             break
     for p in parts:
         p["grey_prompt"] = GREY
     parts[1]["grey_prompt"] = GREY_BASE
     return {"name": name, "character": answer.get("name", ""), "sources": sources, "source": sources[0],
             "locked": LOCKED, "editor": EDITOR,
-            "instruction": "Slice this character into layers for 3D. First the whole character in an A-pose, then "
-                           "the base body (the same body without outfit and accessories), then every piece of "
-                           "clothing and every accessory alone, one by one. For every part: one coloured picture and the same "
-                           f"as grey clay, both locked to {LOCKED['size']} on a flat grey background.",
+            "instruction": "Slice this character into layers for 3D, from the inside to the outside: the A-pose (the "
+                           "reference), the base body, the clothes, shoes, hands, what the hands hold, the bald head, "
+                           "the hair with what is worn on the head, wings and tails. Every piece is cut out of the "
+                           "A-pose and completed, so all layers line up.",
             "parts": parts}
 
 

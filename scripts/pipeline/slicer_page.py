@@ -46,7 +46,7 @@ def plan_path(name):
 def projects():
     if not os.path.isdir(ROOT):
         return []
-    return sorted(n for n in os.listdir(ROOT) if os.path.isfile(os.path.join(ROOT, n, "slicer.json")))
+    return sorted(n for n in os.listdir(ROOT) if not n.startswith(".") and os.path.isfile(os.path.join(ROOT, n, "slicer.json")))
 
 
 class _Lock:
@@ -92,7 +92,9 @@ def step_message(plan, index):
     part = plan["parts"][index]
     return {"who": "slicer", "part": part["id"], "kind": "step",
             "text": f"Step {index + 1} of {len(plan['parts'])}: **{part['name']}**\n{part.get('what', '')}\n\n"
-                    "This is the prompt I'll give the image model. Change it below if you want, then press Make it.",
+                    + ("This is the prompt I'll give the image model. Change it below if you want, then press Make it."
+                       if part.get("kind") != "piece" else "I cut it out of the A-pose picture and let the image model "
+                       "complete only what was hidden. The prompt is below; press Make it."),
             "buttons": ["make_pictures", "skip"]}
 
 
@@ -156,12 +158,15 @@ def follow(name, plan, chat):
                 raw.setdefault("step_pictures", {})[part["id"]] = index
                 save(plan_path(name), raw)
                 numbered = [index]
+            apose_done = part.get("no3d") and index == chat["step"]
             chat["messages"].append({"who": "slicer", "part": part["id"],
                 "text": f"The pictures for **{part['name']}** are ready: coloured" + (f" (#{numbered[0] + 1})" if numbered else "")
                         + " and grey. Are they right?",
                 **({"sources": numbered} if numbered else {}),
                 "images": ([] if numbered else [files["colour"]]) + ([files["grey"]] if "grey" in files else []),
-                "buttons": ["make_3d", "remake_pictures"]})
+                "buttons": ["remake_pictures"] if part.get("no3d") else ["make_3d", "remake_pictures"]})
+            if apose_done:  # the reference has no 3D step: on to the next part
+                next_step(plan, chat)
         if "model" in files and seen.get("model") != stamp["model"]:
             seen["model"] = stamp["model"]; changed = True
             chat["messages"].append({"who": "slicer", "part": part["id"],
@@ -298,7 +303,8 @@ def say(name, text, action=None, part_id=None, files=None):
                 chat["messages"].append({"who": "slicer", "part": part["id"], "kind": "working",
                     "text": {"make_pictures": "Making the coloured and the grey picture…",
                              "remake_pictures": "Making the pictures again…",
-                             "make_3d": "Making the 3D model (TRELLIS.2, about 6 to 10 minutes)…"}[action]})
+                             "make_3d": "Making the 3D model (the full pipeline: de-light, TRELLIS.2, MV-Adapter colours; "
+                                        "about 20 to 30 minutes)…"}[action]})
         save(chat_path(name), chat)
 
 
@@ -355,6 +361,64 @@ def add_made(name, picture):
         return len(sources)
 
 
+def delete(name, what, target=None):
+    """Delete from the page: a whole project, a part's pictures and model, or one numbered picture. Nothing is gone
+    at once: it is moved to outputs/slicer/.trash/ (a project) or outputs/slicer/<name>/trash/ (the rest)."""
+    import shutil
+    with LOCK:
+        folder = os.path.dirname(plan_path(name))
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        if what == "project":
+            os.makedirs(os.path.join(ROOT, ".trash"), exist_ok=True)
+            shutil.move(folder, os.path.join(ROOT, ".trash", f"{name}_{stamp}"))
+            return f"project {name} moved to outputs/slicer/.trash/{name}_{stamp}"
+        trash = os.path.join(folder, "trash", stamp)
+        os.makedirs(trash, exist_ok=True)
+        plan = json.load(open(plan_path(name)))
+        chat = load_chat(name, state(name))
+        if what == "part":
+            part = next((p for p in plan["parts"] if p["id"] == target), None)
+            if part is None:
+                raise ValueError(f"no part {target!r}")
+            here = os.path.join(folder, "parts", target)
+            if os.path.isdir(here):
+                shutil.move(here, os.path.join(trash, target))
+            chat["announced"].pop(target, None)
+            chat["messages"].append({"who": "slicer", "text": f"Deleted the pictures and the model of **{part['name']}**."})
+            save(chat_path(name), chat)
+            return f"part {target} moved to trash"
+        if what == "picture":
+            i = int(target)
+            sources = plan.get("sources") or []
+            if not 0 <= i < len(sources) or not os.path.isfile(os.path.join(PROJECT, sources[i])):
+                raise ValueError(f"no picture #{i + 1}")
+            base = os.path.splitext(os.path.join(PROJECT, sources[i]))[0]
+            for extra in ("", "_grey", "_raw"):  # the picture with its grey and raw versions
+                for ext in (".png", ".jpg", ".jpeg", ".webp"):
+                    path = base.replace("_made", "_made" + extra) + ext if extra else base + ext
+                    if os.path.isfile(path):
+                        shutil.move(path, os.path.join(trash, os.path.basename(path)))
+            chat["messages"].append({"who": "slicer", "text": f"Deleted picture #{i + 1}."})
+            save(chat_path(name), chat)
+            return f"picture #{i + 1} moved to trash"
+        raise ValueError(f"can't delete {what!r}")
+
+
+def place_by_hand(name, part_id, manual):
+    """A part moved, turned or scaled by hand in the 3D view: saved as parts/<id>/manual.json (None: back to auto)."""
+    with LOCK:
+        plan = json.load(open(plan_path(name)))
+        if not any(p["id"] == part_id for p in plan["parts"]):
+            raise ValueError(f"no part {part_id!r}")
+        path = os.path.join(os.path.dirname(plan_path(name)), "parts", part_id, "manual.json")
+        if manual is None:
+            if os.path.isfile(path):
+                os.remove(path)
+            return
+        keep = {k: [float(x) for x in manual[k]] for k in ("position", "quaternion", "scale")}
+        save(path, keep)
+
+
 def slicer_says(name, text, part_id=None, images=(), kind=None, sources=None):
     """For the one doing the work (a script, or Claude in the terminal): a message from the Slicer in the chat."""
     with LOCK:
@@ -379,6 +443,12 @@ def state(name):
         return found
     for part in plan.get("parts", []):
         part["files"] = files(os.path.join("parts", part["id"]))
+        hand = os.path.join(folder, "parts", part["id"], "manual.json")  # moved by hand on the page
+        if os.path.isfile(hand):
+            try:
+                part["manual"] = json.load(open(hand))
+            except ValueError:
+                pass
         where = os.path.join(folder, "parts", part["id"], "place.json")
         if os.path.isfile(where):
             try:
@@ -388,9 +458,9 @@ def state(name):
         part["status"] = ("made" if "model" in part["files"] else "pictures" if part["files"] else "planned")
     sources = plan.get("sources") or ([plan["source"]] if plan.get("source") else [])
     plan["source_urls"] = [f"source/{name}?i={i}&t={int(os.path.getmtime(os.path.join(PROJECT, src)))}"
-                           for i, src in enumerate(sources) if os.path.isfile(os.path.join(PROJECT, src))]
-    if plan["source_urls"]:
-        plan["source_url"] = plan["source_urls"][0]
+                           if os.path.isfile(os.path.join(PROJECT, src)) else None for i, src in enumerate(sources)]
+    if any(plan["source_urls"]):
+        plan["source_url"] = next(u for u in plan["source_urls"] if u)
     return plan
 
 
@@ -518,6 +588,11 @@ class Page(BaseHTTPRequestHandler):
         /api/say {project, text, action?, part?}: a message in the chat, or a button pressed."""
         try:
             data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if urllib.parse.urlparse(self.path).path == "/api/delete":
+                return self.answer({"done": delete(data.get("project", ""), data.get("what"), data.get("target"))})
+            if urllib.parse.urlparse(self.path).path == "/api/place":
+                place_by_hand(data.get("project", ""), data.get("id"), data.get("manual"))
+                return self.answer({"saved": True})
             if urllib.parse.urlparse(self.path).path == "/api/new":
                 return self.answer({"name": new_project(data.get("name"), data.get("files"))})
             if urllib.parse.urlparse(self.path).path == "/api/say":

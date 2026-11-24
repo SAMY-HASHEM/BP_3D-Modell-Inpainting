@@ -73,17 +73,18 @@ MASK_PYTHON = os.path.join(PROJECT, "conda", "envs", "mask-ai", "bin", "python")
 FIND_PART = os.path.join(PROJECT, "scripts", "inpainting", "find_part.py")
 
 
-def find(image, word):
+def find(image, word, boxes=None):
     """Where `word` is in the picture (Grounding DINO + SAM 2.1, find_part.py in its own environment): a yes/no
     array, or None if it isn't found (or the finder isn't there)."""
     import json
     import subprocess
     import tempfile
-    if not word or not os.path.isfile(MASK_PYTHON):
+    if not (word or boxes) or not os.path.isfile(MASK_PYTHON):
         return None
     with tempfile.TemporaryDirectory() as folder:
         image.convert("RGB").save(os.path.join(folder, "picture.png"))
-        json.dump({"word": word, "views": [{"picture": "picture.png", "clicks": []}]},
+        json.dump({"word": word or "", "views": [{"picture": "picture.png", "clicks": [],
+                                                   **({"boxes": [list(map(float, b)) for b in boxes]} if boxes else {})}]},
                   open(os.path.join(folder, "views.json"), "w"))
         run = subprocess.run([MASK_PYTHON, FIND_PART, folder], capture_output=True, text=True)
         masks = os.path.join(folder, "masks.npz")
@@ -174,3 +175,129 @@ def stop():
     import torch
     gc.collect()
     torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------- a piece: cut out of the A-pose, then completed
+
+COMPLETE = ("This picture shows {piece} cut out from a character: the parts of it that were hidden behind other things "
+            "are missing. Complete it into the whole {piece}, empty, nobody wearing it: fill in only the missing parts "
+            "in the same style, colours and material, and keep every visible part exactly as it is. Nothing else in "
+            "the picture: no body, no skin, no head, no other clothes. Plain flat #808080 grey background, soft even "
+            "studio light, no shadow, no text.")
+
+
+def _alpha_rgba(image):
+    """BiRefNet's cut-out of a picture at its own size (cleaned), as RGBA."""
+    import torch
+    with torch.no_grad():
+        rgba = remover()(image.convert("RGB"))
+    rgba.putalpha(Image.fromarray(clean_alpha(np.asarray(rgba.getchannel("A")))))
+    return rgba
+
+
+def cut(apose, boxes):
+    """What is in the boxes (from Qwen3-VL), cut out of the A-pose picture by SAM: the real pixels at their place
+    (RGBA, SIZE x SIZE), or None."""
+    apose = apose.convert("RGBA").resize((SIZE, SIZE), Image.LANCZOS)
+    grey = Image.new("RGB", apose.size, GREY)
+    grey.paste(apose, (0, 0), apose)
+    mask = find(grey, None, boxes=boxes)
+    if mask is None:
+        return None
+    mask = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize((SIZE, SIZE))) > 127
+    mask &= np.asarray(apose.getchannel("A")) > 128
+    if mask.sum() < 50:
+        return None
+    out = Image.new("RGBA", apose.size, (0, 0, 0, 0))
+    out.paste(apose, (0, 0), Image.fromarray(mask.astype(np.uint8) * 255))
+    return out
+
+
+def redo(layer, instruction, seed=1, match="colour", room=1.7, report=print):
+    """An edit of one layer that stays where the layer is in the A-pose's frame (the edit model draws a small thing
+    large and centred): a square crop around it (room: for what it may grow by), the edit, its cut-out, and back on
+    the frame by a small search over size and offset that lines it up with the layer: by its colours on the layer's
+    pixels (match="colour": a completed piece) or by its outline (match="shape": the same piece in grey clay).
+    Returns (transparent RGBA, on #808080), SIZE x SIZE."""
+    import cv2
+    layer = layer.convert("RGBA").resize((SIZE, SIZE), Image.LANCZOS)
+    alpha = np.asarray(layer.getchannel("A")) > 128
+    ys, xs = np.nonzero(alpha)
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    side = int(max(x1 - x0, y1 - y0) * room) + 8
+    left, top = (x0 + x1) // 2 - side // 2, (y0 + y1) // 2 - side // 2
+    crop = Image.new("RGB", (side, side), GREY)
+    crop.paste(layer, (-left, -top), layer)
+    raw = edit(crop, instruction, seed)
+    done = _alpha_rgba(raw).resize((side, side), Image.LANCZOS)
+    n = 160
+    small_done = np.asarray(done.resize((n, n), Image.BILINEAR)).astype(np.float32) / 255
+    want_rgba = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    want_rgba.paste(layer, (-left, -top), layer)
+    want = np.asarray(want_rgba.resize((n, n), Image.BILINEAR)).astype(np.float32) / 255
+    want_mask = want[..., 3] > 0.5
+    best = (1e9, 1.0, 0.0, 0.0)
+    for sc in np.arange(0.8, 1.201, 0.025):
+        for dx in np.arange(-0.1, 0.101, 0.0125):
+            for dy in np.arange(-0.1, 0.101, 0.0125):
+                m = np.float32([[sc, 0, n / 2 * (1 - sc) + dx * n], [0, sc, n / 2 * (1 - sc) + dy * n]])
+                w = cv2.warpAffine(small_done, m, (n, n), flags=cv2.INTER_LINEAR, borderValue=0)
+                a = w[..., 3]
+                if match == "shape":
+                    got = a > 0.5
+                    cost = 1 - (got & want_mask).sum() / max((got | want_mask).sum(), 1)
+                else:
+                    cover = a[want_mask]
+                    diff = np.abs(w[..., :3] - want[..., :3]).mean(-1)[want_mask]
+                    cost = (diff * cover).sum() / max(cover.sum(), 1e-6) + 0.6 * (1 - cover).mean()
+                if cost < best[0]:
+                    best = (cost, sc, dx, dy)
+    _, sc, dx, dy = best
+    m = np.float32([[sc, 0, side / 2 * (1 - sc) + dx * side + left], [0, sc, side / 2 * (1 - sc) + dy * side + top]])
+    clear = Image.fromarray(cv2.warpAffine(np.asarray(done), m, (SIZE, SIZE), flags=cv2.INTER_LANCZOS4,
+                                           borderValue=(0, 0, 0, 0)))
+    on_grey = Image.new("RGB", (SIZE, SIZE), GREY)
+    on_grey.paste(clear, (0, 0), clear)
+    report(f"lined up ({match}): size {sc:.3f}, offset {dx:+.3f} {dy:+.3f}, cost {best[0]:.3f}")
+    return clear, on_grey
+
+
+def piece(apose, boxes, description, seed=1, report=print):
+    """A piece of the A-pose made whole, in the A-pose's frame (Nov 24: asked to "keep only" a piece, the edit model
+    kept the whole outfit; cut out first, it only has to complete what was hidden): (clear, on grey, the cut)."""
+    part = cut(apose, boxes)
+    if part is None:
+        return None
+    clear, on_grey = redo(part, COMPLETE.format(piece=description), seed, match="colour", report=report)
+    return clear, on_grey, part
+
+
+def skin_tone(apose):
+    """The skin's colour in the A-pose picture (SAM's "bare skin", the lit part: not shadows or highlights)."""
+    apose = apose.convert("RGBA").resize((SIZE, SIZE), Image.LANCZOS)
+    grey = Image.new("RGB", apose.size, GREY)
+    grey.paste(apose, (0, 0), apose)
+    mask = find(grey, "bare skin")
+    if mask is None:
+        return None
+    mask = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize((SIZE, SIZE))) > 127
+    px = np.asarray(apose)[..., :3][mask & (np.asarray(apose.getchannel("A")) > 200)].astype(np.float32)
+    if len(px) < 100:
+        return None
+    lum = px.mean(1)
+    px = px[(lum > np.percentile(lum, 30)) & (lum < np.percentile(lum, 90))]
+    return np.median(px, 0)
+
+
+def tint(mannequin, tone):
+    """The grey mannequin in the skin's colour: its light and shade kept, nothing new drawn (asked for skin, the edit
+    model drew nipples whatever the words said: the colour is put on instead)."""
+    a = np.asarray(mannequin.convert("RGBA")).astype(np.float32)
+    light = a[..., :3].mean(-1, keepdims=True) / 255
+    body = a[..., 3] > 200
+    shade = light / max(float(np.median(light[body])), 1e-3)
+    out = np.clip(np.asarray(tone, np.float32) * shade ** 1.15, 0, 255)
+    clear = Image.fromarray(np.dstack([out, a[..., 3:]]).astype(np.uint8), "RGBA")
+    on_grey = Image.new("RGB", clear.size, GREY)
+    on_grey.paste(clear, (0, 0), clear)
+    return clear, on_grey

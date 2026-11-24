@@ -87,6 +87,18 @@
   .legend { position:absolute; left:12px; bottom:12px; right:12px; display:flex; flex-wrap:wrap; gap:6px; pointer-events:none; }
   .legend .chip { background:#14100acc; pointer-events:auto; cursor:pointer; }
   .legend .chip.off { opacity:.4; }
+  .legend .layer { background:#14100add; border:1px solid var(--line); border-radius:10px; padding:4px 8px; pointer-events:auto;
+                   display:flex; align-items:center; gap:6px; font-size:12px; }
+  .legend .layer.off .lname { opacity:.45; text-decoration:line-through; }
+  .legend .layer.sel { border-color:var(--sand); box-shadow:0 0 0 1px var(--sand); }
+  .legend .layer .lname { cursor:pointer; }
+  .legend .layer input[type=range] { width:70px; accent-color:var(--sand); }
+  .legend .layer button { padding:1px 7px; font-size:11.5px; border-radius:6px; }
+  #modes { position:absolute; right:12px; top:12px; display:none; gap:6px; }
+  #modes.show { display:flex; }
+  #modes button.on { border-color:var(--sand); color:var(--sand); }
+  #delbox .row { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+  #delbox select { flex:1; }
   .empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center;
            color:var(--dim); pointer-events:none; padding:24px; }
   .error { color:var(--bad); }
@@ -98,6 +110,7 @@
   <h1>Slicer</h1>
   <select id="project" aria-label="Project"></select>
   <button id="new" title="A new character from one or more pictures">+ New</button>
+  <button id="del" title="Delete a project, a part's pictures and model, or a picture">Delete…</button>
   <span id="status" class="muted"></span>
   <span class="grow"></span>
   <button id="swap" title="Swap the two halves">⇄ Swap halves</button>
@@ -120,9 +133,22 @@
     </div>
     <div class="empty" id="empty">No part is in 3D yet.<br>Each one appears here as soon as its model is made.</div>
     <div class="legend" id="legend"></div>
+    <div id="modes" aria-label="Move tools"><button data-mode="translate" class="on" title="Move (W)">Move</button>
+      <button data-mode="rotate" title="Turn (E)">Turn</button><button data-mode="scale" title="Scale (R)">Scale</button>
+      <button id="reset" title="Back to the automatic place">Reset</button><button id="done" title="Stop moving">Done</button></div>
   </section>
 </main>
 <div id="zoom"><img alt=""></div>
+<dialog id="delbox">
+  <form method="dialog" id="delform">
+    <h3>Delete</h3>
+    <div class="muted" style="margin-bottom:10px">Nothing is wiped at once: it goes into a trash folder
+      (outputs/slicer/.trash or the project's trash/) and can be brought back.</div>
+    <div class="row"><select id="delwhat" aria-label="What to delete"></select></div>
+    <div class="muted" id="delerror"></div>
+    <div class="buttons"><button type="submit" class="main" id="delgo">Delete</button><button type="button" id="delcancel">Cancel</button></div>
+  </form>
+</dialog>
 <dialog id="newbox">
   <form method="dialog" id="newform">
     <h3>A new character</h3>
@@ -138,6 +164,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { TransformControls } from "three/addons/controls/TransformControls.js";
 
 const $ = s => document.querySelector(s);
 const h = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag);
@@ -178,7 +205,7 @@ renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, came
 function arrange() {  // side by side (each part on the floor, in order) or each where it was made
   let x = 0; const ids = Object.keys(loaded).sort();
   for (const id of ids) { const o = loaded[id].object; o.visible = loaded[id].on; o.position.copy(loaded[id].home); }
-  for (const id of ids) { const o = loaded[id].object; o.scale.setScalar(1); }
+  for (const id of ids) { const o = loaded[id].object; o.scale.setScalar(1); o.quaternion.identity(); }
   if (sideBySide) {
     for (const id of ids) { const o = loaded[id].object; if (!o.visible) continue;
       const box = new THREE.Box3().setFromObject(o), size = box.getSize(new THREE.Vector3());
@@ -201,6 +228,8 @@ function arrange() {  // side by side (each part on the floor, in order) or each
         if (mine !== null && theirs !== null) o.position.z += theirs - mine; }
     }
   }
+  if (!sideBySide) for (const id of ids) { const p = loaded[id]; if (!p.manual) continue;  // moved by hand: exactly there
+    p.object.position.fromArray(p.manual.position); p.object.quaternion.fromArray(p.manual.quaternion); p.object.scale.fromArray(p.manual.scale); }
   $("#empty").style.display = ids.length ? "none" : "";
 }
 function frontDepth(object, lo, hi) {  // how far forward (+z: glTF faces +z) the surface reaches between heights lo and hi
@@ -226,14 +255,52 @@ function show3d(part) {  // a part's model: loaded once per new file (its addres
   if (have && have.url === url) { if (JSON.stringify(have.place) !== JSON.stringify(part.place)) { have.place = part.place; arrange(); } return; }
   loader.load(url, g => {
     if (have) parts.remove(have.object);
-    loaded[part.id] = { url, object: g.scene, home: g.scene.position.clone(), on: have ? have.on : true, name: part.name, place: part.place };
+    loaded[part.id] = { url, object: g.scene, home: g.scene.position.clone(), on: have ? have.on : true, name: part.name,
+                        place: part.place, manual: part.manual || null, opacity: have ? have.opacity : 1 };
+    if (have && have.opacity < 1) opacity(loaded[part.id], have.opacity);
     parts.add(g.scene); arrange(); legend(); if (!have) fit();
   }, undefined, e => console.warn("could not load", url, e));
+}
+function opacity(p, v) {  // see-through: 1 = solid
+  p.opacity = v;
+  p.object.traverse(m => { if (!m.isMesh) return; for (const mat of [].concat(m.material)) {
+    mat.transparent = v < 1; mat.opacity = v; mat.depthWrite = v >= 1; mat.needsUpdate = true; } });
 }
 function legend() {
   const el = $("#legend"); el.replaceChildren();
   for (const id of Object.keys(loaded).sort()) { const p = loaded[id];
-    el.append(h("span", { class: "chip" + (p.on ? "" : " off"), title: "Show or hide", onclick: () => { p.on = !p.on; arrange(); legend(); syncChecks(); } }, `${id.slice(0, 2)} ${p.name}`)); }
+    const slider = h("input", { type: "range", min: "0.1", max: "1", step: "0.05", title: "See-through", "aria-label": "See-through " + p.name });
+    slider.value = p.opacity ?? 1; slider.oninput = () => opacity(p, +slider.value);
+    el.append(h("span", { class: "layer" + (p.on ? "" : " off") + (selected === id ? " sel" : "") },
+      h("span", { class: "lname", title: "Show or hide", onclick: () => { p.on = !p.on; arrange(); legend(); } }, `${id.slice(0, 2)} ${p.name}`),
+      slider,
+      h("button", { type: "button", title: "Move, turn or scale it by hand", onclick: () => select(id) }, "Move"))); }
+}
+// ---- moving a layer by hand (saved as its manual.json; Reset goes back to the automatic place)
+const gizmo = new TransformControls(camera, renderer.domElement);
+scene.add(gizmo.getHelper ? gizmo.getHelper() : gizmo);
+gizmo.addEventListener("dragging-changed", e => { controls.enabled = !e.value; if (!e.value) saveHand(); });
+let selected = null;
+function select(id) {
+  selected = id && loaded[id] ? id : null;
+  if (selected) { if (sideBySide) { sideBySide = false; $("#layout").textContent = "Assembled"; arrange(); }
+                  gizmo.attach(loaded[selected].object); } else gizmo.detach();
+  $("#modes").classList.toggle("show", !!selected); legend();
+}
+for (const b of document.querySelectorAll("#modes [data-mode]")) b.onclick = () => {
+  gizmo.setMode(b.dataset.mode); for (const o of document.querySelectorAll("#modes [data-mode]")) o.classList.toggle("on", o === b); };
+addEventListener("keydown", e => { if (!selected || e.target.closest?.("textarea,input")) return;
+  const k = { w: "translate", e: "rotate", r: "scale" }[e.key.toLowerCase()]; if (k) document.querySelector(`#modes [data-mode=${k}]`).click();
+  if (e.key === "Escape") select(null); });
+$("#done").onclick = () => select(null);
+$("#reset").onclick = async () => { if (!selected) return; const p = loaded[selected]; p.manual = null;
+  try { await api("api/place", { project: current, id: selected, manual: null }); } catch (e) { alert(e.message); }
+  arrange(); gizmo.attach(p.object); };
+async function saveHand() {
+  if (!selected) return; const o = loaded[selected].object;
+  const manual = { position: o.position.toArray(), quaternion: o.quaternion.toArray(), scale: o.scale.toArray() };
+  loaded[selected].manual = manual;
+  try { await api("api/place", { project: current, id: selected, manual }); } catch (e) { alert(e.message); }
 }
 function syncChecks() {}
 
@@ -275,7 +342,7 @@ function message(m, st, last) {
   if (m.kind === "working" && !(st.waiting || []).some(r => r.part === m.part)) el.classList.add("done");
   if (!st.parts[m.part] && m.part !== "_plan" && m.kind === "step") return el;
   if ((m.image === "source" || m.image === "sources") && (st.source_urls || []).length)
-    el.append(h("div", { class: "pics" }, ...st.source_urls.map((u, i) => pic(u, `#${i + 1}`))));
+    el.append(h("div", { class: "pics" }, ...st.source_urls.map((u, i) => u ? pic(u, `#${i + 1}`) : null).filter(Boolean)));
   if (m.sources && (st.source_urls || []).length)
     el.append(h("div", { class: "pics" }, ...m.sources.filter(i => st.source_urls[i]).map(i => pic(st.source_urls[i], `#${i + 1}`))));
   if (m.images) el.append(h("div", { class: "pics" }, ...m.images.map((u, i) => pic(u, (m.sources ? ["grey"] : ["coloured", "grey"])[i] || ""))));
@@ -352,6 +419,25 @@ async function refresh() {
     $("#status").textContent = `${made} of ${Object.keys(st.parts).length} parts in 3D`; $("#status").className = "muted";
   } catch (e) { $("#status").textContent = e.message; $("#status").className = "error"; }
 }
+// ---- delete (into the trash)
+$("#del").onclick = async () => {
+  if (!current) return;
+  const st = await api("api/chat?name=" + encodeURIComponent(current));
+  const opts = [h("option", { value: "project|" }, `The whole project "${current}"`)];
+  for (const p of Object.values(st.parts)) if (p.status !== "planned") opts.push(h("option", { value: "part|" + p.id }, `Part ${p.id.slice(0, 2)} ${p.name}: its pictures and model`));
+  (st.source_urls || []).forEach((u, i) => { if (u) opts.push(h("option", { value: "picture|" + i }, `Picture #${i + 1}`)); });
+  $("#delwhat").replaceChildren(...opts); $("#delerror").textContent = ""; $("#delbox").showModal();
+};
+$("#delcancel").onclick = () => $("#delbox").close();
+$("#delform").addEventListener("submit", async e => {
+  e.preventDefault(); const [what, target] = $("#delwhat").value.split("|");
+  if (what === "project" && prompt(`Type the project's name to delete it: ${current}`) !== current) return;
+  try { await api("api/delete", { project: current, what, target });
+        $("#delbox").close();
+        if (what === "project") { store.set("slicer.project", ""); await start(true); }
+        else { if (what === "part" && loaded[target]) { parts.remove(loaded[target].object); delete loaded[target]; legend(); arrange(); } lastKey = ""; refresh(); } }
+  catch (err) { $("#delerror").textContent = err.message; }
+});
 // ---- a new character
 const readAs = f => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); });
 $("#new").onclick = () => { $("#newform").reset(); $("#newpreview").replaceChildren(); $("#newerror").textContent = ""; $("#newbox").showModal(); };

@@ -9,6 +9,7 @@ GPU if there is one (about 4 GB of VRAM), else on the CPU.
     python scripts/inpainting/find_part.py --download        # only download the models (into local_ai_models/mask)
 
 views.json:  {"word": "helmet", "views": [{"picture": "view_00.png", "clicks": [[x, y], ...]}, ...]}
+             or per view "boxes": [[x0, y0, x1, y1], ...] in pixels: SAM cuts what is in them, no word needed
              (clicks are the pixels where the user's clicks are seen in that picture; all of them are
              spots on the same part, e.g. the foot and the arm of one leg)
 Writes:      <folder>/masks.npz   one yes/no picture per view, named like its picture ("view_00"); a
@@ -158,7 +159,10 @@ def main():
     pictures, masks, found = [], [], {}
     for i, view in enumerate(job["views"]):
         picture = load_picture(os.path.join(args.folder, view["picture"]))
-        mask, note = finder.find(picture, word, view.get("clicks") or [])
+        if view.get("boxes"):  # boxes given (e.g. by Qwen3-VL, which places things better than the word alone)
+            mask, note = finder.cut_out(picture, boxes=view["boxes"]), f"{len(view['boxes'])} given box(es)"
+        else:
+            mask, note = finder.find(picture, word, view.get("clicks") or [])
         pictures.append(picture)
         masks.append(mask if mask is not None else np.zeros(picture.size[::-1], bool))
         if mask is not None:

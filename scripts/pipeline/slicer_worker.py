@@ -254,9 +254,9 @@ def make_picture(name, start, instruction, only=""):
 
 
 def make_3d(name, part_id):
-    """Good, make it 3D: the part's transparent coloured and grey pictures through make_model.py (de-light, TRELLIS.2
-    shape with its own colours, at 1024: about 6 to 10 minutes); the result is the part's model.glb, which the page
-    shows on the right by itself."""
+    """Good, make it 3D: the part's transparent coloured and grey pictures through make_model.py, the full pipeline
+    (de-light, TRELLIS.2 at the machine's resolution, MV-Adapter colours merged: about 20 to 30 minutes); the result
+    is the part's model.glb, which the page shows on the right by itself."""
     import shutil
     import subprocess
     out = os.path.join(ROOT, name, "parts", part_id)
@@ -269,7 +269,7 @@ def make_3d(name, part_id):
     t = time.time()
     work = os.path.join(out, "3d")
     run = subprocess.run([sys.executable, os.path.join(HERE, "make_model.py"), "--pictures", colour, "--grey", grey,
-                          "--out", work, "--resolution", "1024", "--no-mvadapter"],
+                          "--out", work],  # the full pipeline at the machine's resolution (the user, Nov 24)
                          capture_output=True, text=True, cwd=PROJECT)
     open(os.path.join(out, "3d_log.txt"), "w").write(run.stdout + run.stderr)
     done = [line for line in run.stdout.splitlines() if line.startswith("done in")]
@@ -312,45 +312,140 @@ def place(name, part_id):
                "h": float((p[3] - p[2]) / fh), "w": float((p[1] - p[0]) / fh)}, open(out, "w"))
 
 
-def make_step(name, part_id):
-    """The Make it / Make it again button: the step's coloured picture, then the same as grey clay."""
-    import slicer_pictures
+BOXES = ('Find {what} in this picture. Answer with JSON only: {{"boxes": [[x0, y0, x1, y1], ...]}}: one box around '
+         'each separate piece of it (a pair of boots: two boxes), in 0-1000 coordinates of the picture.')
+
+
+def boxes_for(picture, words):
+    """Qwen3-VL's boxes (pixels of `picture`) around each of `words` (several words: the union)."""
+    from organise_pictures import ask, to_pixels
+    m, processor = model()
+    small = picture.convert("RGB").resize((1024, 1024))
+    found = []
+    for word in words:
+        data, text = ask(m, processor, [small], BOXES.format(what=word), max_tokens=200)
+        for b in data.get("boxes") or []:
+            px = to_pixels(b, picture.width, picture.height, (1024, 1024))
+            if px is not None:
+                found.append([int(v) for v in px])
+    return found
+
+
+def piece_boxes(name):
+    """Every piece's boxes on the A-pose picture, found once for all (parts[*]["boxes"] in slicer.json). Qwen3-VL
+    sometimes adds another piece's boxes to a piece (demon's boot boxes came with the corset, the cape and the head):
+    a box found for several pieces stays with the one whose boxes it makes up the largest share of."""
     from PIL import Image
+    folder = os.path.join(ROOT, name)
+    raw = json.load(open(os.path.join(folder, "slicer.json")))
+    apose = Image.open(os.path.join(folder, "parts", "00_apose", "colour_clear.png"))
+    on_grey = Image.new("RGB", apose.size, (128, 128, 128))
+    on_grey.paste(apose, (0, 0), apose)
+    pieces = [p for p in raw["parts"] if p.get("kind") == "piece"]
+    found = {p["id"]: boxes_for(on_grey, p.get("words") or [p["what"]]) for p in pieces}
+    same = lambda a, b: all(abs(x - y) < 0.02 * apose.width for x, y in zip(a, b))
+    for pid, boxes in found.items():
+        keep = []
+        for box in boxes:
+            owners = [q for q, other in found.items() if any(same(box, o) for o in other)]
+            share = {q: sum(any(same(o, x) for x in found[q]) for o in found[q] if same(o, box)) / len(found[q]) for q in owners}
+            if max(share, key=share.get) == pid:
+                keep.append(box)
+        found[pid] = keep or boxes
+    for p in raw["parts"]:
+        if p["id"] in found:
+            p["boxes"] = found[p["id"]]
+    json.dump(raw, open(os.path.join(folder, "slicer.json.tmp"), "w"), indent=1, ensure_ascii=False)
+    os.replace(os.path.join(folder, "slicer.json.tmp"), os.path.join(folder, "slicer.json"))
+    print(time.strftime("%H:%M:%S"), "boxes", name, {k: len(v) for k, v in found.items()}, flush=True)
+    return found
+
+
+def kind_of(part):
+    return part.get("kind") or {"00_apose": "apose", "01_base_body": "base"}.get(part["id"], "legacy")
+
+
+def make_step(name, part_id):
+    """The Make it / Make it again button, by the part's kind:
+    apose  the whole character in an A-pose from the uploaded picture (the reference; no 3D)
+    base   the A-pose's own body as a grey mannequin (checked), then in the skin's colour from the A-pose
+    piece  cut out of the A-pose by its boxes and completed where it was hidden (slicer_pictures.piece)
+    head   the A-pose made bald, the head and neck cut out of it
+    then the same as grey clay, lined up on the A-pose's frame like the colour."""
+    import slicer_pictures as sp
+    from PIL import Image, ImageOps
     folder = os.path.join(ROOT, name)
     request_file = os.path.join(folder, "parts", part_id, "request.json")
     request = json.load(open(request_file))
     raw = json.load(open(os.path.join(folder, "slicer.json")))
+    part = next(p for p in raw["parts"] if p["id"] == part_id)
+    kind = kind_of(part)
+    out = os.path.join(folder, "parts", part_id)
     try:
         if request["do"] == "make_3d":
+            if part.get("no3d"):
+                slicer_says(name, "The A-pose is the reference the layers are cut from: it isn't made in 3D.", part_id=part_id)
+                return
             return make_3d(name, part_id)
-        print(time.strftime("%H:%M:%S"), "making", name, part_id, flush=True)
-        let_go(quiet=False)
-        base_path = os.path.join(folder, "parts", "00_apose", "colour.png")  # later parts start from the A-pose
-        if part_id == "00_apose" or not os.path.isfile(base_path):
-            base_path = os.path.join(PROJECT, raw["sources"][0])
-        seed = 1 + sum(1 for f in os.listdir(os.path.join(folder, "parts", part_id)) if f.startswith("colour"))
-        out = os.path.join(folder, "parts", part_id)
-        if part_id == "01_base_body":
-            raw_colour, _, _, note = base_body(Image.open(base_path), request["prompt"], seed)
+        print(time.strftime("%H:%M:%S"), "making", name, part_id, kind, flush=True)
+        seed = 1 + sum(1 for f in os.listdir(out) if f.startswith("colour_raw"))
+        apose_path = os.path.join(folder, "parts", "00_apose", "colour_clear.png")
+        if kind != "apose" and not os.path.isfile(apose_path):
+            slicer_says(name, "Make the A-pose first: every layer is cut from it.", part_id=part_id)
+            return
+        grey_clear = None
+        if kind == "apose" or kind == "legacy":
+            let_go(quiet=False)
+            source = Image.open(os.path.join(PROJECT, raw["sources"][0]) if kind == "apose" else apose_path)
+            raw_colour = sp.edit(source, request["prompt"], seed)
+            raw_colour.save(os.path.join(out, "colour_raw.png"))
+            colour_clear, colour = sp.cut_out(raw_colour, keep_frame=kind != "apose")
+            let_go(quiet=False)
+            raw_grey = sp.edit(colour, request["grey_prompt"], seed)
+            raw_grey.save(os.path.join(out, "grey_raw.png"))
+            grey_clear, grey = sp.cut_out(raw_grey, keep_frame=True)
+        elif kind == "base":
+            apose = Image.open(apose_path)
+            raw_colour, mannequin, _, note = base_body(apose, request["prompt"], seed)
+            raw_colour.save(os.path.join(out, "colour_raw.png"))
             if note:
                 slicer_says(name, f"Base body: {note}", part_id=part_id)
-        else:
-            raw_colour = slicer_pictures.edit(Image.open(base_path), request["prompt"], seed)
-        raw_colour.save(os.path.join(out, "colour_raw.png"))
-        only = None if part_id in ("00_apose", "01_base_body") else next(
-            (p["name"] for p in raw["parts"] if p["id"] == part_id), None)  # a piece alone: nothing else stays
-        frame = part_id != "00_apose"  # the layers keep the A-pose's frame: they line up with it
-        colour_clear, colour = slicer_pictures.cut_out(raw_colour, only=only, keep_frame=frame)
-        if part_id != "01_base_body":
             let_go(quiet=False)
-            raw_grey = slicer_pictures.edit(colour, request["grey_prompt"], seed)
-            raw_grey.save(os.path.join(out, "grey_raw.png"))
-            grey_clear, grey = slicer_pictures.cut_out(raw_grey, only=only, keep_frame=True)
-        else:  # the mannequin is grey already: its clay is itself in grey, no second edit that could add anything
-            from PIL import ImageOps
-            g = ImageOps.grayscale(colour_clear.convert("RGB")).convert("RGB")
-            grey_clear = g.convert("RGBA"); grey_clear.putalpha(colour_clear.getchannel("A"))
-            grey = Image.new("RGB", grey_clear.size, slicer_pictures.GREY); grey.paste(grey_clear, (0, 0), grey_clear)
+            tone = sp.skin_tone(apose)
+            colour_clear, colour = sp.tint(mannequin, tone) if tone is not None else (mannequin, None)
+            if colour is None:
+                colour = Image.new("RGB", mannequin.size, sp.GREY); colour.paste(mannequin, (0, 0), mannequin)
+            g = ImageOps.grayscale(mannequin.convert("RGB")).convert("RGBA")
+            g.putalpha(mannequin.getchannel("A"))
+            grey_clear = g
+            grey = Image.new("RGB", g.size, sp.GREY); grey.paste(g, (0, 0), g)
+        elif kind == "piece":
+            boxes = part.get("boxes")
+            if boxes is None:
+                boxes = piece_boxes(name).get(part_id, [])
+            let_go(quiet=False)
+            made = sp.piece(Image.open(apose_path), boxes, part["what"], seed) if boxes else None
+            if made is None:
+                slicer_says(name, f"I couldn't find **{part['name']}** on the A-pose picture. Tell me where it is "
+                                  "(for example: on the left arm), or skip it.", part_id=part_id)
+                return
+            colour_clear, colour, the_cut = made
+            the_cut.save(os.path.join(out, "cut.png"))
+        elif kind == "head":
+            let_go(quiet=False)
+            bald_raw = sp.edit(Image.open(apose_path), request["prompt"], seed)
+            bald_raw.save(os.path.join(out, "colour_raw.png"))
+            bald, _ = sp.cut_out(bald_raw, keep_frame=True)
+            boxes = boxes_for(bald, ["the head with the face and the neck"])
+            let_go(quiet=False)
+            colour_clear = sp.cut(bald, boxes[:1]) if boxes else None
+            if colour_clear is None:
+                slicer_says(name, "I couldn't find the head on the bald picture: try Make it again.", part_id=part_id)
+                return
+            colour = Image.new("RGB", colour_clear.size, sp.GREY); colour.paste(colour_clear, (0, 0), colour_clear)
+        if grey_clear is None:  # the same layer as grey clay, lined up by its outline
+            let_go(quiet=False)
+            grey_clear, grey = sp.redo(colour_clear, request["grey_prompt"], seed, match="shape", room=1.4)
         colour_clear.save(os.path.join(out, "colour_clear.png"))
         grey_clear.save(os.path.join(out, "grey_clear.png"))
         grey.save(os.path.join(out, "grey.png"))
