@@ -220,7 +220,8 @@ def stop():
 
 COMPLETE = ("This picture shows {piece} cut out from a character: the parts of it that were hidden behind other things "
             "are missing. Complete it into the whole {piece}, empty, nobody wearing it: fill in only the missing parts "
-            "in the same style, colours and material, and keep every visible part exactly as it is. Nothing else in "
+            "in the same style, colours and material, and keep every visible part exactly as it is. Openings, holes and "
+            "cut-outs in it stay open and empty (where skin showed through, it is now empty). Nothing else in "
             "the picture: no body, no skin, no head, no other clothes. Plain flat #808080 grey background, soft even "
             "studio light, no shadow, no text.")
 

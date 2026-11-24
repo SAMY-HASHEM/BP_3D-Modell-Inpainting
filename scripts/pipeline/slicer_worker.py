@@ -479,6 +479,11 @@ def make_step(name, part_id):
         if grey_clear is None:  # the same layer as grey clay, lined up by its outline
             let_go(quiet=False)
             grey_clear, grey = sp.redo(colour_clear, request["grey_prompt"], seed, match="shape", room=1.4)
+        # the clay is grey for sure: the clay edit kept demon's red heart (Nov 24); only the light and shade stay
+        g = ImageOps.grayscale(grey_clear.convert("RGB")).convert("RGBA")
+        g.putalpha(grey_clear.getchannel("A"))
+        grey_clear = g
+        grey = Image.new("RGB", g.size, sp.GREY); grey.paste(g, (0, 0), g)
         colour_clear.save(os.path.join(out, "colour_clear.png"))
         grey_clear.save(os.path.join(out, "grey_clear.png"))
         grey.save(os.path.join(out, "grey.png"))
