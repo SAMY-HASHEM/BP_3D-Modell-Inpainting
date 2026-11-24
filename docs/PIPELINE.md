@@ -46,6 +46,7 @@ pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shap
 - The seed turns the figure: TRELLIS.2 put the 3/4 picture's front at a different angle for each seed. The score's
   camera search started at the front (±50°) only and gave seed 0 an outline of 0.79; searched all around (`any`,
   now the default for one picture) 0.866. Seeds: 0 → 0.866, 2 → 0.852, 1 → 0.676 (seed 1 also looks worst).
+  Erik's seeds scored the same either way (his front was already the right camera).
 - Seed 0 (scored best) and seed 2 look about as good; seed 2 has the fuller hair and cape, seed 0 the cleaner front.
 - The automatic parts (Qwen3-VL) found helmet, boots, sword, cape; the hair and the ring got no detail map.
 - Pixal3D (`--shaper pixal3d`, 14 min in one go) follows the picture's pose most closely: outline 0.939 against
@@ -57,6 +58,7 @@ pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shap
 - The retopology's colour is baked twice (short rays, then long ones where the short missed: 5-10 % of the surface)
   into larger UV islands packed tighter: the texture used 13 % -> 43 % (motorcycle girl), 62 % (knight). The knight
   redone with all of it: 37 k quads, the rig carried over, the axe grip PASS (Sciebo knight_axe v16).
+- A finer skin (voxel 2 instead of 3) split the motorcycle girl's hair into more strands but tore it: 3 stays.
 
 ## The numbers (`scripts/tools/score_model.py`)
 
