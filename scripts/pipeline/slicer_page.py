@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PAGE = os.path.join(PROJECT, "user_interface_model", "slicer.html")
 ROOT = os.path.join(PROJECT, "outputs", "slicer")
-FILES = ("colour.png", "grey.png", "model.glb")  # what one part can have, in the order it is made
+FILES = ("colour.png", "grey.png", "colour_back_clear.png", "grey_back_clear.png", "model.glb")  # what a part can have
 EDITABLE = ("prompt", "grey_prompt", "what", "name")  # what the page may change in a part
 
 
@@ -161,9 +161,10 @@ def follow(name, plan, chat):
             apose_done = part.get("no3d") and index == chat["step"]
             chat["messages"].append({"who": "slicer", "part": part["id"],
                 "text": f"The pictures for **{part['name']}** are ready: coloured" + (f" (#{numbered[0] + 1})" if numbered else "")
-                        + " and grey. Are they right?",
+                        + " and grey" + (", front and back" if "colour_back_clear" in files else "") + ". Are they right?",
                 **({"sources": numbered} if numbered else {}),
-                "images": ([] if numbered else [files["colour"]]) + ([files["grey"]] if "grey" in files else []),
+                "images": ([] if numbered else [files["colour"]]) + ([files["grey"]] if "grey" in files else [])
+                          + [files[k] for k in ("colour_back_clear", "grey_back_clear") if k in files],
                 "buttons": ["remake_pictures"] if part.get("no3d") else ["make_3d", "remake_pictures"]})
             if apose_done:  # the reference has no 3D step: on to the next part
                 next_step(plan, chat)

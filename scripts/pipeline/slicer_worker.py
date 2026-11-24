@@ -261,6 +261,9 @@ def make_3d(name, part_id):
     import subprocess
     out = os.path.join(ROOT, name, "parts", part_id)
     colour, grey = os.path.join(out, "colour_clear.png"), os.path.join(out, "grey_clear.png")
+    colours, greys = [colour], [grey]
+    if os.path.isfile(os.path.join(out, "colour_back_clear.png")) and os.path.isfile(os.path.join(out, "grey_back_clear.png")):
+        colours.append(os.path.join(out, "colour_back_clear.png")); greys.append(os.path.join(out, "grey_back_clear.png"))
     if not (os.path.isfile(colour) and os.path.isfile(grey)):
         slicer_says(name, "This part has no pictures yet: press Make it first.", part_id=part_id)
         return
@@ -268,8 +271,12 @@ def make_3d(name, part_id):
     print(time.strftime("%H:%M:%S"), "3D", name, part_id, flush=True)
     t = time.time()
     work = os.path.join(out, "3d")
-    run = subprocess.run([sys.executable, os.path.join(HERE, "make_model.py"), "--pictures", colour, "--grey", grey,
-                          "--out", work],  # the full pipeline at the machine's resolution (the user, Nov 24)
+    base = part_id == "01_base_body"
+    if os.path.isdir(work):  # a new try: the old stages would be skipped as "already there"
+        shutil.rmtree(work)
+    run = subprocess.run([sys.executable, os.path.join(HERE, "make_model.py"), "--pictures", *colours, "--grey", *greys,
+                          "--out", work, *(["--no-mvadapter"] if base else [])],  # full pipeline (the user, Nov 24);
+                         # the base body's even skin without MV-Adapter: its merge made it blotchy
                          capture_output=True, text=True, cwd=PROJECT)
     open(os.path.join(out, "3d_log.txt"), "w").write(run.stdout + run.stderr)
     done = [line for line in run.stdout.splitlines() if line.startswith("done in")]
@@ -524,6 +531,29 @@ def make_step(name, part_id):
             colour_clear, colour, grey_clear, grey, box = sp.fill(colour_clear, grey_clear)
             json.dump({"box": box, "frame": sp.SIZE, "note": "where this picture sits on the A-pose: its square in "
                        "the A-pose picture's pixels"}, open(os.path.join(out, "frame.json"), "w"))
+        if kind != "apose":  # the back view too: TRELLIS.2 then sees both sides (the base body's back was guessed)
+            let_go(quiet=False)
+            if kind == "base":  # the mannequin turned round, then the same skin as the front
+                grey_back_clear, grey_back = sp.back(grey_clear, "smooth matte grey mannequin with exactly this body "
+                                                     "shape, in the same A-pose", seed)
+                g = ImageOps.grayscale(grey_back_clear.convert("RGB")).convert("RGBA"); g.putalpha(grey_back_clear.getchannel("A"))
+                grey_back_clear = g
+                tone = sp.skin_tone(Image.open(apose_path))
+                colour_back_clear, _ = sp.tint(grey_back_clear, tone) if tone is not None else (grey_back_clear, None)
+                let_go(quiet=False)
+                real_raw = sp.edit(Image.composite(colour_back_clear.convert("RGB"), Image.new("RGB", colour_back_clear.size, sp.GREY),
+                                                   colour_back_clear.getchannel("A")), sp.SKIN, seed)
+                real_clear, _ = sp.cut_out(real_raw, keep_frame=True)
+                if doll_ok(real_clear):
+                    colour_back_clear = real_clear
+            else:
+                colour_back_clear, _ = sp.back(colour_clear, part.get("what") or part["name"], seed)
+                let_go(quiet=False)
+                grey_back_clear, _ = sp.redo(colour_back_clear, request["grey_prompt"], seed, match="shape", room=1.2)
+                g = ImageOps.grayscale(grey_back_clear.convert("RGB")).convert("RGBA"); g.putalpha(grey_back_clear.getchannel("A"))
+                grey_back_clear = g
+            colour_back_clear.save(os.path.join(out, "colour_back_clear.png"))
+            grey_back_clear.save(os.path.join(out, "grey_back_clear.png"))
         colour_clear.save(os.path.join(out, "colour_clear.png"))
         grey_clear.save(os.path.join(out, "grey_clear.png"))
         grey.save(os.path.join(out, "grey.png"))

@@ -383,3 +383,17 @@ def fill(colour_clear, grey_clear, margin=0.05):
         grey = Image.new("RGB", (SIZE, SIZE), GREY); grey.paste(clear, (0, 0), clear)
         out += [clear, grey]
     return out[0], out[1], out[2], out[3], box
+
+
+BACK = ("Show the same {thing} from directly behind, as if it were turned around 180 degrees: its back side, at the "
+        "same size and position in the picture, the same shape, style, colours and material. Nothing else in the "
+        "picture. Plain flat #808080 grey background, soft even studio light, no shadow, no text.")
+
+
+def back(front_clear, thing, seed=1):
+    """The back view of a filled layer picture (the same size and place in the picture): (clear, on grey). One picture
+    only showed TRELLIS.2 the front: it guessed the back (the base body's back and bottom came out flat and glued)."""
+    on_grey = Image.new("RGB", front_clear.size, GREY)
+    on_grey.paste(front_clear, (0, 0), front_clear)
+    raw = edit(on_grey, BACK.format(thing=thing), seed)
+    return cut_out(raw, keep_frame=True)

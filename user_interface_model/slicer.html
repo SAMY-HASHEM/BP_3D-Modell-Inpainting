@@ -346,7 +346,7 @@ function message(m, st, last) {
     el.append(h("div", { class: "pics" }, ...st.source_urls.map((u, i) => u ? pic(u, `#${i + 1}`) : null).filter(Boolean)));
   if (m.sources && (st.source_urls || []).length)
     el.append(h("div", { class: "pics" }, ...m.sources.filter(i => st.source_urls[i]).map(i => pic(st.source_urls[i], `#${i + 1}`))));
-  if (m.images) el.append(h("div", { class: "pics" }, ...m.images.map((u, i) => pic(u, (m.sources ? ["grey"] : ["coloured", "grey"])[i] || ""))));
+  if (m.images) el.append(h("div", { class: "pics" }, ...m.images.map((u, i) => pic(u, (m.sources ? ["grey", "back", "back, grey"] : ["coloured", "grey", "back", "back, grey"])[i] || ""))));
   const part = m.part && st.parts[m.part];
   if (m.kind === "step" && part && last) el.append(promptEditor(part));
   if (m.buttons && (part || m.part === "_plan")) {
