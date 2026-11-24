@@ -179,7 +179,7 @@ function editor(part, field, label) {
   const box = h("textarea", { "aria-label": label, "data-field": field, "data-id": part.id });
   box.value = part[field] || "";
   box.addEventListener("change", async () => {
-    try { await api("/api/part", { project: current, id: part.id, field, value: box.value });
+    try { await api("api/part", { project: current, id: part.id, field, value: box.value });
           saved.textContent = "saved"; saved.className = "saved show"; setTimeout(() => saved.className = "saved", 1500); }
     catch (e) { saved.textContent = e.message; saved.className = "saved show error"; }
   });
@@ -217,7 +217,7 @@ function changed(plan) {  // what the page needs to redraw: files and statuses, 
 async function refresh() {
   if (!current) return;
   try {
-    const plan = await api("/api/project?name=" + encodeURIComponent(current));
+    const plan = await api("api/project?name=" + encodeURIComponent(current));
     const key = changed(plan);
     if (key !== shown[current] && !(document.activeElement?.tagName === "TEXTAREA")) { render(plan); shown[current] = key; }
     for (const part of plan.parts) show3d(part);
@@ -227,7 +227,7 @@ async function refresh() {
 }
 async function start() {
   try {
-    const names = await api("/api/projects");
+    const names = await api("api/projects");
     const sel = $("#project"); sel.replaceChildren(...names.map(n => h("option", { value: n }, n)));
     current = names.includes(store.get("slicer.project")) ? store.get("slicer.project") : names[0] || null;
     if (current) sel.value = current;

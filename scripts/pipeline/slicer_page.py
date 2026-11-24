@@ -9,7 +9,10 @@ colour.png (the coloured reference), grey.png (the same as grey clay), model.glb
 every two seconds and loads what is new, so a part made by a script (or by hand) appears by itself.
 
     python scripts/pipeline/slicer_page.py            # then open http://127.0.0.1:8780
-    (on the uni server, from your PC: ssh -L 8780:127.0.0.1:8780 <server>, then the same address)
+    on the uni server: https://nc.hcigroup.de/user/<your name>/proxy/8780/ (JupyterHub's login; jupyter-server-proxy)
+    or from your PC: ssh -L 8780:127.0.0.1:8780 <server>, then http://127.0.0.1:8780
+
+Every address in the page is relative, so it works behind such a path too.
 
 Only on this computer (127.0.0.1): it can change the plans.
 """
@@ -51,14 +54,14 @@ def state(name):
         for f in FILES:
             path = os.path.join(folder, rel, f)
             if os.path.isfile(path):
-                found[f.split(".")[0]] = f"/files/{name}/{rel}/{f}?t={int(os.path.getmtime(path))}"
+                found[f.split(".")[0]] = f"files/{name}/{rel}/{f}?t={int(os.path.getmtime(path))}"
         return found
     for part in plan.get("parts", []):
         part["files"] = files(os.path.join("parts", part["id"]))
         part["status"] = ("made" if "model" in part["files"] else "pictures" if part["files"] else "planned")
     source = plan.get("source")
     if source and os.path.isfile(os.path.join(PROJECT, source)):
-        plan["source_url"] = f"/source/{name}?t={int(os.path.getmtime(os.path.join(PROJECT, source)))}"
+        plan["source_url"] = f"source/{name}?t={int(os.path.getmtime(os.path.join(PROJECT, source)))}"
     return plan
 
 
