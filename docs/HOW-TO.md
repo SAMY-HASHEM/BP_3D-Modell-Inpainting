@@ -362,19 +362,30 @@ Open **https://nc.hcigroup.de/user/so26-samy.hashem/proxy/8780/** (needs `jupyte
 1. **+ New**: a name (pictures optional). Then send the pictures in the chat: **📎** next to Send, or drop them on
    the chat, or paste them (Ctrl+V); write anything the Slicer should know with them (it is passed to the planner).
    More pictures later are added as references, with a button to plan the parts again.
-2. The Slicer looks at them (Qwen3-VL, about 20 s) and plans the parts: always **00 the whole character in an
-   A-pose**, then **01 the centre** (the torso without head, arms and legs), then head, hair, arms, legs, loose
-   clothes and every prop. The prompts come from one template with the locks: 2048 × 2048, flat `#808080` grey,
-   a coloured and a grey (clay) picture per part.
-3. Ask for pictures in plain words, like with Gemini ("make only the character in an A-pose with no background"):
-   Qwen3-VL writes an exact instruction from it, Qwen-Image-Edit 2511 paints it on grey (about a minute; image models
-   cannot paint "transparent", they paint a checkerboard), BiRefNet cuts the background out: a transparent 2048 PNG,
-   added to the chat as the next numbered picture (ask for changes to it by its number).
-4. The chat opens one step at a time: change the prompt if you want, then **Make it**; the pictures appear in the
-   chat (**Good, make it 3D** or **Make it again**), the model on the right, then the next part.
+2. The Slicer looks at them (Qwen3-VL, about 20 s) and plans the layers: always **00 the whole character in an
+   A-pose**, then **01 the base body** (the same body in plain underwear, no outfit, no accessories: what every piece
+   is put on), then **every piece alone**: hair, what is worn on the head, each piece of clothing, gloves, shoes,
+   accessories, props. The prompts come from one template with the locks: 2048 × 2048, flat `#808080` grey, a
+   coloured and a grey (clay) picture per part; a piece alone is asked for as a *ghost-mannequin* photo (hollow,
+   no body; "invisible mannequin" made the model draw a mannequin).
+3. Ask for pictures in plain words, like with Gemini ("make only the character in an A-pose with no background",
+   "the same but as the base body", "only the bodysuit alone"): Qwen3-VL writes an exact instruction from it,
+   Qwen-Image-Edit 2511 paints it on grey (about a minute; image models cannot paint "transparent", they paint a
+   checkerboard), BiRefNet cuts the background out and, for a piece alone, Grounding DINO + SAM keep only that piece
+   (the edit leaves other pieces floating around it). The result is a transparent 2048 PNG, the next numbered
+   picture in the chat (ask for changes to it by its number).
+4. The chat opens one step at a time: change the prompt if you want, then **Make it** (coloured, then the same as
+   grey clay: about 2 minutes); the pictures appear in the chat. **Good, make it 3D** sends them through
+   `make_model.py` (de-light, TRELLIS.2 at 1024, its own colours: about 6 to 10 minutes) and the model appears on
+   the right; then the next part. **Make it again** tries another seed.
+
+One model on the GPU at a time: the chat's Qwen3-VL (17 GB), the picture model (Qwen-Image-Edit in ComfyUI, about
+32 GB on the A40) and TRELLIS.2 take turns; whatever is loaded is let go after 10 quiet minutes. On the 24 GB PC
+ComfyUI keeps what doesn't fit in RAM (`configs/hardware/local_24gb.json`, "comfyui").
 
 A project is `outputs/slicer/<name>/`: `sources/`, `slicer.json` (the plan), `chat.json`, `parts/<id>/`
-(`colour.png`, `grey.png`, `model.glb`, `request.json` while it waits). `slicer_page.py --read <name>` prints the
+(`colour.png`, `grey.png` on grey, `colour_clear.png`, `grey_clear.png` transparent, `*_raw.png` the edit model's
+own, `model.glb`, `request.json` while it waits), `edits.jsonl` (every chat edit's instruction). `slicer_page.py --read <name>` prints the
 chat in the terminal, `--say <name> "text"` writes in it as the Slicer.
 
 ### 3. Look at the GPUs first

@@ -21,6 +21,7 @@ import argparse
 import io
 import json
 import os
+import sys
 import subprocess
 import time
 import urllib.parse
@@ -109,6 +110,19 @@ def ours():
         return False
 
 
+def comfy_flags():
+    """The machine's ComfyUI flags (configs/hardware/*.json, "comfyui"; COMFYUI_FLAGS overrides, e.g.
+    "--reserve-vram 21" plays a 24 GB card on the server's A40)."""
+    if os.environ.get("COMFYUI_FLAGS") is not None:
+        return os.environ["COMFYUI_FLAGS"].split()
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        from hardware import setting
+        return list(setting("comfyui", "flags", []))
+    except Exception:
+        return []
+
+
 def start_comfyui(report=print):
     """Starts ComfyUI if it isn't running; returns the process if this function started it. A ComfyUI that answers
     at COMFYUI but is not this project's (someone else's, without Qwen-Image-Edit) is never used."""
@@ -128,7 +142,8 @@ def start_comfyui(report=print):
         folders += [f"--{kind}-directory", os.path.join(scratch, kind)]
     log = open(os.path.join(scratch, "comfyui.log"), "w")
     process = subprocess.Popen([os.path.join(COMFYUI_DIR, ".venv", "bin", "python"), "main.py", "--listen", "127.0.0.1",
-                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", model_paths(scratch), *folders],
+                                "--port", COMFYUI.rsplit(":", 1)[1], "--extra-model-paths-config", model_paths(scratch), *folders,
+                                *comfy_flags()],
                                cwd=COMFYUI_DIR, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(120):
         time.sleep(2)

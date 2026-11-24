@@ -56,5 +56,9 @@
  },
  "make_model": {
   "resolution": "1536"
+ },
+ "comfyui": {
+  "flags": [],
+  "note": "Qwen-Image-Edit 2511 (20 GB fp8) + its text encoder (8.8 GB): ComfyUI keeps in RAM what doesn't fit and loads it in turn"
  }
 }

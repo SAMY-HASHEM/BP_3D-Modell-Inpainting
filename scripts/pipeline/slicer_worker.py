@@ -196,6 +196,36 @@ def make_picture(name, start, instruction, only=""):
         running(name, False)
 
 
+def make_3d(name, part_id):
+    """Good, make it 3D: the part's transparent coloured and grey pictures through make_model.py (de-light, TRELLIS.2
+    shape with its own colours, at 1024: about 6 to 10 minutes); the result is the part's model.glb, which the page
+    shows on the right by itself."""
+    import shutil
+    import subprocess
+    out = os.path.join(ROOT, name, "parts", part_id)
+    colour, grey = os.path.join(out, "colour_clear.png"), os.path.join(out, "grey_clear.png")
+    if not (os.path.isfile(colour) and os.path.isfile(grey)):
+        slicer_says(name, "This part has no pictures yet: press Make it first.", part_id=part_id)
+        return
+    let_go()  # everything off the GPU: TRELLIS.2 needs it alone
+    print(time.strftime("%H:%M:%S"), "3D", name, part_id, flush=True)
+    t = time.time()
+    work = os.path.join(out, "3d")
+    run = subprocess.run([sys.executable, os.path.join(HERE, "make_model.py"), "--pictures", colour, "--grey", grey,
+                          "--out", work, "--resolution", "1024", "--no-mvadapter"],
+                         capture_output=True, text=True, cwd=PROJECT)
+    open(os.path.join(out, "3d_log.txt"), "w").write(run.stdout + run.stderr)
+    done = [line for line in run.stdout.splitlines() if line.startswith("done in")]
+    if run.returncode != 0 or not done:
+        last = (run.stderr.strip().splitlines() or run.stdout.strip().splitlines() or ["?"])[-1]
+        slicer_says(name, f"The 3D model didn't work: {last[:250]}\nThe log is parts/{part_id}/3d_log.txt.", part_id=part_id)
+        return
+    result = done[-1].split(": ", 1)[1].strip()
+    shutil.copy(result, os.path.join(out, "model.glb.tmp"))
+    os.replace(os.path.join(out, "model.glb.tmp"), os.path.join(out, "model.glb"))  # the chat announces it
+    print(time.strftime("%H:%M:%S"), "3D made", name, part_id, round((time.time() - t) / 60, 1), "min", flush=True)
+
+
 def make_step(name, part_id):
     """The Make it / Make it again button: the step's coloured picture, then the same as grey clay."""
     import slicer_pictures
@@ -206,9 +236,7 @@ def make_step(name, part_id):
     raw = json.load(open(os.path.join(folder, "slicer.json")))
     try:
         if request["do"] == "make_3d":
-            slicer_says(name, "Making the 3D model from here isn't connected yet: that's the next thing being built. "
-                              "The pictures are saved.", part_id=part_id)
-            return
+            return make_3d(name, part_id)
         print(time.strftime("%H:%M:%S"), "making", name, part_id, flush=True)
         let_go(quiet=False)
         base_path = os.path.join(folder, "parts", "00_apose", "colour.png")  # later parts start from the A-pose

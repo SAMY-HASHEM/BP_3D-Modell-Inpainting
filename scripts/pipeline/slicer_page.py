@@ -283,7 +283,7 @@ def say(name, text, action=None, part_id=None, files=None):
                 chat["messages"].append({"who": "slicer", "part": part["id"], "kind": "working",
                     "text": {"make_pictures": "Making the coloured and the grey picture…",
                              "remake_pictures": "Making the pictures again…",
-                             "make_3d": "Making the 3D model…"}[action]})
+                             "make_3d": "Making the 3D model (TRELLIS.2, about 6 to 10 minutes)…"}[action]})
         save(chat_path(name), chat)
 
 
