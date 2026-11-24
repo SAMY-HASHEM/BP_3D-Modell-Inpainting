@@ -76,7 +76,7 @@ class _Lock:
 
 LOCK = _Lock()
 ACTIONS = {"make_pictures": "Make it", "remake_pictures": "Make it again", "make_3d": "Good, make it 3D",
-           "skip": "Skip this part", "replan": "Plan the parts again"}
+           "skip": "Skip this part", "replan": "Plan the parts again", "restart": "Start again from step 1"}
 
 
 def chat_path(name):
@@ -165,7 +165,17 @@ def next_step(plan, chat):
         chat["messages"].append(step_message(plan, chat["step"]))
     else:
         chat["step"] = len(plan["parts"])
-        chat["messages"].append({"who": "slicer", "text": "All parts are made. Switch the right half to Assembled to see them together."})
+        made = [p["name"] for p in plan["parts"] if p.get("status") == "made"]
+        pictured = [p["name"] for p in plan["parts"] if p.get("status") == "pictures"]
+        missing = [p["name"] for p in plan["parts"] if p.get("status") == "planned"]
+        lines = ["That was the last step."]
+        if made:
+            lines.append(f"In 3D: {', '.join(made)}. Switch the right half to Assembled to see them together.")
+        if pictured:
+            lines.append(f"Pictures only (no 3D yet): {', '.join(pictured)}.")
+        if missing:
+            lines.append(f"Skipped, nothing made yet: {', '.join(missing)}.")
+        chat["messages"].append({"who": "slicer", "text": "\n".join(lines), "buttons": ["restart"], "part": "_plan"})
     return True
 
 
@@ -245,7 +255,10 @@ def say(name, text, action=None, part_id=None, files=None):
                                      "text": "I added the picture(s) to the references. Should I plan the parts again "
                                              "with them? (The parts already made stay where they are.)"})
             chat["answered"] = len(chat["messages"]) - 2
-        if action == "replan":
+        if action == "restart":
+            chat["step"] = 0
+            chat["messages"].append(step_message(plan, 0))
+        elif action == "replan":
             ask_plan(folder, text)
             raw = json.load(open(plan_file))
             raw["parts_before"] = raw.get("parts", [])

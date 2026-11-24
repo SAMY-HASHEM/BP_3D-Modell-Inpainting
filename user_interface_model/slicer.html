@@ -211,7 +211,7 @@ function syncChecks() {}
 
 // ---- the Slicer half: a chat, one step at a time
 let current = null, seen = -1, lastKey = "";
-const LABEL = { make_pictures: "Make it", remake_pictures: "Make it again", make_3d: "Good, make it 3D", skip: "Skip this part" };
+const LABEL = { make_pictures: "Make it", remake_pictures: "Make it again", make_3d: "Good, make it 3D", skip: "Skip this part", replan: "Plan the parts again", restart: "Start again from step 1" };
 async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const data = await r.json(); if (!r.ok) throw new Error(data.error || r.statusText); return data;
