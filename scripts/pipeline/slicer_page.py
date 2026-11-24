@@ -49,7 +49,32 @@ def projects():
     return sorted(n for n in os.listdir(ROOT) if os.path.isfile(os.path.join(ROOT, n, "slicer.json")))
 
 
-LOCK = threading.Lock()  # one writer at a time for the plans and the chats
+class _Lock:
+    """One writer at a time for the plans and the chats, across threads and across programs (the page server and
+    the worker both write a chat: a file lock, outputs/slicer/.lock)."""
+    def __init__(self):
+        self.thread = threading.RLock()
+        self.depth = 0
+
+    def __enter__(self):
+        import fcntl
+        self.thread.acquire()
+        if self.depth == 0:
+            os.makedirs(ROOT, exist_ok=True)
+            self.file = open(os.path.join(ROOT, ".lock"), "w")
+            fcntl.flock(self.file, fcntl.LOCK_EX)
+        self.depth += 1
+
+    def __exit__(self, *exc):
+        import fcntl
+        self.depth -= 1
+        if self.depth == 0:
+            fcntl.flock(self.file, fcntl.LOCK_UN)
+            self.file.close()
+        self.thread.release()
+
+
+LOCK = _Lock()
 ACTIONS = {"make_pictures": "Make it", "remake_pictures": "Make it again", "make_3d": "Good, make it 3D",
            "skip": "Skip this part", "replan": "Plan the parts again"}
 
@@ -72,7 +97,7 @@ def step_message(plan, index):
 
 
 def new_chat(name, plan):
-    if not plan.get("sources"):
+    if not plan.get("sources") and not plan.get("source"):
         return {"messages": [{"who": "slicer", "text": f"A new character: **{name}**.\nSend me one or more pictures of "
                               "it with 📎 below (or drop or paste them here). Front, back, coloured or grey: all help. "
                               "Write anything I should know with them."}],
@@ -154,7 +179,8 @@ def chat_state(name):
     for i, m in enumerate(chat["messages"]):
         m["n"] = i
     return {"messages": chat["messages"], "step": chat["step"], "parts": {p["id"]: p for p in plan["parts"]},
-            "source_url": plan.get("source_url"), "source_urls": plan.get("source_urls", []), "waiting": waiting(name)}
+            "source_url": plan.get("source_url"), "source_urls": plan.get("source_urls", []), "waiting": waiting(name),
+            "thinking": unanswered(name) is not None}
 
 
 def waiting(name):
@@ -231,6 +257,39 @@ def say(name, text, action=None, part_id=None, files=None):
                     "text": {"make_pictures": "Making the coloured and the grey picture…",
                              "remake_pictures": "Making the pictures again…",
                              "make_3d": "Making the 3D model…"}[action]})
+        save(chat_path(name), chat)
+
+
+def unanswered(name):
+    """Your newest message that got no answer yet (typed text, not a button), or None."""
+    path = chat_path(name)
+    if not os.path.isfile(path):
+        return None
+    chat = json.load(open(path))
+    done = chat.get("answered", -1)
+    for i in range(len(chat["messages"]) - 1, done, -1):
+        m = chat["messages"][i]
+        if m["who"] == "you" and not m.get("action") and m.get("text"):
+            return i
+    return None
+
+
+def answer(name, upto, text, new_prompt=None):
+    """The worker's answer to your messages up to `upto`; with new_prompt, the current step's prompt changes."""
+    with LOCK:
+        plan = state(name)
+        chat = load_chat(name, plan)
+        chat["answered"] = max(chat.get("answered", -1), upto)
+        message = {"who": "slicer", "text": text}
+        if new_prompt and chat["step"] < len(plan["parts"]):
+            part_id = plan["parts"][chat["step"]]["id"]
+            raw = json.load(open(plan_path(name)))
+            for p in raw["parts"]:
+                if p["id"] == part_id:
+                    p["prompt"] = new_prompt
+            save(plan_path(name), raw)
+            message["text"] += "\n\nI changed the prompt of this step (you can see it above, under the step)."
+        chat["messages"].append(message)
         save(chat_path(name), chat)
 
 

@@ -262,6 +262,7 @@ function drawChat(st) {
   const box = $("#messages"), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
   const lastWithButtons = [...st.messages].reverse().find(m => m.buttons);
   box.replaceChildren(...st.messages.map(m => message(m, st, m === lastWithButtons)));
+  if (st.thinking) box.append(h("div", { class: "msg slicer working" }, h("div", { class: "who" }, "Slicer"), "typing…"));
   if (atEnd || st.messages.length > seen) box.scrollTop = box.scrollHeight;
   seen = st.messages.length;
 }
@@ -302,7 +303,7 @@ async function refresh() {
   if (!current) return;
   try {
     const st = await api("api/chat?name=" + encodeURIComponent(current));
-    const key = JSON.stringify([st.messages.length, st.waiting, Object.values(st.parts).map(p => p.files)]);
+    const key = JSON.stringify([st.messages.length, st.waiting, st.thinking, Object.values(st.parts).map(p => p.files)]);
     const typing = document.activeElement?.closest?.(".prompt");
     if (key !== lastKey && !typing) { drawChat(st); lastKey = key; }
     for (const part of Object.values(st.parts)) show3d(part);

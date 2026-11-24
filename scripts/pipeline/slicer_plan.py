@@ -106,7 +106,7 @@ def plan_from(answer, name, sources):
             "parts": parts}
 
 
-def make_plan(folder, cpu=False, note=""):
+def make_plan(folder, cpu=False, note="", model=None):
     from organise_pictures import ask, load, shrink
     from describe_colours import on_grey
     plan_file = os.path.join(folder, "slicer.json")
@@ -115,7 +115,7 @@ def make_plan(folder, cpu=False, note=""):
         print(f"{len(old['sources'])} pictures: Qwen3-VL sees the first 4", flush=True)
     sources = old.get("sources") or sorted(
         os.path.relpath(os.path.join(folder, "sources", f), PROJECT) for f in os.listdir(os.path.join(folder, "sources")))
-    model, processor = load("Qwen/Qwen3-VL-8B-Instruct", cpu)
+    model, processor = model or load("Qwen/Qwen3-VL-8B-Instruct", cpu)
     images = [shrink(on_grey(Image.open(os.path.join(PROJECT, s))), 768) for s in sources[:4]]
     question = QUESTION + (f"\nWhat the user says about it (follow it): {note.strip()[:600]}" if note.strip() else "")
     answer, raw = ask(model, processor, images, question, max_tokens=900)
