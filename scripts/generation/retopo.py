@@ -244,6 +244,11 @@ def main():
         bpy.ops.mesh.normals_make_consistent(inside=False)
         bpy.ops.object.mode_set(mode="OBJECT")
         kind = "even triangles (fallback)"
+    select_only([work], work)  # all faces outward: Instant Meshes gave every model inside out (volume < 0: the knight,
+    bpy.ops.object.mode_set(mode="EDIT")  # the motorcycle girl, Malenia, Nov 24), so the bake's cage went inward and
+    bpy.ops.mesh.select_all(action="SELECT")  # thin parts got their other side's colour (Malenia's red cape black)
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
     work.data.transform(__import__("mathutils").Matrix.Scale(1 / scale, 4))
     # the corners back onto the original surface (the voxel surface has terraces of its voxels: they showed on the
     # knight's sleeves, Nov 23); the quads' layout stays, their shape is the original's
