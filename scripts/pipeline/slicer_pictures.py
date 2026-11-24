@@ -358,3 +358,28 @@ def tint(mannequin, tone):
     on_grey = Image.new("RGB", clear.size, GREY)
     on_grey.paste(clear, (0, 0), clear)
     return clear, on_grey
+
+
+def fill(colour_clear, grey_clear, margin=0.05):
+    """The layer filling its picture (the user, Nov 24: the piece right but small in a big empty picture): the square
+    around both pictures' outline (+ margin), cut from the A-pose's frame, Real-ESRGAN, back to SIZE. Returns
+    (colour clear, colour on grey, grey clear, grey on grey, box): box = that square in the frame's pixels, which is
+    where the filled picture sits on the A-pose (saved as frame.json next to it)."""
+    a = np.maximum(np.asarray(colour_clear.getchannel("A")), np.asarray(grey_clear.getchannel("A"))) > 128
+    ys, xs = np.nonzero(a)
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    side = int(max(x1 - x0, y1 - y0) * (1 + 2 * margin)) + 4
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    box = [int(cx - side // 2), int(cy - side // 2), int(cx - side // 2 + side), int(cy - side // 2 + side)]
+    out = []
+    for layer in (colour_clear, grey_clear):
+        crop = layer.crop(box)  # outside the frame: transparent
+        on_grey = Image.new("RGB", crop.size, GREY)
+        on_grey.paste(crop, (0, 0), crop)
+        big = upscale(on_grey) if side < SIZE else on_grey.resize((SIZE, SIZE), Image.LANCZOS)
+        big = big.resize((SIZE, SIZE), Image.LANCZOS)
+        alpha = crop.getchannel("A").resize((SIZE, SIZE), Image.LANCZOS)
+        clear = big.convert("RGBA"); clear.putalpha(alpha)
+        grey = Image.new("RGB", (SIZE, SIZE), GREY); grey.paste(clear, (0, 0), clear)
+        out += [clear, grey]
+    return out[0], out[1], out[2], out[3], box

@@ -300,7 +300,9 @@ def place(name, part_id):
         ys, xs = np.nonzero(alpha)
         return (xs.min(), xs.max(), ys.min(), ys.max()) if len(xs) else None
     apose = os.path.join(folder, "parts", "00_apose", "colour_clear.png")
-    mine = os.path.join(folder, "parts", part_id, "colour_clear.png")
+    mine = os.path.join(folder, "parts", part_id, "colour_frame.png")  # in place (colour_clear.png is filled)
+    if not os.path.isfile(mine):
+        mine = os.path.join(folder, "parts", part_id, "colour_clear.png")
     if os.path.isfile(os.path.join(folder, "parts", part_id, "own_frame.json")):  # not from the A-pose: by hand
         if os.path.isfile(out):
             os.remove(out)
@@ -516,6 +518,12 @@ def make_step(name, part_id):
         g.putalpha(grey_clear.getchannel("A"))
         grey_clear = g
         grey = Image.new("RGB", g.size, sp.GREY); grey.paste(g, (0, 0), g)
+        if kind != "apose":  # in place for the placement, filled for the 3D and the eye
+            colour_clear.save(os.path.join(out, "colour_frame.png"))
+            grey_clear.save(os.path.join(out, "grey_frame.png"))
+            colour_clear, colour, grey_clear, grey, box = sp.fill(colour_clear, grey_clear)
+            json.dump({"box": box, "frame": sp.SIZE, "note": "where this picture sits on the A-pose: its square in "
+                       "the A-pose picture's pixels"}, open(os.path.join(out, "frame.json"), "w"))
         colour_clear.save(os.path.join(out, "colour_clear.png"))
         grey_clear.save(os.path.join(out, "grey_clear.png"))
         grey.save(os.path.join(out, "grey.png"))
