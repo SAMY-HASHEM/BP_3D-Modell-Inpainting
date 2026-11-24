@@ -28,6 +28,10 @@ LOCK = (f"Locked: one picture {LOCKED['size']}, the part centred and whole (noth
         "#808080 grey background, soft even studio light, no shadow on the floor, no text.")
 GREY = ("The same picture as an unpainted grey clay sculpt: every shape, fold and detail kept exactly, one even grey "
         "material, no colours, no patterns.")
+# the base body's clay keeps the doll rule ("every detail" alone made Lou's a muscle-anatomy sculpt with nipples)
+GREY_BASE = ("The same picture as an unpainted grey clay sculpt of a smooth featureless doll body: the same soft "
+             "shapes and outline exactly, smooth surfaces, no muscle lines, no nipples, no genitals, nothing sexual, "
+             "one even grey material, no colours, no patterns.")
 EDITOR = "Qwen-Image-Edit 2511 (local, ComfyUI), made at about 1024 and brought to 2048 by Real-ESRGAN"
 
 # the layers made from the A-pose keep its frame (no new centring): the base body and every piece line up with it
@@ -122,6 +126,7 @@ def plan_from(answer, name, sources):
             break
     for p in parts:
         p["grey_prompt"] = GREY
+    parts[1]["grey_prompt"] = GREY_BASE
     return {"name": name, "character": answer.get("name", ""), "sources": sources, "source": sources[0],
             "locked": LOCKED, "editor": EDITOR,
             "instruction": "Slice this character into layers for 3D. First the whole character in an A-pose, then "
