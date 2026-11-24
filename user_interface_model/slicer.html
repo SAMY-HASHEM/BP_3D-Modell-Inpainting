@@ -37,6 +37,7 @@
   .msg.you { align-self:flex-end; background:#3a2d14; border:1px solid var(--sand); border-bottom-right-radius:4px; }
   .msg .who { font:700 12px Cinzel, serif; color:var(--sand); letter-spacing:.05em; margin-bottom:3px; }
   .msg.you .who { text-align:right; }
+  #slicer { position:relative; }
   .msg b { color:var(--sand); font-weight:600; }
   .msg.working { color:var(--dim); font-style:italic; }
   .msg.working::after { content:" ⏳"; font-style:normal; }
@@ -59,6 +60,15 @@
   #composer { display:flex; gap:8px; padding:10px 12px 12px; border-top:1px solid var(--line); background:var(--ink); }
   #composer textarea { min-height:44px; max-height:160px; flex:1; }
   #composer button { align-self:flex-end; height:44px; padding:0 16px; }
+  #attach { align-self:flex-end; height:44px; width:44px; padding:0; font-size:18px; }
+  #attached { padding:0 12px; margin:0; }
+  #attached:empty { display:none; }
+  #attached figure { flex:0 0 76px; position:relative; padding-top:8px; }
+  #attached img { height:76px; object-fit:cover; cursor:default; }
+  #attached .x { position:absolute; right:-6px; top:0; width:22px; height:22px; padding:0; border-radius:50%; font-size:12px; line-height:1; }
+  #slicer.drop::after { content:"Drop the pictures here"; position:absolute; inset:8px; border:2px dashed var(--sand);
+    border-radius:var(--radius); background:#14100ad9; color:var(--sand); display:flex; align-items:center; justify-content:center; font:600 16px Inter; pointer-events:none; }
+  .msg.you .pics { justify-content:flex-end; }
   .muted { color:var(--dim); font-size:12.5px; }
   .chip { border:1px solid var(--line); border-radius:999px; padding:2px 9px; font-size:12px; }
   dialog { background:var(--raised); color:var(--text); border:1px solid var(--sand); border-radius:var(--radius); padding:18px; width:min(480px, calc(100vw - 32px)); }
@@ -92,9 +102,12 @@
 <main id="main">
   <section class="half" id="slicer" aria-label="The Slicer chat">
     <div id="messages" aria-live="polite"></div>
+    <div id="attached" class="pics"></div>
     <form id="composer">
+      <button type="button" id="attach" title="Add pictures (or drop or paste them into the chat)" aria-label="Add pictures">📎</button>
+      <input type="file" id="files" accept=".png,.jpg,.jpeg,.webp" multiple hidden>
       <textarea id="input" placeholder="Write to the Slicer…  (Enter sends, Shift+Enter a new line)" aria-label="Message"></textarea>
-      <button type="submit">Send</button>
+      <button type="submit" id="send">Send</button>
     </form>
   </section>
   <section class="half" id="view" aria-label="3D environment">
@@ -111,8 +124,8 @@
   <form method="dialog" id="newform">
     <h3>A new character</h3>
     <label>Name <input id="newname" required pattern="[a-z0-9][a-z0-9_\-]{0,39}" placeholder="e.g. lou" autocomplete="off"></label>
-    <label>One or more pictures (front, back, colour, grey …)
-      <input id="newfiles" type="file" accept=".png,.jpg,.jpeg,.webp" multiple required></label>
+    <label>Pictures (optional: you can also send them in the chat)
+      <input id="newfiles" type="file" accept=".png,.jpg,.jpeg,.webp" multiple></label>
     <div id="newpreview" class="pics"></div>
     <div class="muted" id="newerror"></div>
     <div class="buttons"><button type="submit" class="main" id="newgo">Start</button><button type="button" id="newcancel">Cancel</button></div>
@@ -230,6 +243,8 @@ function message(m, st, last) {
   if (!st.parts[m.part] && m.part !== "_plan" && m.kind === "step") return el;
   if ((m.image === "source" || m.image === "sources") && (st.source_urls || []).length)
     el.append(h("div", { class: "pics" }, ...st.source_urls.map((u, i) => pic(u, st.source_urls.length > 1 ? `picture ${i + 1}` : "the picture"))));
+  if (m.sources && (st.source_urls || []).length)
+    el.append(h("div", { class: "pics" }, ...m.sources.filter(i => st.source_urls[i]).map(i => pic(st.source_urls[i], `picture ${i + 1}`))));
   if (m.images) el.append(h("div", { class: "pics" }, ...m.images.map((u, i) => pic(u, ["coloured", "grey"][i] || ""))));
   const part = m.part && st.parts[m.part];
   if (m.kind === "step" && part && last) el.append(promptEditor(part));
@@ -250,10 +265,37 @@ function drawChat(st) {
   if (atEnd || st.messages.length > seen) box.scrollTop = box.scrollHeight;
   seen = st.messages.length;
 }
+let attached = [];  // pictures waiting to be sent with the next message
+const PICTURE = /\.(png|jpe?g|webp)$/i;
+function attach(files) {
+  const ok = [...files].filter(f => PICTURE.test(f.name) || /^image\/(png|jpeg|webp)$/.test(f.type));
+  for (const f of ok) attached.push(f.name && PICTURE.test(f.name) ? f : new File([f], `pasted_${Date.now()}.${f.type.split("/")[1].replace("jpeg", "jpg")}`, { type: f.type }));
+  if (ok.length < files.length) alert("Only pictures: png, jpg or webp.");
+  drawAttached(); $("#input").focus();
+}
+function drawAttached() {
+  $("#attached").replaceChildren(...attached.map((f, i) => {
+    const fig = h("figure", {}, h("img", { src: URL.createObjectURL(f), alt: f.name }));
+    fig.append(h("button", { class: "x", type: "button", title: "Remove", onclick: () => { attached.splice(i, 1); drawAttached(); } }, "✕"));
+    return fig; }));
+}
+$("#attach").onclick = () => $("#files").click();
+$("#files").onchange = () => { attach($("#files").files); $("#files").value = ""; };
+const panel = $("#slicer"); let depth = 0;
+panel.addEventListener("dragenter", e => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); depth++; panel.classList.add("drop"); } });
+panel.addEventListener("dragover", e => { if ([...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
+panel.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; panel.classList.remove("drop"); } });
+panel.addEventListener("drop", e => { e.preventDefault(); depth = 0; panel.classList.remove("drop"); attach(e.dataTransfer.files); });
+$("#input").addEventListener("paste", e => { const f = [...e.clipboardData.files]; if (f.length) { e.preventDefault(); attach(f); } });
 $("#composer").addEventListener("submit", async e => {
-  e.preventDefault(); const t = $("#input").value.trim(); if (!t || !current) return;
-  $("#input").value = "";
-  try { await api("api/say", { project: current, text: t }); refresh(); } catch (err) { $("#input").value = t; alert(err.message); }
+  e.preventDefault(); const t = $("#input").value.trim(); if ((!t && !attached.length) || !current) return;
+  $("#send").disabled = true;
+  try {
+    const files = await Promise.all(attached.map(async f => ({ name: f.name, data: await readAs(f) })));
+    await api("api/say", { project: current, text: t, files });
+    $("#input").value = ""; attached = []; drawAttached(); refresh();
+  } catch (err) { alert(err.message); }
+  $("#send").disabled = false;
 });
 $("#input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });
 async function refresh() {

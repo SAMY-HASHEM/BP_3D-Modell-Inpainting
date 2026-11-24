@@ -51,7 +51,7 @@ def projects():
 
 LOCK = threading.Lock()  # one writer at a time for the plans and the chats
 ACTIONS = {"make_pictures": "Make it", "remake_pictures": "Make it again", "make_3d": "Good, make it 3D",
-           "skip": "Skip this part"}
+           "skip": "Skip this part", "replan": "Plan the parts again"}
 
 
 def chat_path(name):
@@ -72,6 +72,11 @@ def step_message(plan, index):
 
 
 def new_chat(name, plan):
+    if not plan.get("sources"):
+        return {"messages": [{"who": "slicer", "text": f"A new character: **{name}**.\nSend me one or more pictures of "
+                              "it with 📎 below (or drop or paste them here). Front, back, coloured or grey: all help. "
+                              "Write anything I should know with them."}],
+                "step": 0, "announced": {}, "planned": False}
     if not plan["parts"]:
         n = len(plan.get("sources") or [1])
         return {"messages": [{"who": "slicer", "image": "sources",
@@ -149,7 +154,7 @@ def chat_state(name):
     for i, m in enumerate(chat["messages"]):
         m["n"] = i
     return {"messages": chat["messages"], "step": chat["step"], "parts": {p["id"]: p for p in plan["parts"]},
-            "source_url": plan.get("source_url"), "waiting": waiting(name)}
+            "source_url": plan.get("source_url"), "source_urls": plan.get("source_urls", []), "waiting": waiting(name)}
 
 
 def waiting(name):
@@ -166,19 +171,50 @@ def waiting(name):
     return found
 
 
-def say(name, text, action=None, part_id=None):
-    """You wrote in the chat (or pressed a button): saved, and a button asks for the work (request.json)."""
+def say(name, text, action=None, part_id=None, files=None):
+    """You wrote in the chat (with pictures or not), or pressed a button: saved; a button asks for the work."""
     with LOCK:
+        plan_file = plan_path(name)
         plan = state(name)
         chat = load_chat(name, plan)
         if action and action not in ACTIONS:
             raise ValueError(f"no action {action!r}")
         text = (text or "").strip() or ACTIONS.get(action, "")
-        if not text:
+        if not text and not files:
             raise ValueError("an empty message")
-        chat["messages"].append({"who": "you", "text": text[:4000], "time": time.strftime("%H:%M"),
-                                 **({"action": action, "part": part_id} if action else {})})
-        if action:
+        message = {"who": "you", "text": text[:4000], "time": time.strftime("%H:%M"),
+                   **({"action": action, "part": part_id} if action else {})}
+        folder = os.path.dirname(plan_file)
+        if files:
+            raw = json.load(open(plan_file))
+            sources = raw.get("sources") or []
+            new = add_pictures(name, folder, files, sources)
+            raw["sources"] = sources + new
+            raw.setdefault("source", raw["sources"][0])
+            save(plan_file, raw)
+            message["sources"] = list(range(len(sources), len(sources) + len(new)))
+        chat["messages"].append(message)
+        if files and not plan["parts"]:
+            if not os.path.isfile(os.path.join(folder, "plan_request.json")):
+                ask_plan(folder, text)
+                n = len(message["sources"])
+                chat["messages"].append({"who": "slicer", "kind": "working", "part": "_plan",
+                                         "text": f"Got {'them' if n > 1 else 'it'}. I'm looking at the "
+                                                 f"picture{'s' if n > 1 else ''} to plan the parts (about a minute)…"})
+        elif files:
+            chat["messages"].append({"who": "slicer", "buttons": ["replan"], "part": "_plan",
+                                     "text": "I added the picture(s) to the references. Should I plan the parts again "
+                                             "with them? (The parts already made stay where they are.)"})
+        if action == "replan":
+            ask_plan(folder, text)
+            raw = json.load(open(plan_file))
+            raw["parts_before"] = raw.get("parts", [])
+            raw["parts"] = []
+            save(plan_file, raw)
+            chat.update(planned=False, step=0, announced={})
+            chat["messages"].append({"who": "slicer", "kind": "working", "part": "_plan",
+                                     "text": "Planning the parts again…"})
+        elif action:
             part = next((p for p in plan["parts"] if p["id"] == part_id), None)
             if part is None:
                 raise ValueError(f"no part {part_id!r}")
@@ -242,8 +278,8 @@ def new_project(name, files):
     folder = os.path.join(ROOT, name)
     if os.path.exists(folder):
         raise ValueError(f"there is a project {name!r} already")
-    if not files or len(files) > 8:
-        raise ValueError("one to eight pictures")
+    if files and len(files) > 12:
+        raise ValueError("at most 12 pictures")
     os.makedirs(os.path.join(folder, "sources"))
     try:
         return made(name, folder, files)
@@ -254,21 +290,41 @@ def new_project(name, files):
 
 
 def made(name, folder, files):
-    sources = []
-    for i, f in enumerate(files):
+    sources = add_pictures(name, folder, files, []) if files else []
+    save(os.path.join(folder, "slicer.json"), {"name": name, "sources": sources,
+                                                **({"source": sources[0]} if sources else {}), "parts": []})
+    if sources:
+        ask_plan(folder)
+    return name
+
+
+def add_pictures(name, folder, files, sources):
+    """Uploaded pictures into sources/ (numbered after the ones there); checked to be real pictures."""
+    from PIL import Image
+    if len(files) + len(sources) > 12:
+        raise ValueError("at most 12 pictures per character")
+    os.makedirs(os.path.join(folder, "sources"), exist_ok=True)
+    new = []
+    for f in files:
         ext = os.path.splitext(str(f.get("name", "")))[1].lower()
         if ext not in PICTURE:
             raise ValueError(f"{f.get('name')!r} is not a picture (png, jpg, webp)")
         data = base64.b64decode(str(f.get("data", "")).split(",", 1)[-1])
-        path = os.path.join(folder, "sources", f"{i + 1:02d}{ext}")
+        if len(data) > 30e6:
+            raise ValueError(f"{f.get('name')!r} is over 30 MB")
+        path = os.path.join(folder, "sources", f"{len(sources) + len(new) + 1:02d}{ext}")
         open(path, "wb").write(data)
-        sources.append(os.path.relpath(path, PROJECT))
-    from PIL import Image  # a real picture, or nothing
-    for src in sources:
-        Image.open(os.path.join(PROJECT, src)).verify()
-    save(os.path.join(folder, "slicer.json"), {"name": name, "sources": sources, "source": sources[0], "parts": []})
-    save(os.path.join(folder, "plan_request.json"), {"do": "plan", "asked": time.strftime("%Y-%m-%d %H:%M:%S")})
-    return name
+        try:
+            Image.open(path).verify()
+        except Exception:
+            os.remove(path)
+            raise ValueError(f"{f.get('name')!r} could not be read as a picture")
+        new.append(os.path.relpath(path, PROJECT))
+    return new
+
+
+def ask_plan(folder, note=""):
+    save(os.path.join(folder, "plan_request.json"), {"do": "plan", "note": note, "asked": time.strftime("%Y-%m-%d %H:%M:%S")})
 
 
 class Page(BaseHTTPRequestHandler):
@@ -329,7 +385,7 @@ class Page(BaseHTTPRequestHandler):
             if urllib.parse.urlparse(self.path).path == "/api/new":
                 return self.answer({"name": new_project(data.get("name"), data.get("files"))})
             if urllib.parse.urlparse(self.path).path == "/api/say":
-                say(data.get("project", ""), data.get("text", ""), data.get("action"), data.get("part"))
+                say(data.get("project", ""), data.get("text", ""), data.get("action"), data.get("part"), data.get("files"))
                 return self.answer({"saved": True})
             if urllib.parse.urlparse(self.path).path != "/api/part":
                 return self.answer({"error": "no such page"}, 404)

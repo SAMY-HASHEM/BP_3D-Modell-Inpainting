@@ -359,7 +359,9 @@ nohup python scripts/pipeline/slicer_worker.py > outputs/slicer/worker.log 2>&1 
 
 Open **https://nc.hcigroup.de/user/so26-samy.hashem/proxy/8780/** (needs `jupyter-server-proxy`, installed Nov 24).
 
-1. **+ New**: a name and one or more pictures of the character.
+1. **+ New**: a name (pictures optional). Then send the pictures in the chat: **📎** next to Send, or drop them on
+   the chat, or paste them (Ctrl+V); write anything the Slicer should know with them (it is passed to the planner).
+   More pictures later are added as references, with a button to plan the parts again.
 2. The Slicer looks at them (Qwen3-VL, about 20 s) and plans the parts: always **00 the whole character in an
    A-pose**, then **01 the centre** (the torso without head, arms and legs), then head, hair, arms, legs, loose
    clothes and every prop. The prompts come from one template with the locks: 2048 × 2048, flat `#808080` grey,

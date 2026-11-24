@@ -22,7 +22,8 @@ from slicer_page import slicer_says  # noqa: E402
 def plan(name):
     folder = os.path.join(ROOT, name)
     print(time.strftime("%H:%M:%S"), "planning", name, flush=True)
-    run = subprocess.run([sys.executable, os.path.join(HERE, "slicer_plan.py"), folder],
+    note = json.load(open(os.path.join(folder, "plan_request.json"))).get("note", "")
+    run = subprocess.run([sys.executable, os.path.join(HERE, "slicer_plan.py"), folder, "--note", note],
                          capture_output=True, text=True, cwd=PROJECT)
     open(os.path.join(folder, "plan_log.txt"), "w").write(run.stdout + run.stderr)
     os.remove(os.path.join(folder, "plan_request.json"))
@@ -37,7 +38,14 @@ def main():
     while True:
         for name in sorted(os.listdir(ROOT)) if os.path.isdir(ROOT) else []:
             if os.path.isfile(os.path.join(ROOT, name, "plan_request.json")):
-                plan(name)
+                try:
+                    plan(name)
+                except Exception as e:  # one job going wrong (a project deleted meanwhile ...) never stops the worker
+                    print(time.strftime("%H:%M:%S"), "ERROR", name, repr(e), flush=True)
+                    try:
+                        os.remove(os.path.join(ROOT, name, "plan_request.json"))
+                    except OSError:
+                        pass
         time.sleep(3)
 
 
