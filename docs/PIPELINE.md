@@ -54,6 +54,9 @@ pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shap
 - MV-Adapter's UVAtlas refuses non-manifold meshes (Pixal3D's): the mesh's own UVs are used then.
 - Every retopology so far came out inside out (Instant Meshes; volume < 0), so the bake's rays went inward and thin
   parts took their other side's colour (Malenia's red cape black): the quads are now turned outward.
+- The retopology's colour is baked twice (short rays, then long ones where the short missed: 5-10 % of the surface)
+  into larger UV islands packed tighter: the texture used 13 % -> 43 % (motorcycle girl), 62 % (knight). The knight
+  redone with all of it: 37 k quads, the rig carried over, the axe grip PASS (Sciebo knight_axe v16).
 
 ## The numbers (`scripts/tools/score_model.py`)
 
