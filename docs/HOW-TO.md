@@ -359,29 +359,32 @@ nohup python scripts/pipeline/slicer_worker.py > outputs/slicer/worker.log 2>&1 
 
 Open **https://nc.hcigroup.de/user/so26-samy.hashem/proxy/8780/** (needs `jupyter-server-proxy`, installed Nov 24).
 
-1. **+ New**: a name (pictures optional). Then send the pictures in the chat: **📎** next to Send, or drop them on
-   the chat, or paste them (Ctrl+V); write anything the Slicer should know with them (it is passed to the planner).
-   More pictures later are added as references, with a button to plan the parts again.
-2. The Slicer looks at them (Qwen3-VL, about 20 s) and plans the layers: always **00 the whole character in an
-   A-pose**, then **01 the base body** (the same body in plain underwear, no outfit, no accessories: what every piece
-   is put on), then **every piece alone**: hair, what is worn on the head, each piece of clothing, gloves, shoes,
-   accessories, props. The prompts come from one template with the locks: 2048 × 2048, flat `#808080` grey, a
-   coloured and a grey (clay) picture per part; a piece alone is asked for as a *ghost-mannequin* photo (hollow,
-   no body; "invisible mannequin" made the model draw a mannequin).
-3. Ask for pictures in plain words, like with Gemini ("make only the character in an A-pose with no background",
-   "the same but as the base body", "only the bodysuit alone"): Qwen3-VL writes an exact instruction from it,
-   Qwen-Image-Edit 2511 paints it on grey (about a minute; image models cannot paint "transparent", they paint a
-   checkerboard), BiRefNet cuts the background out and, for a piece alone, Grounding DINO + SAM keep only that piece
-   (the edit leaves other pieces floating around it). The result is a transparent 2048 PNG, the next numbered
-   picture in the chat (ask for changes to it by its number).
-4. The chat opens one step at a time: change the prompt if you want, then **Make it** (coloured, then the same as
-   grey clay: about 2 minutes); the pictures appear in the chat. **Good, make it 3D** sends them through
-   `make_model.py` (de-light, TRELLIS.2 at 1024, its own colours: about 6 to 10 minutes) and the model appears on
-   the right; then the next part. **Make it again** tries another seed.
-
-One model on the GPU at a time: the chat's Qwen3-VL (17 GB), the picture model (Qwen-Image-Edit in ComfyUI, about
-32 GB on the A40) and TRELLIS.2 take turns; whatever is loaded is let go after 10 quiet minutes. On the 24 GB PC
-ComfyUI keeps what doesn't fit in RAM (`configs/hardware/local_24gb.json`, "comfyui").
+1. **+ New**: a name. Then send the pictures in the chat: the picture button next to Send, or drop them on the
+   chat, or paste them (Ctrl+V); write anything the Slicer should know with them (it goes to the planner). Every
+   picture gets a **#number**: click it to name it in your message ("#4").
+2. The Slicer looks at them (Qwen3-VL, about 20 s) and plans the layers **from the inside to the outside**:
+   **00 the A-pose** (the reference everything is cut from and lined up with: no 3D), **01 the base body**, then
+   clothes, jewellery, outer clothes (cape, coat), shoes and boots, gloves and cuffs, what the hands hold, **the bald
+   head**, **the hair with what is worn on the head** (ears, crowns, head wings), and last wings and tails.
+3. Every step makes **two pictures**, 2048 x 2048 through Real-ESRGAN x4: the **coloured** one (for the colours) and
+   the **grey clay** one (for the 3D shape), both on the A-pose's frame, so all layers line up:
+   - **A-pose**: the uploaded character, alone, in an A-pose (Qwen-Image-Edit 2511).
+   - **Base body**: the A-pose's own body 1 to 1 as a matte grey shop mannequin (no anatomy; checked by Qwen3-VL on
+     a close-up of the chest, a failed picture is never shown) = the grey picture; coloured: the mannequin in the
+     skin's colour measured on the face, with realistic skin painted on top (checked again; else the plain colour).
+   - **A piece**: Qwen3-VL boxes it on the A-pose, SAM 2.1 cuts its real pixels out, the edit model only completes
+     what was hidden (openings stay open), and a small size/offset search puts it back exactly in place. A piece
+     not on the A-pose (a held item, a cape the A-pose dropped) is cut from the uploaded picture: place it by hand.
+   - **Bald head**: the A-pose made bald, the head and neck cut out of it.
+4. Ask for anything in plain words, like with Gemini; the chat waits while a picture is made (one model on the GPU).
+5. **Good, make it 3D** runs the full pipeline (`make_model.py`: de-light, TRELLIS.2 at the machine's resolution,
+   MV-Adapter colours merged; about 20 to 30 minutes per layer); the model appears on the right.
+6. The **3D view**: *Side by side* or *Assembled* (every layer placed on the A-pose by its picture, its front lined
+   up with the A-pose's front). Each layer's tag: click the name to hide it, the slider makes it **see-through**,
+   **Move** gives arrows to move (W), turn (E) and scale (R) it by hand: saved, *Reset* goes back to the automatic
+   place.
+7. The **trash icon** next to the project menu deletes a project, a part's pictures and model, or a #picture:
+   into a trash folder (`outputs/slicer/.trash/`, the project's `trash/`), nothing is wiped at once.
 
 A project is `outputs/slicer/<name>/`: `sources/`, `slicer.json` (the plan), `chat.json`, `parts/<id>/`
 (`colour.png`, `grey.png` on grey, `colour_clear.png`, `grey_clear.png` transparent, `*_raw.png` the edit model's
