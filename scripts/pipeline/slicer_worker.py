@@ -166,20 +166,33 @@ def reply(name, upto):
     return None
 
 
-DOLL = """Look at this picture of a body (a mannequin or a doll). Answer with JSON only: {"nipples": true or false, "genitals": true or false}.
-"nipples": are nipples or areolas visible on the chest (dots, darker circles), not just a smooth surface?
-"genitals": is any genital detail visible between the legs, not just a smooth flat surface or underwear?"""
+DOLL = """Look closely at this chest. Are nipples visible (small raised points, dots or darker circles at the
+tips)? Answer with JSON only: {"nipples": true or false}."""
 
 
 def doll_ok(picture):
-    """Is the base body a smooth doll (no nipples, no genitals)? The edit model doesn't always obey ("no nipples"
-    gave nipples on ryan's, Nov 24): Qwen3-VL looks, and a failed picture is never shown."""
-    from organise_pictures import ask, shrink
+    """Is the base body a smooth mannequin (no nipples)? The edit model doesn't always obey ("no nipples" gave nipples
+    on ryan's skin, Nov 24). Qwen3-VL looks at a close-up of the chest (asked about the whole body it said "nipples" to
+    every body with a chest shape, smooth or not), and a failed picture is never shown."""
+    import numpy as np
+    from organise_pictures import ask
     from describe_colours import on_grey
+    from scipy import ndimage
+    rgba = picture.convert("RGBA")
+    alpha = np.asarray(rgba.getchannel("A")) > 128
+    labels, n = ndimage.label(alpha)
+    if n == 0:
+        return False
+    biggest = labels == (1 + int(np.argmax(ndimage.sum(alpha, labels, range(1, n + 1)))))  # one figure (a sheet has two)
+    ys, xs = np.nonzero(biggest)
+    top, h = ys.min(), ys.max() - ys.min()
+    cx = (xs.min() + xs.max()) / 2
+    chest = on_grey(rgba).crop((int(cx - 0.14 * h), int(top + 0.20 * h), int(cx + 0.14 * h), int(top + 0.42 * h)))
+    chest = chest.resize((512, round(512 * chest.height / max(chest.width, 1))))
     m, processor = model()
-    data, text = ask(m, processor, [shrink(on_grey(picture), 768)], DOLL, max_tokens=60)
-    ok = data.get("nipples") is False and data.get("genitals") is False
-    print(time.strftime("%H:%M:%S"), "doll check:", "ok" if ok else f"FAILED {data or text[:80]}", flush=True)
+    data, text = ask(m, processor, [chest], DOLL, max_tokens=30)
+    ok = data.get("nipples") is False
+    print(time.strftime("%H:%M:%S"), "mannequin check:", "ok" if ok else f"FAILED {data or text[:80]}", flush=True)
     return ok
 
 

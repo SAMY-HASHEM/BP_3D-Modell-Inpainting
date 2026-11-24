@@ -48,8 +48,9 @@ BASE = ("Turn the character into a smooth matte light-grey plastic shop-window m
         "remove all the clothes, the hair and all accessories (headwear, gloves, cuffs, jewellery, weapons and the "
         "shoes). The mannequin has the exact face shape, the exact body shape with the same width of shoulders, chest, "
         "waist, hips and thighs, the same height, the same A-pose, the same size and position in the picture and the "
-        "same camera. Like every shop mannequin it has no anatomical details: a smooth plain chest, a smooth plain "
-        "crotch, a smooth bald head, one even matte grey plastic everywhere.")
+        "same camera. Like every shop mannequin it has no anatomical details: a smooth plain chest, rounded without "
+        "any points or bumps at the tips, a smooth plain crotch, a smooth bald head, one even matte grey plastic "
+        "everywhere.")
 
 # the fallback when the doll body comes out with nipples or genitals twice (the edit model doesn't always obey)
 BASE_UNDERWEAR = ("Change only the clothes, the accessories and the hairstyle, nothing else: replace the outfit with "
