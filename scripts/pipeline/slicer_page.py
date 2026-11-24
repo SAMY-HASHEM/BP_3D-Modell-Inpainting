@@ -20,6 +20,8 @@ import argparse
 import json
 import mimetypes
 import os
+import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -43,6 +45,146 @@ def projects():
     if not os.path.isdir(ROOT):
         return []
     return sorted(n for n in os.listdir(ROOT) if os.path.isfile(os.path.join(ROOT, n, "slicer.json")))
+
+
+LOCK = threading.Lock()  # one writer at a time for the plans and the chats
+ACTIONS = {"make_pictures": "Make it", "remake_pictures": "Make it again", "make_3d": "Good, make it 3D",
+           "skip": "Skip this part"}
+
+
+def chat_path(name):
+    return os.path.join(os.path.dirname(plan_path(name)), "chat.json")
+
+
+def save(path, data):
+    json.dump(data, open(path + ".tmp", "w"), indent=1, ensure_ascii=False)
+    os.replace(path + ".tmp", path)  # whole or not at all
+
+
+def step_message(plan, index):
+    part = plan["parts"][index]
+    return {"who": "slicer", "part": part["id"], "kind": "step",
+            "text": f"Step {index + 1} of {len(plan['parts'])}: **{part['name']}**\n{part.get('what', '')}\n\n"
+                    "This is the prompt I'll give the image model. Change it below if you want, then press Make it.",
+            "buttons": ["make_pictures", "skip"]}
+
+
+def new_chat(name, plan):
+    names = ", ".join(p["name"] for p in plan["parts"])
+    L = plan.get("locked", {})
+    first = {"who": "slicer", "image": "source",
+             "text": f"Here is {name}. I'll slice this character into {len(plan['parts'])} parts, and we make them "
+                     f"together, one at a time: {names}.\n\nLocked for every picture: {L.get('pose', '')}, "
+                     f"{L.get('size', '')}, {L.get('background', '')} background. Each part gets a coloured "
+                     "picture and the same as grey clay, then its 3D model, shown on the right."}
+    return {"messages": [first, step_message(plan, 0)], "step": 0, "announced": {}}
+
+
+def load_chat(name, plan):
+    path = chat_path(name)
+    chat = json.load(open(path)) if os.path.isfile(path) else new_chat(name, plan)
+    for i, m in enumerate(chat["messages"]):
+        m.setdefault("n", i)
+    return chat
+
+
+def follow(name, plan, chat):
+    """The Slicer's own messages: a part's pictures or model just appeared, then the next step."""
+    changed = False
+    for index, part in enumerate(plan["parts"]):
+        seen = chat["announced"].setdefault(part["id"], {})
+        files = part["files"]
+        stamp = {k: v.split("?t=")[-1] for k, v in files.items()}
+        if "colour" in files and seen.get("colour") != stamp["colour"]:
+            seen["colour"] = stamp["colour"]; changed = True
+            chat["messages"].append({"who": "slicer", "part": part["id"],
+                "text": f"The pictures for **{part['name']}** are ready: coloured and grey. Are they right?",
+                "images": [files["colour"]] + ([files["grey"]] if "grey" in files else []),
+                "buttons": ["make_3d", "remake_pictures"]})
+        if "model" in files and seen.get("model") != stamp["model"]:
+            seen["model"] = stamp["model"]; changed = True
+            chat["messages"].append({"who": "slicer", "part": part["id"],
+                "text": f"**{part['name']}** is in 3D now: it's on the right. Turn it with the mouse to check it."})
+            if index == chat["step"]:
+                changed |= next_step(plan, chat)
+    return changed
+
+
+def next_step(plan, chat):
+    if chat["step"] + 1 < len(plan["parts"]):
+        chat["step"] += 1
+        chat["messages"].append(step_message(plan, chat["step"]))
+    else:
+        chat["step"] = len(plan["parts"])
+        chat["messages"].append({"who": "slicer", "text": "All parts are made. Switch the right half to Assembled to see them together."})
+    return True
+
+
+def chat_state(name):
+    with LOCK:
+        plan = state(name)
+        chat = load_chat(name, plan)
+        changed = follow(name, plan, chat) or not os.path.isfile(chat_path(name))
+        if changed:
+            save(chat_path(name), chat)
+    for i, m in enumerate(chat["messages"]):
+        m["n"] = i
+    return {"messages": chat["messages"], "step": chat["step"], "parts": {p["id"]: p for p in plan["parts"]},
+            "source_url": plan.get("source_url"), "waiting": waiting(name)}
+
+
+def waiting(name):
+    """What has been asked for and not made yet (a request file in the part's folder)."""
+    folder = os.path.join(ROOT, name, "parts")
+    found = []
+    if os.path.isdir(folder):
+        for pid in sorted(os.listdir(folder)):
+            req = os.path.join(folder, pid, "request.json")
+            if os.path.isfile(req):
+                found.append(json.load(open(req)))
+    return found
+
+
+def say(name, text, action=None, part_id=None):
+    """You wrote in the chat (or pressed a button): saved, and a button asks for the work (request.json)."""
+    with LOCK:
+        plan = state(name)
+        chat = load_chat(name, plan)
+        if action and action not in ACTIONS:
+            raise ValueError(f"no action {action!r}")
+        text = (text or "").strip() or ACTIONS.get(action, "")
+        if not text:
+            raise ValueError("an empty message")
+        chat["messages"].append({"who": "you", "text": text[:4000], "time": time.strftime("%H:%M"),
+                                 **({"action": action, "part": part_id} if action else {})})
+        if action:
+            part = next((p for p in plan["parts"] if p["id"] == part_id), None)
+            if part is None:
+                raise ValueError(f"no part {part_id!r}")
+            if action == "skip":
+                chat["messages"].append({"who": "slicer", "text": f"Skipped **{part['name']}**."})
+                if plan["parts"].index(part) == chat["step"]:
+                    next_step(plan, chat)
+            else:
+                req = {"part": part["id"], "do": action, "prompt": part.get("prompt", ""),
+                       "grey_prompt": part.get("grey_prompt", ""), "asked": time.strftime("%Y-%m-%d %H:%M:%S")}
+                os.makedirs(os.path.join(ROOT, name, "parts", part["id"]), exist_ok=True)
+                save(os.path.join(ROOT, name, "parts", part["id"], "request.json"), req)
+                chat["messages"].append({"who": "slicer", "part": part["id"], "kind": "working",
+                    "text": {"make_pictures": "Making the coloured and the grey picture…",
+                             "remake_pictures": "Making the pictures again…",
+                             "make_3d": "Making the 3D model…"}[action]})
+        save(chat_path(name), chat)
+
+
+def slicer_says(name, text, part_id=None, images=()):
+    """For the one doing the work (a script, or Claude in the terminal): a message from the Slicer in the chat."""
+    with LOCK:
+        plan = state(name)
+        chat = load_chat(name, plan)
+        chat["messages"].append({"who": "slicer", "text": text, **({"part": part_id} if part_id else {}),
+                                 **({"images": list(images)} if images else {})})
+        save(chat_path(name), chat)
 
 
 def state(name):
@@ -98,6 +240,8 @@ class Page(BaseHTTPRequestHandler):
                 return self.answer(projects())
             if address.path == "/api/project":
                 return self.answer(state(query.get("name", [""])[0]))
+            if address.path == "/api/chat":
+                return self.answer(chat_state(query.get("name", [""])[0]))
             if address.path.startswith("/source/"):
                 plan = json.load(open(plan_path(address.path.split("/")[2])))
                 return self.file(os.path.join(PROJECT, plan["source"]))
@@ -113,9 +257,13 @@ class Page(BaseHTTPRequestHandler):
             return self.answer({"error": str(e)}, 404)
 
     def do_POST(self):
-        """/api/part {project, id, field, value}: a part's prompt (or name, what) changed on the page."""
+        """/api/part {project, id, field, value}: a part's prompt (or name, what) changed on the page.
+        /api/say {project, text, action?, part?}: a message in the chat, or a button pressed."""
         try:
             data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if urllib.parse.urlparse(self.path).path == "/api/say":
+                say(data.get("project", ""), data.get("text", ""), data.get("action"), data.get("part"))
+                return self.answer({"saved": True})
             if urllib.parse.urlparse(self.path).path != "/api/part":
                 return self.answer({"error": "no such page"}, 404)
             if data.get("field") not in EDITABLE:
@@ -125,9 +273,11 @@ class Page(BaseHTTPRequestHandler):
             part = next((p for p in plan["parts"] if p["id"] == data.get("id")), None)
             if part is None:
                 return self.answer({"error": f"no part {data.get('id')!r}"}, 404)
-            part[data["field"]] = str(data.get("value", ""))
-            json.dump(plan, open(path + ".tmp", "w"), indent=1, ensure_ascii=False)
-            os.replace(path + ".tmp", path)  # whole or not at all
+            with LOCK:
+                plan = json.load(open(path))
+                part = next(p for p in plan["parts"] if p["id"] == data.get("id"))
+                part[data["field"]] = str(data.get("value", ""))
+                save(path, plan)
             return self.answer({"saved": True})
         except (ValueError, json.JSONDecodeError) as e:
             return self.answer({"error": str(e)}, 400)
@@ -136,7 +286,19 @@ class Page(BaseHTTPRequestHandler):
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--port", type=int, default=8780)
+    p.add_argument("--say", nargs=2, metavar=("PROJECT", "TEXT"), help="write in the chat as the Slicer, and stop")
+    p.add_argument("--part", help="with --say: the part it is about")
+    p.add_argument("--read", metavar="PROJECT", help="print the chat (what you wrote, and what is asked for), and stop")
     a = p.parse_args()
+    if a.say:
+        return slicer_says(a.say[0], a.say[1].replace("\\n", "\n"), a.part)
+    if a.read:
+        st = chat_state(a.read)
+        for m in st["messages"][-15:]:
+            print(f"[{m['n']}] {m['who']}: {m['text'][:300]}")
+        for r in st["waiting"]:
+            print("ASKED:", json.dumps(r, ensure_ascii=False)[:300])
+        return
     server = ThreadingHTTPServer(("127.0.0.1", a.port), Page)
     print(f"The Slicer: http://127.0.0.1:{a.port}   ({len(projects())} projects in {ROOT}; Ctrl+C stops it)", flush=True)
     try:
