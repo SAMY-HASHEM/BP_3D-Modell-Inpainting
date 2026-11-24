@@ -309,6 +309,16 @@ def piece(apose, boxes, description, seed=1, report=print):
     if part is None:
         return None
     clear, on_grey = redo(part, COMPLETE.format(piece=description), seed, match="colour", report=report)
+    # what was visible stays exactly the A-pose's pixels: only the hidden parts come from the edit model (it drew
+    # demon's heart cut-out over with a red heart frame; told to keep the visible part, it still repaints it)
+    from PIL import ImageFilter
+    seen = part.getchannel("A").point(lambda a: 255 if a > 128 else 0).filter(ImageFilter.MinFilter(5))
+    seen = seen.filter(ImageFilter.GaussianBlur(1.5))
+    rgb = Image.composite(part.convert("RGB"), clear.convert("RGB"), seen)
+    alpha = Image.fromarray(np.maximum(np.asarray(clear.getchannel("A")), np.asarray(seen)))
+    clear = rgb.convert("RGBA"); clear.putalpha(alpha)
+    on_grey = Image.new("RGB", clear.size, GREY)
+    on_grey.paste(clear, (0, 0), clear)
     return clear, on_grey, part
 
 

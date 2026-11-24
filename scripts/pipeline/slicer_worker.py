@@ -499,6 +499,18 @@ def make_step(name, part_id):
         if grey_clear is None:  # the same layer as grey clay, lined up by its outline
             let_go(quiet=False)
             grey_clear, grey = sp.redo(colour_clear, request["grey_prompt"], seed, match="shape", room=1.4)
+        if kind == "piece" and os.path.isfile(os.path.join(out, "cut.png")) and not os.path.isfile(os.path.join(out, "own_frame.json")):
+            # holes the cut piece had (a cut-out where skin showed, a wig's face opening) stay empty: told so in
+            # words, the edit model still filled demon's heart cut-out with a red heart twice (Nov 24)
+            import numpy as np
+            from scipy import ndimage
+            had = np.asarray(Image.open(os.path.join(out, "cut.png")).getchannel("A")) > 128
+            holes = ndimage.binary_erosion(ndimage.binary_fill_holes(had) & ~had, iterations=3)
+            if holes.any():
+                for layer in (colour_clear, grey_clear):
+                    if layer is not None:
+                        a = np.asarray(layer.getchannel("A")).copy(); a[holes] = 0; layer.putalpha(Image.fromarray(a))
+                colour = Image.new("RGB", colour_clear.size, sp.GREY); colour.paste(colour_clear, (0, 0), colour_clear)
         # the clay is grey for sure: the clay edit kept demon's red heart (Nov 24); only the light and shade stay
         g = ImageOps.grayscale(grey_clear.convert("RGB")).convert("RGBA")
         g.putalpha(grey_clear.getchannel("A"))
