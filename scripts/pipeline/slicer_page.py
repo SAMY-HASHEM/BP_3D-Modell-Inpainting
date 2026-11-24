@@ -17,7 +17,9 @@ Every address in the page is relative, so it works behind such a path too.
 Only on this computer (127.0.0.1): it can change the plans.
 """
 import argparse
+import base64
 import json
+import re
 import mimetypes
 import os
 import threading
@@ -70,19 +72,32 @@ def step_message(plan, index):
 
 
 def new_chat(name, plan):
+    if not plan["parts"]:
+        n = len(plan.get("sources") or [1])
+        return {"messages": [{"who": "slicer", "image": "sources",
+                              "text": f"Got your {n} picture{'s' if n > 1 else ''}. I'm looking at "
+                                      f"{'them' if n > 1 else 'it'} to plan the parts (about a minute)…",
+                              "kind": "working", "part": "_plan"}],
+                "step": 0, "announced": {}, "planned": False}
+    return {**planned_messages(name, plan), "step": 0, "announced": {}, "planned": True}
+
+
+def planned_messages(name, plan):
     names = ", ".join(p["name"] for p in plan["parts"])
     L = plan.get("locked", {})
+    who = f" ({plan['character']})" if plan.get("character") else ""
     first = {"who": "slicer", "image": "source",
-             "text": f"Here is {name}. I'll slice this character into {len(plan['parts'])} parts, and we make them "
+             "text": f"Here is {name}{who}. I'll slice this character into {len(plan['parts'])} parts, and we make them "
                      f"together, one at a time: {names}.\n\nLocked for every picture: {L.get('pose', '')}, "
                      f"{L.get('size', '')}, {L.get('background', '')} background. Each part gets a coloured "
                      "picture and the same as grey clay, then its 3D model, shown on the right."}
-    return {"messages": [first, step_message(plan, 0)], "step": 0, "announced": {}}
+    return {"messages": [first, step_message(plan, 0)]}
 
 
 def load_chat(name, plan):
     path = chat_path(name)
     chat = json.load(open(path)) if os.path.isfile(path) else new_chat(name, plan)
+    chat.setdefault("planned", bool(plan["parts"]))
     for i, m in enumerate(chat["messages"]):
         m.setdefault("n", i)
     return chat
@@ -91,6 +106,10 @@ def load_chat(name, plan):
 def follow(name, plan, chat):
     """The Slicer's own messages: a part's pictures or model just appeared, then the next step."""
     changed = False
+    if not chat["planned"] and plan["parts"]:  # the plan has just been made
+        chat["planned"] = True
+        chat["messages"].extend(planned_messages(name, plan)["messages"])
+        return True
     for index, part in enumerate(plan["parts"]):
         seen = chat["announced"].setdefault(part["id"], {})
         files = part["files"]
@@ -137,6 +156,8 @@ def waiting(name):
     """What has been asked for and not made yet (a request file in the part's folder)."""
     folder = os.path.join(ROOT, name, "parts")
     found = []
+    if os.path.isfile(os.path.join(ROOT, name, "plan_request.json")):
+        found.append({"part": "_plan", "do": "plan"})
     if os.path.isdir(folder):
         for pid in sorted(os.listdir(folder)):
             req = os.path.join(folder, pid, "request.json")
@@ -201,10 +222,53 @@ def state(name):
     for part in plan.get("parts", []):
         part["files"] = files(os.path.join("parts", part["id"]))
         part["status"] = ("made" if "model" in part["files"] else "pictures" if part["files"] else "planned")
-    source = plan.get("source")
-    if source and os.path.isfile(os.path.join(PROJECT, source)):
-        plan["source_url"] = f"source/{name}?t={int(os.path.getmtime(os.path.join(PROJECT, source)))}"
+    sources = plan.get("sources") or ([plan["source"]] if plan.get("source") else [])
+    plan["source_urls"] = [f"source/{name}?i={i}&t={int(os.path.getmtime(os.path.join(PROJECT, src)))}"
+                           for i, src in enumerate(sources) if os.path.isfile(os.path.join(PROJECT, src))]
+    if plan["source_urls"]:
+        plan["source_url"] = plan["source_urls"][0]
     return plan
+
+
+NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+PICTURE = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def new_project(name, files):
+    """A new project from uploaded pictures: sources/, a plan without parts, and the request to plan it."""
+    name = (name or "").strip().lower().replace(" ", "_")
+    if not NAME.match(name):
+        raise ValueError("a name with letters, digits, - and _ only (at most 40)")
+    folder = os.path.join(ROOT, name)
+    if os.path.exists(folder):
+        raise ValueError(f"there is a project {name!r} already")
+    if not files or len(files) > 8:
+        raise ValueError("one to eight pictures")
+    os.makedirs(os.path.join(folder, "sources"))
+    try:
+        return made(name, folder, files)
+    except Exception:
+        import shutil
+        shutil.rmtree(folder, ignore_errors=True)  # nothing half made stays
+        raise
+
+
+def made(name, folder, files):
+    sources = []
+    for i, f in enumerate(files):
+        ext = os.path.splitext(str(f.get("name", "")))[1].lower()
+        if ext not in PICTURE:
+            raise ValueError(f"{f.get('name')!r} is not a picture (png, jpg, webp)")
+        data = base64.b64decode(str(f.get("data", "")).split(",", 1)[-1])
+        path = os.path.join(folder, "sources", f"{i + 1:02d}{ext}")
+        open(path, "wb").write(data)
+        sources.append(os.path.relpath(path, PROJECT))
+    from PIL import Image  # a real picture, or nothing
+    for src in sources:
+        Image.open(os.path.join(PROJECT, src)).verify()
+    save(os.path.join(folder, "slicer.json"), {"name": name, "sources": sources, "source": sources[0], "parts": []})
+    save(os.path.join(folder, "plan_request.json"), {"do": "plan", "asked": time.strftime("%Y-%m-%d %H:%M:%S")})
+    return name
 
 
 class Page(BaseHTTPRequestHandler):
@@ -244,7 +308,8 @@ class Page(BaseHTTPRequestHandler):
                 return self.answer(chat_state(query.get("name", [""])[0]))
             if address.path.startswith("/source/"):
                 plan = json.load(open(plan_path(address.path.split("/")[2])))
-                return self.file(os.path.join(PROJECT, plan["source"]))
+                sources = plan.get("sources") or [plan["source"]]
+                return self.file(os.path.join(PROJECT, sources[int(query.get("i", ["0"])[0]) % len(sources)]))
             if address.path.startswith("/files/"):
                 name, rel = address.path[len("/files/"):].split("/", 1)
                 folder = os.path.realpath(os.path.join(ROOT, name))
@@ -261,6 +326,8 @@ class Page(BaseHTTPRequestHandler):
         /api/say {project, text, action?, part?}: a message in the chat, or a button pressed."""
         try:
             data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if urllib.parse.urlparse(self.path).path == "/api/new":
+                return self.answer({"name": new_project(data.get("name"), data.get("files"))})
             if urllib.parse.urlparse(self.path).path == "/api/say":
                 say(data.get("project", ""), data.get("text", ""), data.get("action"), data.get("part"))
                 return self.answer({"saved": True})
@@ -279,7 +346,7 @@ class Page(BaseHTTPRequestHandler):
                 part[data["field"]] = str(data.get("value", ""))
                 save(path, plan)
             return self.answer({"saved": True})
-        except (ValueError, json.JSONDecodeError) as e:
+        except (ValueError, json.JSONDecodeError, OSError) as e:
             return self.answer({"error": str(e)}, 400)
 
 

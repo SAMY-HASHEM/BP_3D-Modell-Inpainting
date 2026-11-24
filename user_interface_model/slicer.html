@@ -61,6 +61,12 @@
   #composer button { align-self:flex-end; height:44px; padding:0 16px; }
   .muted { color:var(--dim); font-size:12.5px; }
   .chip { border:1px solid var(--line); border-radius:999px; padding:2px 9px; font-size:12px; }
+  dialog { background:var(--raised); color:var(--text); border:1px solid var(--sand); border-radius:var(--radius); padding:18px; width:min(480px, calc(100vw - 32px)); }
+  dialog::backdrop { background:#000a; }
+  dialog h3 { font:700 18px Cinzel, serif; color:var(--sand); margin:0 0 12px; }
+  dialog label { display:block; margin-bottom:12px; font-size:13px; color:var(--dim); }
+  dialog input { display:block; width:100%; margin-top:4px; font:inherit; color:var(--text); background:var(--deep); border:1px solid var(--line); border-radius:8px; padding:7px; }
+  #newerror { color:var(--bad); min-height:1em; }
   #zoom { position:fixed; inset:0; background:#000d; display:none; align-items:center; justify-content:center; z-index:9; cursor:zoom-out; }
   #zoom img { max-width:94vw; max-height:94vh; }
   #view canvas { display:block; }
@@ -78,6 +84,7 @@
 <header>
   <h1>Slicer</h1>
   <select id="project" aria-label="Project"></select>
+  <button id="new" title="A new character from one or more pictures">+ New</button>
   <span id="status" class="muted"></span>
   <span class="grow"></span>
   <button id="swap" title="Swap the two halves">⇄ Swap halves</button>
@@ -100,6 +107,17 @@
   </section>
 </main>
 <div id="zoom"><img alt=""></div>
+<dialog id="newbox">
+  <form method="dialog" id="newform">
+    <h3>A new character</h3>
+    <label>Name <input id="newname" required pattern="[a-z0-9][a-z0-9_\-]{0,39}" placeholder="e.g. lou" autocomplete="off"></label>
+    <label>One or more pictures (front, back, colour, grey …)
+      <input id="newfiles" type="file" accept=".png,.jpg,.jpeg,.webp" multiple required></label>
+    <div id="newpreview" class="pics"></div>
+    <div class="muted" id="newerror"></div>
+    <div class="buttons"><button type="submit" class="main" id="newgo">Start</button><button type="button" id="newcancel">Cancel</button></div>
+  </form>
+</dialog>
 <script type="module">
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -209,7 +227,9 @@ function message(m, st, last) {
   const el = h("div", { class: "msg " + m.who + (m.kind === "working" ? " working" : "") });
   el.append(h("div", { class: "who" }, m.who === "you" ? "You" + (m.time ? " · " + m.time : "") : "Slicer"), rich(m.text));
   if (m.kind === "working" && !(st.waiting || []).some(r => r.part === m.part)) el.classList.add("done");
-  if (m.image === "source" && st.source_url) el.append(h("div", { class: "pics" }, pic(st.source_url, "the picture")));
+  if (!st.parts[m.part] && m.part !== "_plan" && m.kind === "step") return el;
+  if ((m.image === "source" || m.image === "sources") && (st.source_urls || []).length)
+    el.append(h("div", { class: "pics" }, ...st.source_urls.map((u, i) => pic(u, st.source_urls.length > 1 ? `picture ${i + 1}` : "the picture"))));
   if (m.images) el.append(h("div", { class: "pics" }, ...m.images.map((u, i) => pic(u, ["coloured", "grey"][i] || ""))));
   const part = m.part && st.parts[m.part];
   if (m.kind === "step" && part && last) el.append(promptEditor(part));
@@ -248,7 +268,23 @@ async function refresh() {
     $("#status").textContent = `${made} of ${Object.keys(st.parts).length} parts in 3D`; $("#status").className = "muted";
   } catch (e) { $("#status").textContent = e.message; $("#status").className = "error"; }
 }
-async function start() {
+// ---- a new character
+const readAs = f => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); });
+$("#new").onclick = () => { $("#newform").reset(); $("#newpreview").replaceChildren(); $("#newerror").textContent = ""; $("#newbox").showModal(); };
+$("#newcancel").onclick = () => $("#newbox").close();
+$("#newfiles").onchange = () => $("#newpreview").replaceChildren(...[...$("#newfiles").files].map(f => pic(URL.createObjectURL(f), f.name)));
+$("#newname").oninput = () => { $("#newname").value = $("#newname").value.toLowerCase().replace(/ /g, "_"); };
+$("#newform").addEventListener("submit", async e => {
+  e.preventDefault(); $("#newgo").disabled = true; $("#newerror").textContent = "Uploading…";
+  try {
+    const files = await Promise.all([...$("#newfiles").files].map(async f => ({ name: f.name, data: await readAs(f) })));
+    const r = await api("api/new", { name: $("#newname").value, files });
+    store.set("slicer.project", r.name); $("#newbox").close(); await start(true);
+  } catch (err) { $("#newerror").textContent = err.message; }
+  $("#newgo").disabled = false;
+});
+let ticking = false;
+async function start(again) {
   try {
     const names = await api("api/projects");
     const sel = $("#project"); sel.replaceChildren(...names.map(n => h("option", { value: n }, n)));
@@ -258,7 +294,8 @@ async function start() {
                            for (const id in loaded) delete loaded[id]; legend(); arrange(); seen = -1; lastKey = ""; refresh(); };
     if (!current) $("#messages").append(h("div", { class: "msg slicer" }, "No project yet: outputs/slicer/<name>/slicer.json"));
   } catch (e) { $("#messages").append(h("div", { class: "msg slicer error" }, "The Slicer's server is not reachable: python scripts/pipeline/slicer_page.py")); }
-  refresh(); setInterval(refresh, 2000);
+  if (again) { for (const id in loaded) { parts.remove(loaded[id].object); delete loaded[id]; } legend(); arrange(); seen = -1; lastKey = ""; }
+  refresh(); if (!ticking) { ticking = true; setInterval(refresh, 2000); }
 }
 resize(); start();
 </script>

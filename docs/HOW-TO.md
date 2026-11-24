@@ -347,6 +347,30 @@ source activate.sh              # switch the TRELLIS.2 environment on
 git pull                        # get the newest code
 ```
 
+### The Slicer (a character into parts, as a chat)
+
+The Slicer page: left a chat that goes one part at a time, right the parts in 3D as they are made.
+
+```
+cd ~/projects/bp_samy_hashem && source activate.sh
+nohup python scripts/pipeline/slicer_page.py   > outputs/slicer/page.log   2>&1 &    # the page
+nohup python scripts/pipeline/slicer_worker.py > outputs/slicer/worker.log 2>&1 &    # does the work (GPU 0)
+```
+
+Open **https://nc.hcigroup.de/user/so26-samy.hashem/proxy/8780/** (needs `jupyter-server-proxy`, installed Nov 24).
+
+1. **+ New**: a name and one or more pictures of the character.
+2. The Slicer looks at them (Qwen3-VL, about 20 s) and plans the parts: always **00 the whole character in an
+   A-pose**, then **01 the centre** (the torso without head, arms and legs), then head, hair, arms, legs, loose
+   clothes and every prop. The prompts come from one template with the locks: 2048 × 2048, flat `#808080` grey,
+   a coloured and a grey (clay) picture per part.
+3. The chat opens one step at a time: change the prompt if you want, then **Make it**; the pictures appear in the
+   chat (**Good, make it 3D** or **Make it again**), the model on the right, then the next part.
+
+A project is `outputs/slicer/<name>/`: `sources/`, `slicer.json` (the plan), `chat.json`, `parts/<id>/`
+(`colour.png`, `grey.png`, `model.glb`, `request.json` while it waits). `slicer_page.py --read <name>` prints the
+chat in the terminal, `--say <name> "text"` writes in it as the Slicer.
+
 ### 3. Look at the GPUs first
 
 ```
