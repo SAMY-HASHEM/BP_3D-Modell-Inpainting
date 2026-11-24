@@ -386,8 +386,10 @@ def fill(colour_clear, grey_clear, margin=0.05):
 
 
 BACK = ("Show the same {thing} from directly behind, as if it were turned around 180 degrees: its back side, at the "
-        "same size and position in the picture, the same shape, style, colours and material. Nothing else in the "
-        "picture. Plain flat #808080 grey background, soft even studio light, no shadow, no text.")
+        "same size and position in the picture, the same outline, style, colours and material. The back is not a "
+        "copy of the front: cut-outs, gems, prints and openings of the front are not on the back unless they go all "
+        "the way round; show what the back of such a thing has (seams, lacing, a closure, a plain back). Nothing else "
+        "in the picture. Plain flat #808080 grey background, soft even studio light, no shadow, no text.")
 
 
 def back(front_clear, thing, seed=1):
