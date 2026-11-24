@@ -4,7 +4,8 @@ Every second it looks into outputs/slicer/*/:
 - a plan_request.json: Qwen3-VL looks at the pictures and the parts are planned (slicer_plan.py);
 - a message you typed that has no answer yet: Qwen3-VL answers it in the chat. It sees your pictures, the plan, the
   step you are on and the chat so far, and it can change the current step's prompt when you ask for that.
-The pictures and the 3D models (parts/<id>/request.json) come next; until then they wait, and the chat says so.
+- a picture asked for in the chat, or a step's Make it (parts/<id>/request.json): Qwen-Image-Edit makes it and
+  BiRefNet cuts it out (slicer_pictures.py); Qwen3-VL leaves the GPU meanwhile. The 3D models come next.
 
 Qwen3-VL stays loaded while you chat (about 17 GB on the GPU) and is let go after 10 quiet minutes.
 
@@ -22,7 +23,7 @@ PROJECT = os.path.dirname(os.path.dirname(HERE))
 ROOT = os.path.join(PROJECT, "outputs", "slicer")
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "generation"))
-from slicer_page import answer, chat_state, slicer_says, unanswered  # noqa: E402
+from slicer_page import add_made, answer, chat_state, slicer_says, unanswered  # noqa: E402
 import slicer_plan  # noqa: E402  (sets the model folder, offline)
 
 IDLE = 600  # seconds without work before Qwen3-VL leaves the GPU
@@ -39,18 +40,24 @@ The parts: {parts}.
 The step now: {step}
 Its prompt for the image model now: {prompt}
 Waiting for the image model: {waiting}
-What works today: planning the parts, this chat, changing prompts. NOT connected yet: making the pictures and the 3D
-models. A request for them only waits in a queue and nothing is made yet: never say you are making or will soon show
-pictures; if the user asks for them, say plainly that this part is still being built.
+What works: planning the parts, this chat, changing prompts, and MAKING PICTURES: you can edit any of the user's
+pictures with the local image model (about a minute). Not connected yet: the 3D models (say so honestly).
 
 The chat so far:
 {history}
 
-Answer the user's last message. Be short and concrete (at most 6 sentences), in the user's language, plain text.
-Only if the user clearly asks to change the picture of the step now (pose, what to keep or leave out, details),
-write the whole new prompt for it, in English, keeping the locked part ("Locked: ...") unchanged at its end.
-Otherwise "new_prompt" stays "": sending a picture or asking a question is not a request to change the prompt.
-Answer with JSON only: {{"reply": "...", "new_prompt": "" }}"""
+Answer the user's last message. Be short and concrete (at most 5 sentences), in the user's language, plain text.
+If the user asks for a picture (to make, change, redo or show one: a pose, only the character, no background, a
+part alone, grey clay, from the back ...), fill "picture": "from" is the number of the picture to start from (the
+newest fitting one if not said), "instruction" is ONE precise English instruction for an image-edit model that
+describes the whole result: who it is, the exact pose (an A-pose: standing upright facing the camera, both arms
+straight down and held away from the body at 45 degrees, palms toward the thighs, legs straight and slightly apart,
+feet flat), what to remove, what to keep exactly the same (face, hair, every piece of the outfit), full body
+visible and centred, plain flat grey background (never "transparent" or "no background": the background is cut out
+afterwards). In "reply" then say briefly what you will make. Leave "picture" empty otherwise.
+Only if the user clearly asks to change the prompt of the step now, write the whole new prompt in "new_prompt", in
+English, keeping the locked part ("Locked: ...") unchanged at its end; otherwise "new_prompt" stays "".
+Answer with JSON only: {{"reply": "...", "new_prompt": "", "picture": {{"from": 0, "instruction": ""}}}}"""
 
 
 def model():
@@ -61,14 +68,17 @@ def model():
     return _model
 
 
-def let_go():
+def let_go(quiet=True):
+    """Qwen3-VL off the GPU; when quiet (no work for a while) also ComfyUI and BiRefNet."""
     global _model
+    if quiet and "slicer_pictures" in sys.modules:
+        sys.modules["slicer_pictures"].stop()
     if _model is not None:
         import torch
         _model = None
         gc.collect()
         torch.cuda.empty_cache()
-        print(time.strftime("%H:%M:%S"), "Qwen3-VL let go (quiet)", flush=True)
+        print(time.strftime("%H:%M:%S"), "Qwen3-VL let go", "(quiet)" if quiet else "(for a picture)", flush=True)
 
 
 def plan(name):
@@ -121,8 +131,84 @@ def reply(name, upto):
     new_prompt = str(data.get("new_prompt") or "").strip()
     if new_prompt and "Locked:" not in new_prompt and step:  # the locks always stay
         new_prompt += " " + slicer_plan.LOCK
+    wish = data.get("picture") if isinstance(data.get("picture"), dict) else {}
+    instruction = str(wish.get("instruction") or "").strip()
     answer(name, upto, said, new_prompt or None)
-    print(time.strftime("%H:%M:%S"), "answered", name, "(prompt changed)" if new_prompt else "", flush=True)
+    print(time.strftime("%H:%M:%S"), "answered", name, "(prompt changed)" if new_prompt else "",
+          "(picture)" if instruction else "", flush=True)
+    if instruction:
+        try:
+            start = int(wish.get("from") or len(sources)) - 1
+        except (TypeError, ValueError):
+            start = len(sources) - 1
+        start = min(max(start, 0), len(sources) - 1) if sources else -1
+        if start < 0:
+            slicer_says(name, "Send me a picture first (📎), then I can change it.")
+        else:
+            return start, instruction  # made by the caller, once this function has let go of Qwen3-VL
+    return None
+
+
+def running(name, on):
+    path = os.path.join(ROOT, name, "edit_running.json")
+    if on:
+        open(path, "w").write("{}")
+    elif os.path.isfile(path):
+        os.remove(path)
+
+
+def make_picture(name, start, instruction):
+    """A picture edited from the user's picture number start+1, added as the next numbered picture."""
+    import slicer_pictures
+    from PIL import Image
+    raw = json.load(open(os.path.join(ROOT, name, "slicer.json")))
+    slicer_says(name, f"Making it from picture {start + 1} (about a minute)…", part_id="_edit", kind="working")
+    running(name, True)
+    t = time.time()
+    try:
+        let_go(quiet=False)  # Qwen3-VL leaves the GPU while the picture is made: room on a 24 GB card too
+        source = Image.open(os.path.join(PROJECT, raw["sources"][start]))
+        clear, grey = slicer_pictures.cut_out(slicer_pictures.edit(source, instruction))
+        index = add_made(name, clear)
+        grey.save(os.path.join(ROOT, name, "sources", f"{index + 1:02d}_made_grey.png"))
+        slicer_says(name, f"Here it is: **picture {index + 1}** ({slicer_pictures.SIZE} x {slicer_pictures.SIZE}, "
+                          f"background cut out, {round(time.time() - t)} s). Tell me what to change, or ask for the "
+                          "next one.", sources=[index])
+        print(time.strftime("%H:%M:%S"), "picture made", name, index + 1, round(time.time() - t), "s", flush=True)
+    finally:
+        running(name, False)
+
+
+def make_step(name, part_id):
+    """The Make it / Make it again button: the step's coloured picture, then the same as grey clay."""
+    import slicer_pictures
+    from PIL import Image
+    folder = os.path.join(ROOT, name)
+    request_file = os.path.join(folder, "parts", part_id, "request.json")
+    request = json.load(open(request_file))
+    raw = json.load(open(os.path.join(folder, "slicer.json")))
+    try:
+        if request["do"] == "make_3d":
+            slicer_says(name, "Making the 3D model from here isn't connected yet: that's the next thing being built. "
+                              "The pictures are saved.", part_id=part_id)
+            return
+        print(time.strftime("%H:%M:%S"), "making", name, part_id, flush=True)
+        let_go(quiet=False)
+        base_path = os.path.join(folder, "parts", "00_apose", "colour.png")  # later parts start from the A-pose
+        if part_id == "00_apose" or not os.path.isfile(base_path):
+            base_path = os.path.join(PROJECT, raw["sources"][0])
+        seed = 1 + sum(1 for f in os.listdir(os.path.join(folder, "parts", part_id)) if f.startswith("colour"))
+        colour_clear, colour = slicer_pictures.cut_out(slicer_pictures.edit(Image.open(base_path), request["prompt"], seed))
+        grey_clear, grey = slicer_pictures.cut_out(slicer_pictures.edit(colour, request["grey_prompt"], seed))
+        out = os.path.join(folder, "parts", part_id)
+        colour_clear.save(os.path.join(out, "colour_clear.png"))
+        grey_clear.save(os.path.join(out, "grey_clear.png"))
+        grey.save(os.path.join(out, "grey.png"))
+        colour.save(os.path.join(out, "colour.png"))  # last: the chat announces the pictures when colour.png changes
+        print(time.strftime("%H:%M:%S"), "made", name, part_id, flush=True)
+    finally:
+        if os.path.isfile(request_file):
+            os.remove(request_file)
 
 
 def main():
@@ -139,10 +225,20 @@ def main():
                     plan(name); busy = True
                 n = unanswered(name)
                 if n is not None:
-                    reply(name, n); busy = True
+                    wish = reply(name, n); busy = True
+                    if wish:
+                        make_picture(name, *wish)
+                parts_dir = os.path.join(folder, "parts")
+                for part_id in sorted(os.listdir(parts_dir)) if os.path.isdir(parts_dir) else []:
+                    if os.path.isfile(os.path.join(parts_dir, part_id, "request.json")):
+                        make_step(name, part_id); busy = True
             except Exception as e:  # one job going wrong never stops the worker
                 print(time.strftime("%H:%M:%S"), "ERROR", name, repr(e), flush=True)
                 traceback.print_exc()
+                try:
+                    slicer_says(name, f"That didn't work on my side: {type(e).__name__}: {str(e)[:200]}")
+                except Exception:
+                    pass
                 try:
                     n = unanswered(name)
                     if n is not None:
@@ -151,8 +247,9 @@ def main():
                     pass
         if busy:
             _last = time.time()
-        elif _model is not None and time.time() - _last > IDLE:
+        elif (_model is not None or "slicer_pictures" in sys.modules) and _last and time.time() - _last > IDLE:
             let_go()
+            _last = 0.0
         time.sleep(1)
 
 

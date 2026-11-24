@@ -189,6 +189,8 @@ def waiting(name):
     found = []
     if os.path.isfile(os.path.join(ROOT, name, "plan_request.json")):
         found.append({"part": "_plan", "do": "plan"})
+    if os.path.isfile(os.path.join(ROOT, name, "edit_running.json")):
+        found.append({"part": "_edit", "do": "edit"})
     if os.path.isdir(folder):
         for pid in sorted(os.listdir(folder)):
             req = os.path.join(folder, pid, "request.json")
@@ -308,13 +310,31 @@ def answer(name, upto, text, new_prompt=None):
         save(chat_path(name), chat)
 
 
-def slicer_says(name, text, part_id=None, images=()):
+def add_made(name, picture):
+    """A picture the Slicer made (a PIL picture): saved in sources/ as the next numbered picture; returns its index."""
+    with LOCK:
+        plan_file = plan_path(name)
+        raw = json.load(open(plan_file))
+        sources = raw.get("sources") or ([raw["source"]] if raw.get("source") else [])
+        folder = os.path.join(os.path.dirname(plan_file), "sources")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{len(sources) + 1:02d}_made.png")
+        picture.save(path)
+        raw["sources"] = sources + [os.path.relpath(path, PROJECT)]
+        raw.setdefault("source", raw["sources"][0])
+        raw.setdefault("made", []).append(len(sources))
+        save(plan_file, raw)
+        return len(sources)
+
+
+def slicer_says(name, text, part_id=None, images=(), kind=None, sources=None):
     """For the one doing the work (a script, or Claude in the terminal): a message from the Slicer in the chat."""
     with LOCK:
         plan = state(name)
         chat = load_chat(name, plan)
         chat["messages"].append({"who": "slicer", "text": text, **({"part": part_id} if part_id else {}),
-                                 **({"images": list(images)} if images else {})})
+                                 **({"images": list(images)} if images else {}), **({"kind": kind} if kind else {}),
+                                 **({"sources": list(sources)} if sources else {})})
         save(chat_path(name), chat)
 
 

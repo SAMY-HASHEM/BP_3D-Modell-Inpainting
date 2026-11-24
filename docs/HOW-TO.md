@@ -366,7 +366,11 @@ Open **https://nc.hcigroup.de/user/so26-samy.hashem/proxy/8780/** (needs `jupyte
    A-pose**, then **01 the centre** (the torso without head, arms and legs), then head, hair, arms, legs, loose
    clothes and every prop. The prompts come from one template with the locks: 2048 × 2048, flat `#808080` grey,
    a coloured and a grey (clay) picture per part.
-3. The chat opens one step at a time: change the prompt if you want, then **Make it**; the pictures appear in the
+3. Ask for pictures in plain words, like with Gemini ("make only the character in an A-pose with no background"):
+   Qwen3-VL writes an exact instruction from it, Qwen-Image-Edit 2511 paints it on grey (about a minute; image models
+   cannot paint "transparent", they paint a checkerboard), BiRefNet cuts the background out: a transparent 2048 PNG,
+   added to the chat as the next numbered picture (ask for changes to it by its number).
+4. The chat opens one step at a time: change the prompt if you want, then **Make it**; the pictures appear in the
    chat (**Good, make it 3D** or **Make it again**), the model on the right, then the next part.
 
 A project is `outputs/slicer/<name>/`: `sources/`, `slicer.json` (the plan), `chat.json`, `parts/<id>/`
