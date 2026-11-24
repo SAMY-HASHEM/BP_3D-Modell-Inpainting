@@ -124,6 +124,17 @@
     "step": "hold, video (Blender)",
     "gpu_gb": 0,
     "note": "CPU only"
+   },
+   {
+    "step": "Slicer picture (Qwen-Image-Edit 2511 fp8 in ComfyUI, 4 steps), PyTorch capped at 22.5 GB inside ComfyUI + --reserve-vram 21 (Nov 24)",
+    "minutes": 1.0,
+    "fits": true,
+    "note": "ComfyUI keeps the text encoder and part of the model in RAM and loads them in turn (lowvram patches); same speed as on the A40"
+   },
+   {
+    "step": "Slicer part to 3D (make_model.py, TRELLIS.2 1024, no MV-Adapter)",
+    "minutes": 3.5,
+    "note": "on the A40; the 1024 shape fits 24 GB (see 'character, one view')"
    }
   ]
  },
