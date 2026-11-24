@@ -301,6 +301,10 @@ def place(name, part_id):
         return (xs.min(), xs.max(), ys.min(), ys.max()) if len(xs) else None
     apose = os.path.join(folder, "parts", "00_apose", "colour_clear.png")
     mine = os.path.join(folder, "parts", part_id, "colour_clear.png")
+    if os.path.isfile(os.path.join(folder, "parts", part_id, "own_frame.json")):  # not from the A-pose: by hand
+        if os.path.isfile(out):
+            os.remove(out)
+        return
     if part_id == "00_apose" or not (os.path.isfile(apose) and os.path.isfile(mine)):  # the base body too is placed
         json.dump({"cx": 0, "cy": 0, "h": 1, "w": None, "whole": True}, open(out, "w"))
         return
@@ -415,6 +419,18 @@ def make_step(name, part_id):
             colour_clear, colour = sp.tint(mannequin, tone) if tone is not None else (mannequin, None)
             if colour is None:
                 colour = Image.new("RGB", mannequin.size, sp.GREY); colour.paste(mannequin, (0, 0), mannequin)
+            else:  # realistic skin on the tinted mannequin, kept only if it stays smooth (checked like the mannequin)
+                for k in range(2):
+                    let_go(quiet=False)
+                    real_raw = sp.edit(colour, sp.SKIN, seed + k)
+                    real_clear, real = sp.cut_out(real_raw, keep_frame=True)
+                    if doll_ok(real_clear):
+                        colour_clear, colour = real_clear, real
+                        real_raw.save(os.path.join(out, "skin_raw.png"))
+                        break
+                else:
+                    slicer_says(name, "Base body: the realistic skin came out with body details twice, so it keeps "
+                                      "the plain skin colour.", part_id=part_id)
             g = ImageOps.grayscale(mannequin.convert("RGB")).convert("RGBA")
             g.putalpha(mannequin.getchannel("A"))
             grey_clear = g
@@ -425,10 +441,27 @@ def make_step(name, part_id):
                 boxes = piece_boxes(name).get(part_id, [])
             let_go(quiet=False)
             made = sp.piece(Image.open(apose_path), boxes, part["what"], seed) if boxes else None
+            own = False
             if made is None:
-                slicer_says(name, f"I couldn't find **{part['name']}** on the A-pose picture. Tell me where it is "
-                                  "(for example: on the left arm), or skip it.", part_id=part_id)
+                # not on the A-pose (held items are left out of it, and the A-pose edit sometimes drops a piece:
+                # demon's cape): cut from the uploaded picture instead; it doesn't line up by itself
+                source, _ = sp.cut_out(Image.open(os.path.join(PROJECT, raw["sources"][0])))
+                on_grey = Image.new("RGB", source.size, sp.GREY); on_grey.paste(source, (0, 0), source)
+                boxes = boxes_for(on_grey, part.get("words") or [part["what"]])
+                let_go(quiet=False)
+                made = sp.piece(source, boxes, part["what"], seed) if boxes else None
+                own = made is not None
+            if made is None:
+                slicer_says(name, f"I couldn't find **{part['name']}** on the A-pose or on your picture. Tell me where "
+                                  "it is (for example: in the right hand), or skip it.", part_id=part_id)
                 return
+            if own:
+                slicer_says(name, f"**{part['name']}** isn't on the A-pose picture, so I cut it from your picture: it "
+                                  "won't sit in place by itself. In the 3D view use Move to put it where it belongs.",
+                            part_id=part_id)
+                json.dump({"own_frame": True}, open(os.path.join(out, "own_frame.json"), "w"))
+            elif os.path.isfile(os.path.join(out, "own_frame.json")):
+                os.remove(os.path.join(out, "own_frame.json"))
             colour_clear, colour, the_cut = made
             the_cut.save(os.path.join(out, "cut.png"))
         elif kind == "head":

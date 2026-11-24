@@ -25,6 +25,7 @@
   header .grow { flex:1; }
   select, button { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:8px; padding:5px 10px; }
   button { cursor:pointer; } button:hover { border-color:var(--sand); color:var(--sand); }
+  button.icon { padding:5px 7px; display:inline-flex; align-items:center; } button.icon:hover { color:var(--bad); border-color:var(--bad); }
   main { display:flex; height:calc(100% - 52px); }
   main.swapped { flex-direction:row-reverse; }
   .half { flex:1 1 50%; min-width:0; position:relative; }
@@ -109,8 +110,8 @@
 <header>
   <h1>Slicer</h1>
   <select id="project" aria-label="Project"></select>
+  <button id="del" class="icon" title="Delete: this project, a part's pictures and model, or a picture" aria-label="Delete"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>
   <button id="new" title="A new character from one or more pictures">+ New</button>
-  <button id="del" title="Delete a project, a part's pictures and model, or a picture">Delete…</button>
   <span id="status" class="muted"></span>
   <span class="grow"></span>
   <button id="swap" title="Swap the two halves">⇄ Swap halves</button>

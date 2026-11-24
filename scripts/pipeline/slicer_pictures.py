@@ -4,7 +4,7 @@
 2. Qwen-Image-Edit 2511 (ComfyUI, scripts/inpainting/picture_from_prompt.py) paints the instruction, always on a plain
    grey background: image models cannot make a picture transparent, asked for "no background" they paint a checkerboard;
 3. BiRefNet (RMBG-2.0) cuts the figure out for real: a transparent PNG, and the same on flat #808080;
-4. both brought to 2048 x 2048 (the locked size; Lanczos for now).
+4. both brought to 2048 x 2048 (the locked size) by Real-ESRGAN x4 (upscale).
 
 The instruction is written by Qwen3-VL from what you typed (slicer_worker.py): the edit model follows long, exact
 sentences much better than a short wish (Lou, Nov 24: "make only the character in pose A with no background" kept her
@@ -129,6 +129,43 @@ def cut_out(image, only=None, keep_frame=False):
     return clear, grey
 
 
+_upscaler = None
+UPSCALER = os.path.join(PROJECT, "local_ai_models", "upscale", "RealESRGAN_x4plus.pth")
+
+
+def upscale(image, size=SIZE):
+    """Real-ESRGAN x4 (spandrel; the weights MV-Adapter uses too), in tiles, then down to `size` on its long side:
+    the edit model paints about 1024, the locked size is 2048 (the user, Nov 24: "the resolution and quality we
+    discussed"); plain resizing only blew the blur up."""
+    global _upscaler
+    import torch
+    if not os.path.isfile(UPSCALER):
+        return image.resize((size, round(size * image.height / image.width)), Image.LANCZOS)
+    if _upscaler is None:
+        from spandrel import ModelLoader
+        _upscaler = ModelLoader().load_from_file(UPSCALER).cuda().eval()
+    x = torch.from_numpy(np.asarray(image.convert("RGB"))).permute(2, 0, 1).float().div(255)[None].cuda()
+    _, _, h, w = x.shape
+    tile, pad, k = 256, 16, 4
+    out = torch.zeros(1, 3, h * k, w * k, device="cuda")
+    with torch.no_grad():
+        for y in range(0, h, tile):
+            for x0 in range(0, w, tile):
+                ya, yb, xa, xb = max(y - pad, 0), min(y + tile + pad, h), max(x0 - pad, 0), min(x0 + tile + pad, w)
+                piece = _upscaler(x[:, :, ya:yb, xa:xb])
+                oy, ox = (y - ya) * k, (x0 - xa) * k
+                th, tw = min(tile, h - y) * k, min(tile, w - x0) * k
+                out[:, :, y * k:y * k + th, x0 * k:x0 * k + tw] = piece[:, :, oy:oy + th, ox:ox + tw]
+    big = Image.fromarray((out[0].clamp(0, 1).permute(1, 2, 0).cpu().numpy() * 255).round().astype(np.uint8))
+    return big.resize((size, round(size * big.height / big.width)), Image.LANCZOS)
+
+
+SKIN = ("Give this smooth figure realistic human skin: natural subtle skin texture, soft realistic shading, the same "
+        "skin colour. Keep the shape, the outline, the face, the pose, the size and position exactly as they are. It "
+        "stays a smooth featureless body: the chest smooth and rounded without nipples, the crotch smooth without "
+        "genitals, no hair, no clothes, nothing sexual. Plain flat #808080 grey background.")
+
+
 def edit(image, instruction, seed=1):
     """Qwen-Image-Edit on a square grey canvas; returns its picture (about 1024 x 1024)."""
     global _comfy
@@ -139,7 +176,7 @@ def edit(image, instruction, seed=1):
     if "background" not in text.lower():
         text += ALWAYS
     try:
-        return comfy_edit(square_on_grey(image), text, seed, report=lambda *a: None, template="{prompt}")
+        return upscale(comfy_edit(square_on_grey(image), text, seed, report=lambda *a: None, template="{prompt}"))
     except RuntimeError as e:  # mostly out of memory right after another model left the GPU: once more, fresh
         if "execution_error" not in str(e) and "OutOfMemory" not in str(e):
             raise
@@ -147,7 +184,7 @@ def edit(image, instruction, seed=1):
         stop()
         time.sleep(10)
         _comfy = start_comfyui(lambda *a: None)
-        return comfy_edit(square_on_grey(image), text, seed, report=lambda *a: None, template="{prompt}")
+        return upscale(comfy_edit(square_on_grey(image), text, seed, report=lambda *a: None, template="{prompt}"))
 
 
 def stop():
@@ -159,8 +196,10 @@ def stop():
             _comfy.wait(timeout=60)
         except Exception:
             _comfy.kill()
+    global _upscaler
     _comfy = None
     _remover = None
+    _upscaler = None
     import subprocess  # also a ComfyUI of ours this worker didn't start (left from before a restart): our port only
     from picture_from_prompt import COMFYUI
     port = COMFYUI.rsplit(":", 1)[1]
@@ -273,20 +312,27 @@ def piece(apose, boxes, description, seed=1, report=print):
 
 
 def skin_tone(apose):
-    """The skin's colour in the A-pose picture (SAM's "bare skin", the lit part: not shadows or highlights)."""
+    """The skin's colour in the A-pose picture: measured on the face first (always bare skin; "bare skin" alone found
+    demon's purple leggings, Nov 24), then on bare arms; only a colour that looks like skin (red >= green >= blue,
+    not grey) counts. The lit part: not shadows, highlights, eyes or lips."""
     apose = apose.convert("RGBA").resize((SIZE, SIZE), Image.LANCZOS)
     grey = Image.new("RGB", apose.size, GREY)
     grey.paste(apose, (0, 0), apose)
-    mask = find(grey, "bare skin")
-    if mask is None:
-        return None
-    mask = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize((SIZE, SIZE))) > 127
-    px = np.asarray(apose)[..., :3][mask & (np.asarray(apose.getchannel("A")) > 200)].astype(np.float32)
-    if len(px) < 100:
-        return None
-    lum = px.mean(1)
-    px = px[(lum > np.percentile(lum, 30)) & (lum < np.percentile(lum, 90))]
-    return np.median(px, 0)
+    solid = np.asarray(apose.getchannel("A")) > 200
+    for word in ("face", "bare arm", "bare skin"):
+        mask = find(grey, word)
+        if mask is None:
+            continue
+        mask = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize((SIZE, SIZE))) > 127
+        px = np.asarray(apose)[..., :3][mask & solid].astype(np.float32)
+        if len(px) < 100:
+            continue
+        lum = px.mean(1)
+        px = px[(lum > np.percentile(lum, 35)) & (lum < np.percentile(lum, 90))]
+        r, g, b = np.median(px, 0)
+        if r >= g >= b and r - b > 12:
+            return np.array([r, g, b])
+    return None
 
 
 def tint(mannequin, tone):
