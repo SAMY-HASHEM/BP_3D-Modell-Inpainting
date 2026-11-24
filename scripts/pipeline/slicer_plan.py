@@ -2,7 +2,7 @@
 their prompts are then written from one fixed template, so every project has the same locks.
 
 Always: 00 the whole character in an A-pose, 01 the base body (the same body without its outfit and accessories, in
-a smooth doll body: what every piece is put on), then every piece Qwen3-VL finds made alone: hair, what is worn on the
+a matte grey shop mannequin: what every piece is put on), then every piece Qwen3-VL finds made alone: hair, what is worn on the
 head, each piece of clothing (empty, as on an invisible mannequin), gloves, shoes, accessories, props.
 
     python scripts/pipeline/slicer_plan.py outputs/slicer/<name>      # reads its sources/, writes its slicer.json
@@ -41,15 +41,23 @@ FRAME = "Plain flat #808080 grey background, soft even studio light, no shadow o
 ALONE = ("exactly where it is in the picture, at exactly the same size, position and shape, as if worn by an invisible "
          "body: hollow and empty, with empty openings where the body would be. Remove the body, the head, the skin and "
          "every other item. Keep its colours and every detail exactly")
-# the base body: the same body as the A-pose, as a smooth doll (a 3D base mesh). Asked as "the same character as a
-# base body" the edit model drew a new, slimmer woman; in plain underwear the user found it not consistent (Nov 24)
-BASE = ("Remove all the clothes and all accessories (every piece of clothing, headwear, gloves, cuffs, jewellery, "
-        "weapons and the shoes) and pull the hair back tightly into a small bun. Show the body as a smooth featureless "
-        "doll body, like a plastic mannequin or a 3D base mesh: smooth skin everywhere, the chest smooth without "
-        "nipples, the crotch smooth and flat without any genitals, nothing sexual. Keep everything else exactly as it "
-        "is in the picture: the same face, the same skin colour, the same body shape with the same width of "
-        "shoulders, chest, waist, hips and thighs, the same height, the same A-pose, the same size and position in "
-        "the picture and the same camera.")
+# the base body: the A-pose's own body as a matte grey shop mannequin (a 3D base mesh). On skin the edit model drew
+# nipples whatever the words said (ryan, Lou, Nov 24: 6 of 6 failed the check); as a plastic mannequin it has no
+# anatomy by nature (3 of 3 passed). Asked as "the same character as a base body" it drew a new, slimmer woman.
+BASE = ("Turn the character into a smooth matte light-grey plastic shop-window mannequin with exactly the same body: "
+        "remove all the clothes, the hair and all accessories (headwear, gloves, cuffs, jewellery, weapons and the "
+        "shoes). The mannequin has the exact face shape, the exact body shape with the same width of shoulders, chest, "
+        "waist, hips and thighs, the same height, the same A-pose, the same size and position in the picture and the "
+        "same camera. Like every shop mannequin it has no anatomical details: a smooth plain chest, a smooth plain "
+        "crotch, a smooth bald head, one even matte grey plastic everywhere.")
+
+# the fallback when the doll body comes out with nipples or genitals twice (the edit model doesn't always obey)
+BASE_UNDERWEAR = ("Change only the clothes, the accessories and the hairstyle, nothing else: replace the outfit with "
+                  "plain tight-fitting neutral grey underwear (a sports bra and briefs), remove every accessory, glove, "
+                  "cuff, headwear, jewellery, weapon and the shoes (barefoot), and pull the hair back tightly into a "
+                  "small bun. Keep everything else exactly as it is in the picture: the same face, the same skin, the "
+                  "same body shape with the same width of shoulders, chest, waist, hips and thighs, the same height, "
+                  "the same A-pose, the same size and position in the picture and the same camera.")
 
 QUESTION = """You prepare this character for 3D modelling in layers: first a base body, then every piece of clothing
 and every accessory made alone, to be put on the body afterwards. Look at the picture(s) and answer with JSON only:
@@ -92,7 +100,8 @@ def plan_from(answer, name, sources):
                    "from the body at about 45 degrees, palms toward the body, legs slightly apart, feet flat. "
                    f"Keep {keep} exactly as they are.{leave} {LOCK}"},
         {"id": "01_base_body", "name": "Base body",
-         "what": "always first after the A-pose: the same body without outfit and accessories, a smooth doll body, "
+         "what": "always first after the A-pose: the same body without outfit, hair and accessories, as a matte grey "
+                 "shop mannequin (no anatomy), "
                  "the base every piece is put on" + (f"; {answer['body']}" if answer.get("body") else ""),
          "prompt": f"{BASE} {FRAME}"},
     ]

@@ -46,6 +46,9 @@
   .pics figure { margin:0; flex:1 1 160px; max-width:260px; }
   .pics img { width:100%; border-radius:8px; background:var(--deep); display:block; cursor:zoom-in; }
   .pics figcaption { font-size:11.5px; color:var(--dim); margin-top:2px; }
+  .pics figcaption.tag { color:var(--sand); font-weight:600; cursor:pointer; }
+  .pics figcaption.tag:hover { text-decoration:underline; }
+  #composer.busy textarea { opacity:.55; }
   .prompt { margin-top:8px; }
   .prompt summary { cursor:pointer; color:var(--dim); font-size:12.5px; white-space:normal; }
   .prompt textarea { margin-top:6px; }
@@ -235,7 +238,12 @@ function rich(text) {  // **bold** and line breaks, nothing else
 function pic(url, caption) {
   const img = h("img", { src: url, alt: caption, loading: "lazy" });
   img.onclick = () => { $("#zoom img").src = url; $("#zoom").style.display = "flex"; };
-  return h("figure", {}, img, h("figcaption", {}, caption));
+  const cap = h("figcaption", {}, caption);
+  if (/^#\d+$/.test(caption)) {  // #N: click to name this picture in your message
+    cap.classList.add("tag"); cap.title = "Click to name this picture in your message";
+    cap.onclick = () => { const box = $("#input"); box.value = (box.value ? box.value.replace(/\s*$/, " ") : "") + caption + " "; box.focus(); };
+  }
+  return h("figure", {}, img, cap);
 }
 $("#zoom").onclick = () => $("#zoom").style.display = "none";
 function promptEditor(part) {
@@ -254,10 +262,10 @@ function message(m, st, last) {
   if (m.kind === "working" && !(st.waiting || []).some(r => r.part === m.part)) el.classList.add("done");
   if (!st.parts[m.part] && m.part !== "_plan" && m.kind === "step") return el;
   if ((m.image === "source" || m.image === "sources") && (st.source_urls || []).length)
-    el.append(h("div", { class: "pics" }, ...st.source_urls.map((u, i) => pic(u, st.source_urls.length > 1 ? `picture ${i + 1}` : "the picture"))));
+    el.append(h("div", { class: "pics" }, ...st.source_urls.map((u, i) => pic(u, `#${i + 1}`))));
   if (m.sources && (st.source_urls || []).length)
-    el.append(h("div", { class: "pics" }, ...m.sources.filter(i => st.source_urls[i]).map(i => pic(st.source_urls[i], `picture ${i + 1}`))));
-  if (m.images) el.append(h("div", { class: "pics" }, ...m.images.map((u, i) => pic(u, ["coloured", "grey"][i] || ""))));
+    el.append(h("div", { class: "pics" }, ...m.sources.filter(i => st.source_urls[i]).map(i => pic(st.source_urls[i], `#${i + 1}`))));
+  if (m.images) el.append(h("div", { class: "pics" }, ...m.images.map((u, i) => pic(u, (m.sources ? ["grey"] : ["coloured", "grey"])[i] || ""))));
   const part = m.part && st.parts[m.part];
   if (m.kind === "step" && part && last) el.append(promptEditor(part));
   if (m.buttons && (part || m.part === "_plan")) {
@@ -275,6 +283,12 @@ function drawChat(st) {
   const lastWithButtons = [...st.messages].reverse().find(m => m.buttons);
   box.replaceChildren(...st.messages.map(m => message(m, st, m === lastWithButtons)));
   if (st.thinking) box.append(h("div", { class: "msg slicer working" }, h("div", { class: "who" }, "Slicer"), "typing…"));
+  // while a picture or a model is made the chat waits: the chat model and the picture model never share the GPU
+  const busy = (st.waiting || []).some(w => ["edit", "make_pictures", "remake_pictures", "make_3d", "plan"].includes(w.do));
+  for (const el of [$("#input"), $("#send"), $("#attach")]) el.disabled = busy;
+  $("#composer").classList.toggle("busy", busy);
+  $("#input").placeholder = busy ? "Making a picture… the chat waits until it is done."
+                                 : "Write to the Slicer…  (Enter sends, Shift+Enter a new line; click a #number to name a picture)";
   if (atEnd || st.messages.length > seen) box.scrollTop = box.scrollHeight;
   seen = st.messages.length;
 }

@@ -146,9 +146,21 @@ def follow(name, plan, chat):
         stamp = {k: v.split("?t=")[-1] for k, v in files.items()}
         if "colour" in files and seen.get("colour") != stamp["colour"]:
             seen["colour"] = stamp["colour"]; changed = True
+            # the step's picture gets a number in the chat too (#N), so it can be named and started from
+            clear = os.path.join(ROOT, name, "parts", part["id"], "colour_clear.png")
+            numbered = []
+            if os.path.isfile(clear):
+                from PIL import Image
+                index = add_made(name, Image.open(clear))
+                raw = json.load(open(plan_path(name)))
+                raw.setdefault("step_pictures", {})[part["id"]] = index
+                save(plan_path(name), raw)
+                numbered = [index]
             chat["messages"].append({"who": "slicer", "part": part["id"],
-                "text": f"The pictures for **{part['name']}** are ready: coloured and grey. Are they right?",
-                "images": [files["colour"]] + ([files["grey"]] if "grey" in files else []),
+                "text": f"The pictures for **{part['name']}** are ready: coloured" + (f" (#{numbered[0] + 1})" if numbered else "")
+                        + " and grey. Are they right?",
+                **({"sources": numbered} if numbered else {}),
+                "images": ([] if numbered else [files["colour"]]) + ([files["grey"]] if "grey" in files else []),
                 "buttons": ["make_3d", "remake_pictures"]})
         if "model" in files and seen.get("model") != stamp["model"]:
             seen["model"] = stamp["model"]; changed = True
@@ -220,6 +232,9 @@ def say(name, text, action=None, part_id=None, files=None):
         text = (text or "").strip() or ACTIONS.get(action, "")
         if not text and not files:
             raise ValueError("an empty message")
+        busy = [w for w in waiting(name) if w.get("do") in ("edit", "make_pictures", "remake_pictures", "make_3d", "plan")]
+        if busy and not action:
+            raise ValueError("Wait a moment: a picture is being made, and the chat answers again when it is done.")
         message = {"who": "you", "text": text[:4000], "time": time.strftime("%H:%M"),
                    **({"action": action, "part": part_id} if action else {})}
         folder = os.path.dirname(plan_file)

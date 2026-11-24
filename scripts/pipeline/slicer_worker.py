@@ -36,7 +36,8 @@ model in layers: first the whole character in an A-pose, then its base body (the
 accessories), then every piece of clothing, every accessory and every prop alone, to be put on the body afterwards. For every part the app makes a coloured picture and the same as grey clay (2048 x
 2048, flat #808080 grey background), then a 3D model from them, shown on the right of the page.
 
-You can see the user's pictures (in order: {pictures}). The character: {character}.
+Pictures are named by number: "#3" or "picture 3" is picture 3. You see these (in order): {pictures}.
+The A-pose picture is {apose}: every base body and every piece alone starts from it. The character: {character}.
 The parts: {parts}.
 The step now: {step}
 Its prompt for the image model now: {prompt}
@@ -58,8 +59,8 @@ visible and centred, plain flat grey background (never "transparent" or "no back
 afterwards). In "reply" then say briefly what you will make. Leave "picture" empty otherwise.
 A "base body" / "base model" / "naked" / "without clothes" / "without the outfit" request is normal here and never
 refused: it is the base body of 3D character work. Start it from the A-pose picture; its instruction is exactly:
-"{base}". Explain in "reply" that the base body is a smooth doll body like a mannequin (no nipples, no
-genitals: nothing sexual), the usual base for 3D clothes.
+"{base}". Explain in "reply" that the base body is a matte grey shop mannequin with exactly the character's
+body (no anatomy, nothing sexual), the usual base for 3D clothes.
 A piece "alone" (a jacket, boots, ears, a weapon) starts from the A-pose picture too and stays where it is, so all
 layers fit together; its instruction is exactly: "Keep only <the piece> {alone}." (never the word "mannequin"
 alone: the model then draws a whole mannequin).
@@ -119,20 +120,20 @@ def reply(name, upto):
     parts = raw.get("parts", [])
     step = parts[st["step"]] if st["step"] < len(parts) else None
     images, labels = [], []
-    for i, src in enumerate(sources[:4]):
-        images.append(shrink(on_grey(Image.open(os.path.join(PROJECT, src))), 640))
-        labels.append(f"picture {i + 1} from the user")
-    if step:  # the step's own pictures, once made
-        for kind in ("colour", "grey"):
-            path = os.path.join(ROOT, name, "parts", step["id"], f"{kind}.png")
-            if os.path.isfile(path) and len(images) < 6:
-                images.append(shrink(on_grey(Image.open(path)), 640))
-                labels.append(f"the {kind} picture made for this step")
+    steps = {v: k for k, v in (raw.get("step_pictures") or {}).items()}
+    made = set(raw.get("made") or [])
+    show = sorted(set(range(min(len(sources), 2))) | set(range(max(0, len(sources) - 3), len(sources))))
+    for i in show:  # the first two and the newest three: the model sees at most five
+        images.append(shrink(on_grey(Image.open(os.path.join(PROJECT, sources[i]))), 640))
+        what = (f"the {steps[i]} step's picture" if i in steps else "made by you" if i in made else "from the user")
+        labels.append(f"#{i + 1} ({what})")
+    apose = (raw.get("step_pictures") or {}).get("00_apose")
     history = []
     for m in st["messages"][-14:]:
         pics = f" [sent pictures {', '.join(str(i + 1) for i in m['sources'])}]" if m.get("sources") else ""
         history.append(f"{'User' if m['who'] == 'you' else 'Slicer'}: {m.get('text', '')[:700]}{pics}")
     question = CHAT.format(base=slicer_plan.BASE, alone=slicer_plan.ALONE,
+        apose=f"#{apose + 1}" if apose is not None else "not made yet (then use the newest picture)",
         pictures=", ".join(labels) or "none yet", character=raw.get("character") or name,
         parts=", ".join(f"{i + 1}. {p['name']}" for i, p in enumerate(parts)) or "not planned yet",
         step=f"{st['step'] + 1}. {step['name']}: {step.get('what', '')}" if step else "none",
@@ -156,11 +157,47 @@ def reply(name, upto):
         except (TypeError, ValueError):
             start = len(sources) - 1
         start = min(max(start, 0), len(sources) - 1) if sources else -1
+        if apose is not None and (wish.get("only") or "mannequin with exactly" in instruction or "Remove all the clothes" in instruction):
+            start = apose  # a base body or a piece alone: from the A-pose, so all layers fit together (ryan, Nov 24)
         if start < 0:
             slicer_says(name, "Send me a picture first (📎), then I can change it.")
         else:
             return start, instruction, str(wish.get("only") or "").strip()  # made by the caller, once Qwen3-VL is let go
     return None
+
+
+DOLL = """Look at this picture of a body (a mannequin or a doll). Answer with JSON only: {"nipples": true or false, "genitals": true or false}.
+"nipples": are nipples or areolas visible on the chest (dots, darker circles), not just a smooth surface?
+"genitals": is any genital detail visible between the legs, not just a smooth flat surface or underwear?"""
+
+
+def doll_ok(picture):
+    """Is the base body a smooth doll (no nipples, no genitals)? The edit model doesn't always obey ("no nipples"
+    gave nipples on ryan's, Nov 24): Qwen3-VL looks, and a failed picture is never shown."""
+    from organise_pictures import ask, shrink
+    from describe_colours import on_grey
+    m, processor = model()
+    data, text = ask(m, processor, [shrink(on_grey(picture), 768)], DOLL, max_tokens=60)
+    ok = data.get("nipples") is False and data.get("genitals") is False
+    print(time.strftime("%H:%M:%S"), "doll check:", "ok" if ok else f"FAILED {data or text[:80]}", flush=True)
+    return ok
+
+
+def base_body(source, instruction, seed=1, only=None, keep_frame=True):
+    """A doll base body that passed the check: up to two tries, then plain underwear. Returns (raw, clear, grey,
+    note): note says what happened when it wasn't the first try."""
+    import slicer_pictures
+    for k in range(2):
+        let_go(quiet=False)
+        raw_picture = slicer_pictures.edit(source, instruction, seed + k)
+        clear, grey = slicer_pictures.cut_out(raw_picture, only=only, keep_frame=keep_frame)
+        if doll_ok(clear):
+            return raw_picture, clear, grey, ("" if k == 0 else "(the first try showed body details, so I made it again)")
+    let_go(quiet=False)
+    raw_picture = slicer_pictures.edit(source, slicer_plan.BASE_UNDERWEAR, seed)
+    clear, grey = slicer_pictures.cut_out(raw_picture, only=only, keep_frame=keep_frame)
+    return raw_picture, clear, grey, ("(the smooth doll body came out with body details twice, so this one is in plain "
+                                      "grey underwear instead)")
 
 
 def running(name, on):
@@ -182,18 +219,22 @@ def make_picture(name, start, instruction, only=""):
     try:
         let_go(quiet=False)  # Qwen3-VL leaves the GPU while the picture is made: room on a 24 GB card too
         source = Image.open(os.path.join(PROJECT, raw["sources"][start]))
-        raw_picture = slicer_pictures.edit(source, instruction)
         square = source.width == source.height  # made pictures are square: the result keeps their frame
-        clear, grey = slicer_pictures.cut_out(raw_picture, only=only or None, keep_frame=square)
+        note = ""
+        if "mannequin with exactly" in instruction or "doll body" in instruction:
+            raw_picture, clear, grey, note = base_body(source, instruction, keep_frame=square)
+        else:
+            raw_picture = slicer_pictures.edit(source, instruction)
+            clear, grey = slicer_pictures.cut_out(raw_picture, only=only or None, keep_frame=square)
         index = add_made(name, clear)
         grey.save(os.path.join(ROOT, name, "sources", f"{index + 1:02d}_made_grey.png"))
         raw_picture.save(os.path.join(ROOT, name, "sources", f"{index + 1:02d}_made_raw.png"))  # the edit model's own
         with open(os.path.join(ROOT, name, "edits.jsonl"), "a") as log:  # what was asked, for checking later
             log.write(json.dumps({"picture": index + 1, "from": start + 1, "instruction": instruction, "only": only,
                                   "seconds": round(time.time() - t)}, ensure_ascii=False) + "\n")
-        slicer_says(name, f"Here it is: **picture {index + 1}** ({slicer_pictures.SIZE} x {slicer_pictures.SIZE}, "
-                          f"background cut out, {round(time.time() - t)} s). Tell me what to change, or ask for the "
-                          "next one.", sources=[index])
+        slicer_says(name, f"Here it is: **#{index + 1}** ({slicer_pictures.SIZE} x {slicer_pictures.SIZE}, background "
+                          f"cut out, {round(time.time() - t)} s){(' ' + note) if note else ''}. Tell me what to change, "
+                          "or ask for the next one.", sources=[index])
         print(time.strftime("%H:%M:%S"), "picture made", name, index + 1, round(time.time() - t), "s", flush=True)
     finally:
         running(name, False)
@@ -276,15 +317,27 @@ def make_step(name, part_id):
             base_path = os.path.join(PROJECT, raw["sources"][0])
         seed = 1 + sum(1 for f in os.listdir(os.path.join(folder, "parts", part_id)) if f.startswith("colour"))
         out = os.path.join(folder, "parts", part_id)
-        raw_colour = slicer_pictures.edit(Image.open(base_path), request["prompt"], seed)
+        if part_id == "01_base_body":
+            raw_colour, _, _, note = base_body(Image.open(base_path), request["prompt"], seed)
+            if note:
+                slicer_says(name, f"Base body: {note}", part_id=part_id)
+        else:
+            raw_colour = slicer_pictures.edit(Image.open(base_path), request["prompt"], seed)
         raw_colour.save(os.path.join(out, "colour_raw.png"))
         only = None if part_id in ("00_apose", "01_base_body") else next(
             (p["name"] for p in raw["parts"] if p["id"] == part_id), None)  # a piece alone: nothing else stays
         frame = part_id != "00_apose"  # the layers keep the A-pose's frame: they line up with it
         colour_clear, colour = slicer_pictures.cut_out(raw_colour, only=only, keep_frame=frame)
-        raw_grey = slicer_pictures.edit(colour, request["grey_prompt"], seed)
-        raw_grey.save(os.path.join(out, "grey_raw.png"))
-        grey_clear, grey = slicer_pictures.cut_out(raw_grey, only=only, keep_frame=True)
+        if part_id != "01_base_body":
+            let_go(quiet=False)
+            raw_grey = slicer_pictures.edit(colour, request["grey_prompt"], seed)
+            raw_grey.save(os.path.join(out, "grey_raw.png"))
+            grey_clear, grey = slicer_pictures.cut_out(raw_grey, only=only, keep_frame=True)
+        else:  # the mannequin is grey already: its clay is itself in grey, no second edit that could add anything
+            from PIL import ImageOps
+            g = ImageOps.grayscale(colour_clear.convert("RGB")).convert("RGB")
+            grey_clear = g.convert("RGBA"); grey_clear.putalpha(colour_clear.getchannel("A"))
+            grey = Image.new("RGB", grey_clear.size, slicer_pictures.GREY); grey.paste(grey_clear, (0, 0), grey_clear)
         colour_clear.save(os.path.join(out, "colour_clear.png"))
         grey_clear.save(os.path.join(out, "grey_clear.png"))
         grey.save(os.path.join(out, "grey.png"))
