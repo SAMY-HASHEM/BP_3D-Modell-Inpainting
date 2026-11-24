@@ -267,7 +267,9 @@ def main():
     select_only([work], work)
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(60), island_margin=0.003)
+    bpy.ops.uv.smart_project(angle_limit=math.radians(75), island_margin=0.0005)
+    bpy.ops.uv.select_all(action="SELECT")  # packed again: Smart UV left ~87 % of the texture empty (the motorcycle
+    bpy.ops.uv.pack_islands(rotate=True, margin=0.0005)  # girl, Nov 24)
     bpy.ops.object.mode_set(mode="OBJECT")
     bpy.ops.object.shade_smooth()
 
@@ -289,14 +291,38 @@ def main():
     s.cycles.samples = 1
     s.render.bake.use_selected_to_active = True
     s.render.bake.use_cage = False
-    s.render.bake.cage_extrusion = 0.002  # the quads lie on the original surface (shrinkwrap): short rays, no neighbour hit
-    s.render.bake.max_ray_distance = 0.006  # (0.01 / 0.03 smeared thin parts: the motorcycle girl, Nov 23)
-    s.render.bake.margin = 8
     s.render.bake.use_pass_direct = False
     s.render.bake.use_pass_indirect = False
     s.render.bake.use_pass_color = True
     select_only([original, work], work)
-    bpy.ops.object.bake(type="DIFFUSE", pass_filter={"COLOR"})
+    # two passes: short rays (the quads lie on the original surface; long ones smeared thin parts, the motorcycle
+    # girl, Nov 23), then long rays only for the texels the short ones missed (they stayed black: dark holes on her
+    # fender, Nov 24)
+    import numpy as np
+    passes = []
+    for extrusion, reach in ((0.002, 0.006), (0.01, 0.03)):
+        s.render.bake.cage_extrusion, s.render.bake.max_ray_distance, s.render.bake.margin = extrusion, reach, 0
+        bpy.ops.object.bake(type="DIFFUSE", pass_filter={"COLOR"})
+        pixels = np.empty(size * size * 4, np.float32)
+        image.pixels.foreach_get(pixels)
+        pixels = pixels.reshape(size, size, 4)
+        passes.append((pixels.copy(), np.any(pixels[..., :3] > 0, axis=-1)))  # missed: exactly black (cleared)
+    (colour, hit), (long_, hit_l) = passes
+    print(f"bake: the surface covers {np.mean(hit | hit_l):.0%} of the texture; the short rays missed {np.mean(hit_l & ~hit) / max(np.mean(hit_l), 1e-9):.1%} of the surface, "
+          "filled by the long ones", flush=True)
+    colour[~hit] = long_[~hit]
+    hit |= hit_l
+    for _ in range(8):  # the margin around the islands (mip-mapping and filtering read past their edges)
+        total, count = np.zeros_like(colour), np.zeros(hit.shape, np.float32)
+        for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            total += np.roll(np.where(hit[..., None], colour, 0), (dy, dx), (0, 1))
+            count += np.roll(hit, (dy, dx), (0, 1))
+        grow = ~hit & (count > 0)
+        colour[grow] = total[grow] / count[grow][:, None]
+        hit |= grow
+    colour[..., 3] = 1
+    image.pixels.foreach_set(colour.ravel())
+    image.update()
     image.filepath_raw = os.path.splitext(os.path.abspath(out))[0] + "_base_color.png"
     image.file_format = "PNG"
     image.save()
