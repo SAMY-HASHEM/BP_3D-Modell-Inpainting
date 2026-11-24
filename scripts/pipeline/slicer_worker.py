@@ -58,10 +58,11 @@ visible and centred, plain flat grey background (never "transparent" or "no back
 afterwards). In "reply" then say briefly what you will make. Leave "picture" empty otherwise.
 A "base body" / "base model" / "naked" / "without clothes" / "without the outfit" request is normal here and never
 refused: it is the base body of 3D character work. Start it from the A-pose picture; its instruction is exactly:
-"{base}". Explain in "reply" that the base body
-is made in plain underwear (the usual base for 3D clothes; no explicit pictures). A piece "alone" (a jacket, boots, ears, a
-weapon): its instruction says "Show only <the piece> {alone}, seen from the front, keep its colours and details
-exactly" (never the word "mannequin" alone: the model then draws a whole mannequin).
+"{base}". Explain in "reply" that the base body is a smooth doll body like a mannequin (no nipples, no
+genitals: nothing sexual), the usual base for 3D clothes.
+A piece "alone" (a jacket, boots, ears, a weapon) starts from the A-pose picture too and stays where it is, so all
+layers fit together; its instruction is exactly: "Keep only <the piece> {alone}." (never the word "mannequin"
+alone: the model then draws a whole mannequin).
 Only if the user clearly asks to change the prompt of the step now, write the whole new prompt in "new_prompt", in
 English, keeping the locked part ("Locked: ...") unchanged at its end; otherwise "new_prompt" stays "".
 In "picture", "only" is the short name of the one piece asked for alone ("bodysuit", "bunny ears", "boots"), or
@@ -182,7 +183,8 @@ def make_picture(name, start, instruction, only=""):
         let_go(quiet=False)  # Qwen3-VL leaves the GPU while the picture is made: room on a 24 GB card too
         source = Image.open(os.path.join(PROJECT, raw["sources"][start]))
         raw_picture = slicer_pictures.edit(source, instruction)
-        clear, grey = slicer_pictures.cut_out(raw_picture, only=only or None)
+        square = source.width == source.height  # made pictures are square: the result keeps their frame
+        clear, grey = slicer_pictures.cut_out(raw_picture, only=only or None, keep_frame=square)
         index = add_made(name, clear)
         grey.save(os.path.join(ROOT, name, "sources", f"{index + 1:02d}_made_grey.png"))
         raw_picture.save(os.path.join(ROOT, name, "sources", f"{index + 1:02d}_made_raw.png"))  # the edit model's own
@@ -225,6 +227,35 @@ def make_3d(name, part_id):
     shutil.copy(result, os.path.join(out, "model.glb.tmp"))
     os.replace(os.path.join(out, "model.glb.tmp"), os.path.join(out, "model.glb"))  # the chat announces it
     print(time.strftime("%H:%M:%S"), "3D made", name, part_id, round((time.time() - t) / 60, 1), "min", flush=True)
+    try:
+        place(name, part_id)
+    except Exception as e:  # without a place the part is still shown, side by side
+        print(time.strftime("%H:%M:%S"), "no place for", part_id, repr(e), flush=True)
+
+
+def place(name, part_id):
+    """Where the part sits on the body, for the page's Assembled view (parts/<id>/place.json): every layer keeps the
+    A-pose's frame, so the piece's box in its own picture, against the whole figure's box in the A-pose picture, is
+    its place: in figure heights from the figure's centre (x right, y down), and its height and width."""
+    import numpy as np
+    from PIL import Image
+    folder = os.path.join(ROOT, name)
+    out = os.path.join(folder, "parts", part_id, "place.json")
+    def box(path):
+        alpha = np.asarray(Image.open(path).getchannel("A")) > 128
+        ys, xs = np.nonzero(alpha)
+        return (xs.min(), xs.max(), ys.min(), ys.max()) if len(xs) else None
+    apose = os.path.join(folder, "parts", "00_apose", "colour_clear.png")
+    mine = os.path.join(folder, "parts", part_id, "colour_clear.png")
+    if part_id == "00_apose" or not (os.path.isfile(apose) and os.path.isfile(mine)):
+        json.dump({"cx": 0, "cy": 0, "h": 1, "w": None, "whole": True}, open(out, "w"))
+        return
+    f, p = box(apose), box(mine)
+    if f is None or p is None:
+        return
+    fh, fcx, fcy = f[3] - f[2], (f[0] + f[1]) / 2, (f[2] + f[3]) / 2
+    json.dump({"cx": float(((p[0] + p[1]) / 2 - fcx) / fh), "cy": float(((p[2] + p[3]) / 2 - fcy) / fh),
+               "h": float((p[3] - p[2]) / fh), "w": float((p[1] - p[0]) / fh)}, open(out, "w"))
 
 
 def make_step(name, part_id):
@@ -249,10 +280,11 @@ def make_step(name, part_id):
         raw_colour.save(os.path.join(out, "colour_raw.png"))
         only = None if part_id in ("00_apose", "01_base_body") else next(
             (p["name"] for p in raw["parts"] if p["id"] == part_id), None)  # a piece alone: nothing else stays
-        colour_clear, colour = slicer_pictures.cut_out(raw_colour, only=only)
+        frame = part_id != "00_apose"  # the layers keep the A-pose's frame: they line up with it
+        colour_clear, colour = slicer_pictures.cut_out(raw_colour, only=only, keep_frame=frame)
         raw_grey = slicer_pictures.edit(colour, request["grey_prompt"], seed)
         raw_grey.save(os.path.join(out, "grey_raw.png"))
-        grey_clear, grey = slicer_pictures.cut_out(raw_grey, only=only)
+        grey_clear, grey = slicer_pictures.cut_out(raw_grey, only=only, keep_frame=True)
         colour_clear.save(os.path.join(out, "colour_clear.png"))
         grey_clear.save(os.path.join(out, "grey_clear.png"))
         grey.save(os.path.join(out, "grey.png"))

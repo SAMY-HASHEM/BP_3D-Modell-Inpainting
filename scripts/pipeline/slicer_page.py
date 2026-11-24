@@ -364,6 +364,12 @@ def state(name):
         return found
     for part in plan.get("parts", []):
         part["files"] = files(os.path.join("parts", part["id"]))
+        where = os.path.join(folder, "parts", part["id"], "place.json")
+        if os.path.isfile(where):
+            try:
+                part["place"] = json.load(open(where))
+            except ValueError:
+                pass
         part["status"] = ("made" if "model" in part["files"] else "pictures" if part["files"] else "planned")
     sources = plan.get("sources") or ([plan["source"]] if plan.get("source") else [])
     plan["source_urls"] = [f"source/{name}?i={i}&t={int(os.path.getmtime(os.path.join(PROJECT, src)))}"

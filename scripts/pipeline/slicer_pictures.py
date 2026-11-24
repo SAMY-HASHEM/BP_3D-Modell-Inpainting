@@ -93,8 +93,10 @@ def find(image, word):
         return found["picture"].astype(bool) if "picture" in found.files and found["picture"].any() else None
 
 
-def cut_out(image, only=None):
+def cut_out(image, only=None, keep_frame=False):
     """The figure alone: (transparent RGBA, the same on #808080), both SIZE x SIZE, the figure centred with a margin.
+    keep_frame: not centred, where it is in the picture (the layers made from the A-pose keep its frame, so the base
+    body and every piece line up with it, Nov 24).
     only: a word ("bodysuit"); then only that thing stays (the edit model leaves other pieces floating around a
     piece asked for alone: the ears and hair strands around Lou's bodysuit, Nov 24)."""
     import torch
@@ -111,6 +113,11 @@ def cut_out(image, only=None):
     ys, xs = np.nonzero(alpha > 128)
     if len(xs) == 0:
         raise ValueError("nothing was left after cutting the background out")
+    if keep_frame:
+        clear = rgba.resize((SIZE, SIZE), Image.LANCZOS)
+        grey = Image.new("RGB", (SIZE, SIZE), GREY)
+        grey.paste(clear, (0, 0), clear)
+        return clear, grey
     box = rgba.crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
     scale = 0.9 * SIZE / max(box.size)  # 5 % margin on every side
     box = box.resize((max(1, round(box.width * scale)), max(1, round(box.height * scale))), Image.LANCZOS)

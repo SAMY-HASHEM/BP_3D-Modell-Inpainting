@@ -2,7 +2,7 @@
 their prompts are then written from one fixed template, so every project has the same locks.
 
 Always: 00 the whole character in an A-pose, 01 the base body (the same body without its outfit and accessories, in
-plain underwear: what every piece is put on), then every piece Qwen3-VL finds made alone: hair, what is worn on the
+a smooth doll body: what every piece is put on), then every piece Qwen3-VL finds made alone: hair, what is worn on the
 head, each piece of clothing (empty, as on an invisible mannequin), gloves, shoes, accessories, props.
 
     python scripts/pipeline/slicer_plan.py outputs/slicer/<name>      # reads its sources/, writes its slicer.json
@@ -30,16 +30,22 @@ GREY = ("The same picture as an unpainted grey clay sculpt: every shape, fold an
         "material, no colours, no patterns.")
 EDITOR = "Qwen-Image-Edit 2511 (local, ComfyUI), made at about 1024 and brought to 2048 by Real-ESRGAN"
 
-ALONE = ('as a ghost-mannequin product photo: only the item itself, hollow and empty inside, keeping its worn 3D shape, with empty openings where the body would be; no person, no mannequin, no skin, no head, no arms, no legs; '
-         'large, filling most of the picture; nothing else in the picture')
-# the base body as a small edit ("change only ..."): asked as "the same character as a base body" the edit model drew
-# a new, more generic woman (another face, smaller, slimmer: Lou, Nov 24); as a clothes-only change it keeps her
-BASE = ("Change only the clothes, the accessories and the hairstyle, nothing else: replace the outfit with plain "
-        "tight-fitting neutral grey underwear (a sports bra and briefs), remove every accessory, glove, cuff, "
-        "headwear, jewellery, weapon and the shoes (barefoot), and pull the hair back tightly into a small bun at the "
-        "back of the head. Keep everything else exactly as it is in the picture: the same face, the same skin, the "
-        "same body shape with the same width of shoulders, chest, waist, hips and thighs, the same height, the same "
-        "A-pose and the same camera.")
+# the layers made from the A-pose keep its frame (no new centring): the base body and every piece line up with it
+FRAME = "Plain flat #808080 grey background, soft even studio light, no shadow on the floor, no text."
+# a piece alone stays where it is on the A-pose, at its size (Nov 24: redrawn large and centred, the pieces no longer
+# fitted the body: "they all have to be consistent together"; "invisible mannequin" alone drew a whole mannequin)
+ALONE = ("exactly where it is in the picture, at exactly the same size, position and shape, as if worn by an invisible "
+         "body: hollow and empty, with empty openings where the body would be. Remove the body, the head, the skin and "
+         "every other item. Keep its colours and every detail exactly")
+# the base body: the same body as the A-pose, as a smooth doll (a 3D base mesh). Asked as "the same character as a
+# base body" the edit model drew a new, slimmer woman; in plain underwear the user found it not consistent (Nov 24)
+BASE = ("Remove all the clothes and all accessories (every piece of clothing, headwear, gloves, cuffs, jewellery, "
+        "weapons and the shoes) and pull the hair back tightly into a small bun. Show the body as a smooth featureless "
+        "doll body, like a plastic mannequin or a 3D base mesh: smooth skin everywhere, the chest smooth without "
+        "nipples, the crotch smooth and flat without any genitals, nothing sexual. Keep everything else exactly as it "
+        "is in the picture: the same face, the same skin colour, the same body shape with the same width of "
+        "shoulders, chest, waist, hips and thighs, the same height, the same A-pose, the same size and position in "
+        "the picture and the same camera.")
 
 QUESTION = """You prepare this character for 3D modelling in layers: first a base body, then every piece of clothing
 and every accessory made alone, to be put on the body afterwards. Look at the picture(s) and answer with JSON only:
@@ -82,16 +88,22 @@ def plan_from(answer, name, sources):
                    "from the body at about 45 degrees, palms toward the body, legs slightly apart, feet flat. "
                    f"Keep {keep} exactly as they are.{leave} {LOCK}"},
         {"id": "01_base_body", "name": "Base body",
-         "what": "always first after the A-pose: the same body without its outfit and accessories (plain underwear), "
+         "what": "always first after the A-pose: the same body without outfit and accessories, a smooth doll body, "
                  "the base every piece is put on" + (f"; {answer['body']}" if answer.get("body") else ""),
-         "prompt": f"{BASE} {LOCK}"},
+         "prompt": f"{BASE} {FRAME}"},
     ]
     used = {"apose", "base_body"}
     found = [p for p in answer.get("parts") or [] if isinstance(p, dict)]
     named = " ".join(str(p.get("name", "")) + " " + str(p.get("show", "")) for p in found).lower()
+    def known(text):  # already a part: one of its longer words is in a part's name or description
+        return any(w in named for w in re.findall(r"[a-z]{4,}", text.lower()) if w not in ("with", "giant", "large", "small"))
     for prop in props:  # every prop is a part of its own (the model sometimes lists them only as props)
-        if prop.lower() not in named:
+        if not known(prop):
             found.append({"name": prop, "show": f"the {prop} alone, whole, no hands"})
+            named += " " + prop.lower()
+    if "hair" not in named and "bald" not in (answer.get("keep") or "").lower():
+        # the base body has its hair in a bun: the hair itself is always a piece (the model sometimes leaves it out)
+        found.insert(0, {"name": "hair", "show": "the hair alone as a wig, in its own style, colour and length, as it falls in the A-pose"})
     for i, part in enumerate(found):
         if not isinstance(part, dict) or not part.get("show"):
             continue
@@ -105,8 +117,7 @@ def plan_from(answer, name, sources):
         used.add(s)
         parts.append({"id": f"{len(parts):02d}_{s}", "name": label.capitalize(),
                       "what": part["show"],
-                      "prompt": f"Show only {the(part['show'])}, {ALONE}, seen from the front. Keep its shape, "
-                                f"colours and details exactly as on the character. {LOCK}"})
+                      "prompt": f"Keep only {the(part['show'])}, {ALONE}. {FRAME}"})
         if len(parts) >= 10:
             break
     for p in parts:

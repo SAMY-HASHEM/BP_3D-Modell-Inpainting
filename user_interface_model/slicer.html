@@ -175,12 +175,24 @@ renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, came
 function arrange() {  // side by side (each part on the floor, in order) or each where it was made
   let x = 0; const ids = Object.keys(loaded).sort();
   for (const id of ids) { const o = loaded[id].object; o.visible = loaded[id].on; o.position.copy(loaded[id].home); }
+  for (const id of ids) { const o = loaded[id].object; o.scale.setScalar(1); }
   if (sideBySide) {
     for (const id of ids) { const o = loaded[id].object; if (!o.visible) continue;
       const box = new THREE.Box3().setFromObject(o), size = box.getSize(new THREE.Vector3());
       o.position.x += x - box.min.x; o.position.y -= box.min.y; o.position.z -= (box.min.z + box.max.z) / 2; x += size.x + 0.15; }
     parts.position.x = -x / 2;
-  } else parts.position.x = 0;
+  } else {  // Assembled: every piece where its place.json says, on the base body (or the A-pose)
+    parts.position.x = 0;
+    const bodyId = ["01_base_body", "00_apose"].find(k => loaded[k]);
+    if (bodyId) {
+      const body = loaded[bodyId].object, bb = new THREE.Box3().setFromObject(body);
+      const H = bb.max.y - bb.min.y, C = bb.getCenter(new THREE.Vector3());
+      for (const id of ids) { const p = loaded[id], o = p.object; if (!p.place || p.place.whole) continue;
+        const box = new THREE.Box3().setFromObject(o), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+        const k = p.place.h * H / Math.max(size.y, 1e-6); o.scale.setScalar(k);
+        o.position.x += C.x + p.place.cx * H - c.x * k; o.position.y += C.y - p.place.cy * H - c.y * k; o.position.z += C.z - c.z * k; }
+    }
+  }
   $("#empty").style.display = ids.length ? "none" : "";
 }
 function fit() {
@@ -195,10 +207,10 @@ $("#layout").onclick = () => { sideBySide = !sideBySide; $("#layout").textConten
 function show3d(part) {  // a part's model: loaded once per new file (its address has the file's time)
   const url = part.files.model, have = loaded[part.id];
   if (!url) { if (have) { parts.remove(have.object); delete loaded[part.id]; arrange(); } return; }
-  if (have && have.url === url) return;
+  if (have && have.url === url) { if (JSON.stringify(have.place) !== JSON.stringify(part.place)) { have.place = part.place; arrange(); } return; }
   loader.load(url, g => {
     if (have) parts.remove(have.object);
-    loaded[part.id] = { url, object: g.scene, home: g.scene.position.clone(), on: have ? have.on : true, name: part.name };
+    loaded[part.id] = { url, object: g.scene, home: g.scene.position.clone(), on: have ? have.on : true, name: part.name, place: part.place };
     parts.add(g.scene); arrange(); legend(); if (!have) fit();
   }, undefined, e => console.warn("could not load", url, e));
 }
