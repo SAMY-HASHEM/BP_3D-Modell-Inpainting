@@ -4,7 +4,8 @@ the tool that won on Nov 23 (the motorcycle girl, Erik's bust, the Plague Knight
   3 de-light      delight.py, when grey (clay) views of the same angles are given
   4 shape         multi_image.py (grey views for the shape, de-lit / colour views for the colours), or generate.py
                   for one picture; the resolution from the machine's profile (server 1536, a 24 GB PC 1024);
-                  --seeds N: N quick seeds at 1024 scored against the pictures, the best one made in full
+                  --seeds N: N quick seeds at 1024 scored against the pictures, the best one made in full;
+                  --shaper pixal3d (one picture): Pixal3D instead (compare_pixal3d.py; Malenia's best outline)
   7 colours       describe_colours.py (Qwen3-VL) -> texture_mvadapter.py (MV-Adapter, from the view that shows the
                   most) -> merge_textures.py (the shape stage's faithful colours + MV-Adapter's crisp detail)
   8 detail        detail_normals.py, with --parts (e.g. "skin=noise:0.35:0.012" "cloth=cotton_jersey:0.6:0.03")
@@ -69,6 +70,8 @@ def main():
     p.add_argument("--seeds", type=int, default=1, help="try this many seeds at 1024 first, scored against the "
                    "pictures (score_model.py); the best one is made at full resolution")
     p.add_argument("--seed", type=int, default=42, help="the seed (without --seeds)")
+    p.add_argument("--shaper", choices=["trellis", "pixal3d"], default="trellis", help="stage 4 for one picture: "
+                   "Pixal3D follows the picture's pose most closely (Malenia), TRELLIS.2 guesses the back fuller")
     p.add_argument("--face", help="with --seeds: pick the seed whose part (e.g. face) is likest the picture's")
     a = p.parse_args()
     out = os.path.abspath(a.out)
@@ -139,6 +142,11 @@ def main():
             best = min(range(len(scores)), key=lambda i: (scores[i]["mean"]["colour"], -scores[i]["mean"]["outline"]))
         seed = best
         print(f"seed {seed} scored best: {scores[best]['mean']}", flush=True)
+    if a.shaper == "pixal3d":  # one picture, pixel-aligned (Malenia: outline 0.939 against TRELLIS.2's 0.861)
+        assert len(colour) == 1, "--shaper pixal3d takes one picture"
+        run("4 shape (Pixal3D)", [PY, S("generation", "compare_pixal3d.py"), grey[0] if grey else colour[0],
+                                  "--colour-picture", colour[0], "--name", "shape", "--out", out,
+                                  "--resolution", resolution, "--seed", str(seed)], o("shape.glb"), out)
     run("4 shape", cmd + ["--resolution", resolution, "--seed", str(seed), "--out", o("shape.glb")], o("shape.glb"),
         out)
     models = [("4 shape", o("shape.glb"))]

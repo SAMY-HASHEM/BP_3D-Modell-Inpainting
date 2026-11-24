@@ -48,6 +48,12 @@ pictures / video ─► 1 views ─► 2 cut-out ─► 3 de-light ─► 4 shap
   now the default for one picture) 0.866. Seeds: 0 → 0.866, 2 → 0.852, 1 → 0.676 (seed 1 also looks worst).
 - Seed 0 (scored best) and seed 2 look about as good; seed 2 has the fuller hair and cape, seed 0 the cleaner front.
 - The automatic parts (Qwen3-VL) found helmet, boots, sword, cape; the hair and the ring got no detail map.
+- Pixal3D (`--shaper pixal3d`, 14 min in one go) follows the picture's pose most closely: outline 0.939 against
+  TRELLIS.2's 0.861 (seed 2) and 0.794 (seed 0; scores on the one picture, which Pixal3D is built from, so not a fair
+  hold-out). It left the cape's back black; MV-Adapter painted it red.
+- MV-Adapter's UVAtlas refuses non-manifold meshes (Pixal3D's): the mesh's own UVs are used then.
+- Every retopology so far came out inside out (Instant Meshes; volume < 0), so the bake's rays went inward and thin
+  parts took their other side's colour (Malenia's red cape black): the quads are now turned outward.
 
 ## The numbers (`scripts/tools/score_model.py`)
 
