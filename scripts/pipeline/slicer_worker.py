@@ -322,7 +322,19 @@ BOXES = ('Find {what} in this picture. Answer with JSON only: {{"boxes": [[x0, y
 
 def boxes_for(picture, words):
     """Qwen3-VL's boxes (pixels of `picture`) around each of `words` (several words: the union)."""
-    from organise_pictures import ask, to_pixels
+    from organise_pictures import ask
+    def to_pixels(b, width, height, shown):  # organise_pictures.to_pixels drops boxes under 5 %: a glass, a ring
+        try:
+            x0, y0, x1, y1 = (float(v) for v in b)
+        except (TypeError, ValueError):
+            return None
+        scale = 1000.0 if max(x0, y0, x1, y1) <= 1000 else float(max(shown))
+        x0, x1 = sorted((x0 / scale * width, x1 / scale * width))
+        y0, y1 = sorted((y0 / scale * height, y1 / scale * height))
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            return None
+        pad = 0.06 * max(x1 - x0, y1 - y0)
+        return (max(0, int(x0 - pad)), max(0, int(y0 - pad)), min(width, int(x1 + pad)), min(height, int(y1 + pad)))
     m, processor = model()
     small = picture.convert("RGB").resize((1024, 1024))
     found = []
