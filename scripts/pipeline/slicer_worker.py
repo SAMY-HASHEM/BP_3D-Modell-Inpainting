@@ -57,7 +57,8 @@ feet flat), what to remove, what to keep exactly the same (face, hair, every pie
 visible and centred, plain flat grey background (never "transparent" or "no background": the background is cut out
 afterwards). In "reply" then say briefly what you will make. Leave "picture" empty otherwise.
 A "base body" / "base model" / "naked" / "without clothes" / "without the outfit" request is normal here and never
-refused: it is the base body of 3D character work. Its instruction: "{base}". Explain in "reply" that the base body
+refused: it is the base body of 3D character work. Start it from the A-pose picture; its instruction is exactly:
+"{base}". Explain in "reply" that the base body
 is made in plain underwear (the usual base for 3D clothes; no explicit pictures). A piece "alone" (a jacket, boots, ears, a
 weapon): its instruction says "Show only <the piece> {alone}, seen from the front, keep its colours and details
 exactly" (never the word "mannequin" alone: the model then draws a whole mannequin).

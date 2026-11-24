@@ -32,10 +32,14 @@ EDITOR = "Qwen-Image-Edit 2511 (local, ComfyUI), made at about 1024 and brought 
 
 ALONE = ('as a ghost-mannequin product photo: only the item itself, hollow and empty inside, keeping its worn 3D shape, with empty openings where the body would be; no person, no mannequin, no skin, no head, no arms, no legs; '
          'large, filling most of the picture; nothing else in the picture')
-BASE = ("the same character as a 3D base body: exactly the same face, skin, body shape and proportions, standing in "
-        "the same A-pose, wearing only plain tight-fitting neutral grey underwear (a simple sports top and short "
-        "briefs), barefoot, hair tied back close to the head, no clothes, no armour, no jewellery, no accessories, "
-        "nothing in the hands")
+# the base body as a small edit ("change only ..."): asked as "the same character as a base body" the edit model drew
+# a new, more generic woman (another face, smaller, slimmer: Lou, Nov 24); as a clothes-only change it keeps her
+BASE = ("Change only the clothes, the accessories and the hairstyle, nothing else: replace the outfit with plain "
+        "tight-fitting neutral grey underwear (a sports bra and briefs), remove every accessory, glove, cuff, "
+        "headwear, jewellery, weapon and the shoes (barefoot), and pull the hair back tightly into a small bun at the "
+        "back of the head. Keep everything else exactly as it is in the picture: the same face, the same skin, the "
+        "same body shape with the same width of shoulders, chest, waist, hips and thighs, the same height, the same "
+        "A-pose and the same camera.")
 
 QUESTION = """You prepare this character for 3D modelling in layers: first a base body, then every piece of clothing
 and every accessory made alone, to be put on the body afterwards. Look at the picture(s) and answer with JSON only:
@@ -80,7 +84,7 @@ def plan_from(answer, name, sources):
         {"id": "01_base_body", "name": "Base body",
          "what": "always first after the A-pose: the same body without its outfit and accessories (plain underwear), "
                  "the base every piece is put on" + (f"; {answer['body']}" if answer.get("body") else ""),
-         "prompt": f"Show {BASE}. {LOCK}"},
+         "prompt": f"{BASE} {LOCK}"},
     ]
     used = {"apose", "base_body"}
     found = [p for p in answer.get("parts") or [] if isinstance(p, dict)]
