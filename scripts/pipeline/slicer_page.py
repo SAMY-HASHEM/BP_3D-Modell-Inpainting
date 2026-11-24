@@ -99,7 +99,7 @@ def step_message(plan, index):
 def new_chat(name, plan):
     if not plan.get("sources") and not plan.get("source"):
         return {"messages": [{"who": "slicer", "text": f"A new character: **{name}**.\nSend me one or more pictures of "
-                              "it with 📎 below (or drop or paste them here). Front, back, coloured or grey: all help. "
+                              "it with the picture button below (or drop or paste them here). Front, back, coloured or grey: all help. "
                               "Write anything I should know with them."}],
                 "step": 0, "announced": {}, "planned": False}
     if not plan["parts"]:

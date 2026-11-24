@@ -301,7 +301,7 @@ def place(name, part_id):
         return (xs.min(), xs.max(), ys.min(), ys.max()) if len(xs) else None
     apose = os.path.join(folder, "parts", "00_apose", "colour_clear.png")
     mine = os.path.join(folder, "parts", part_id, "colour_clear.png")
-    if part_id == "00_apose" or not (os.path.isfile(apose) and os.path.isfile(mine)):
+    if part_id == "00_apose" or not (os.path.isfile(apose) and os.path.isfile(mine)):  # the base body too is placed
         json.dump({"cx": 0, "cy": 0, "h": 1, "w": None, "whole": True}, open(out, "w"))
         return
     f, p = box(apose), box(mine)

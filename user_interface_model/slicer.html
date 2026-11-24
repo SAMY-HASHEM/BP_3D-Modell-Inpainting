@@ -63,7 +63,7 @@
   #composer { display:flex; gap:8px; padding:10px 12px 12px; border-top:1px solid var(--line); background:var(--ink); }
   #composer textarea { min-height:44px; max-height:160px; flex:1; }
   #composer button { align-self:flex-end; height:44px; padding:0 16px; }
-  #attach { align-self:flex-end; height:44px; width:44px; padding:0; font-size:18px; }
+  #attach { align-self:flex-end; height:44px; width:44px; padding:0; display:flex; align-items:center; justify-content:center; }
   #attached { padding:0 12px; margin:0; }
   #attached:empty { display:none; }
   #attached figure { flex:0 0 76px; position:relative; padding-top:8px; }
@@ -107,7 +107,7 @@
     <div id="messages" aria-live="polite"></div>
     <div id="attached" class="pics"></div>
     <form id="composer">
-      <button type="button" id="attach" title="Add pictures (or drop or paste them into the chat)" aria-label="Add pictures">📎</button>
+      <button type="button" id="attach" title="Add pictures (or drop or paste them into the chat)" aria-label="Add pictures"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="M21 15l-5-5L5 21"/></svg></button>
       <input type="file" id="files" accept=".png,.jpg,.jpeg,.webp" multiple hidden>
       <textarea id="input" placeholder="Write to the Slicer…  (Enter sends, Shift+Enter a new line)" aria-label="Message"></textarea>
       <button type="submit" id="send">Send</button>
@@ -184,19 +184,32 @@ function arrange() {  // side by side (each part on the floor, in order) or each
       const box = new THREE.Box3().setFromObject(o), size = box.getSize(new THREE.Vector3());
       o.position.x += x - box.min.x; o.position.y -= box.min.y; o.position.z -= (box.min.z + box.max.z) / 2; x += size.x + 0.15; }
     parts.position.x = -x / 2;
-  } else {  // Assembled: every piece where its place.json says, on the base body (or the A-pose)
+  } else {  // Assembled: every layer where its place.json says, on the A-pose model (all pictures share its frame)
     parts.position.x = 0;
-    const bodyId = ["01_base_body", "00_apose"].find(k => loaded[k]);
-    if (bodyId) {
-      const body = loaded[bodyId].object, bb = new THREE.Box3().setFromObject(body);
+    const ref = loaded["00_apose"] || loaded["01_base_body"];
+    if (ref) {
+      const bb = new THREE.Box3().setFromObject(ref.object);
       const H = bb.max.y - bb.min.y, C = bb.getCenter(new THREE.Vector3());
-      for (const id of ids) { const p = loaded[id], o = p.object; if (!p.place || p.place.whole) continue;
+      for (const id of ids) { const p = loaded[id], o = p.object; if (p === ref || !p.place || p.place.whole) continue;
         const box = new THREE.Box3().setFromObject(o), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
         const k = p.place.h * H / Math.max(size.y, 1e-6); o.scale.setScalar(k);
-        o.position.x += C.x + p.place.cx * H - c.x * k; o.position.y += C.y - p.place.cy * H - c.y * k; o.position.z += C.z - c.z * k; }
+        o.position.x += C.x + p.place.cx * H - c.x * k; o.position.y += C.y - p.place.cy * H - c.y * k; o.position.z += C.z - c.z * k;
+        // depth: its front lined up with the A-pose's front at the same height (the box centre is pulled back by
+        // capes and wings: demon's mannequin stood behind her, Nov 24)
+        const nb = new THREE.Box3().setFromObject(o), y0 = nb.min.y + 0.4 * (nb.max.y - nb.min.y), y1 = nb.min.y + 0.6 * (nb.max.y - nb.min.y);
+        const mine = frontDepth(o, y0, y1), theirs = frontDepth(ref.object, y0, y1);
+        if (mine !== null && theirs !== null) o.position.z += theirs - mine; }
     }
   }
   $("#empty").style.display = ids.length ? "none" : "";
+}
+function frontDepth(object, lo, hi) {  // how far forward (+z: glTF faces +z) the surface reaches between heights lo and hi
+  const zs = [], v = new THREE.Vector3();
+  object.updateMatrixWorld(true);
+  object.traverse(m => { if (!m.isMesh) return; const pos = m.geometry.attributes.position, step = Math.max(1, Math.floor(pos.count / 30000));
+    for (let i = 0; i < pos.count; i += step) { v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); if (v.y >= lo && v.y <= hi) zs.push(v.z); } });
+  if (!zs.length) return null;
+  zs.sort((a, b) => a - b); return zs[Math.floor(zs.length * 0.9)];
 }
 function fit() {
   const box = new THREE.Box3().setFromObject(parts); if (box.isEmpty()) return;
