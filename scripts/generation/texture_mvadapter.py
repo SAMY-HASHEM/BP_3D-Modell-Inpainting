@@ -74,10 +74,16 @@ def main():
     start = time.time()
     upscaler = os.path.join(PROJECT, "local_ai_models", "upscale", "RealESRGAN_x4plus.pth") if a.upscale else None
     texture = TexturePipeline(upscaler_ckpt_path=upscaler, inpaint_ckpt_path=None, device="cuda")
-    result = texture(mesh_path=a.model, save_dir=out_dir, save_name=name, uv_unwarp=True, preprocess_mesh=False,
-                     uv_size=4096, rgb_path=views,
-                     rgb_process_config=ModProcessConfig(view_upscale=a.upscale, inpaint_mode="uv"),
-                     camera_azimuth_deg=[x - 90 for x in [0, 90, 180, 270, 180, 180]])
+    paint = dict(save_dir=out_dir, save_name=name, preprocess_mesh=False, uv_size=4096, rgb_path=views,
+                 rgb_process_config=ModProcessConfig(view_upscale=a.upscale, inpaint_mode="uv"),
+                 camera_azimuth_deg=[x - 90 for x in [0, 90, 180, 270, 180, 180]])
+    try:
+        result = texture(mesh_path=a.model, uv_unwarp=True, **paint)
+    except RuntimeError as error:  # UVAtlas refuses non-manifold meshes (Pixal3D's Malenia, Nov 24): the mesh's own
+        # UVs then (Pixal3D's are even, ~3 texels a triangle; Blender's Smart UV of 950 k faces gave most triangles
+        # under a tenth of a texel, xatlas took over 10 min)
+        print(f"UVAtlas failed ({str(error).strip()[-40:]}): the mesh's own UVs", flush=True)
+        result = texture(mesh_path=a.model, uv_unwarp=False, **paint)
     os.replace(result.shaded_model_save_path, a.out)
     print(f"textured in {time.time() - start:.0f} s, GPU peak {torch.cuda.max_memory_allocated() / 2**30:.1f} GB "
           f"-> {a.out}", flush=True)

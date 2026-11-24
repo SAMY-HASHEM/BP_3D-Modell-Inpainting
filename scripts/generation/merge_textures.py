@@ -2,7 +2,8 @@
 from de-lit views, N4) with the crisp detail of the vivid one (e.g. MV-Adapter's, which paints sharp but guesses
 colours it can't see: the motorcycle girl's helmet came out green, Nov 23).
 
-Per texel of the vivid one's texture (both meshes the same, face for face; MV-Adapter only gives it new UVs):
+Per texel of the vivid one's texture (both meshes the same, face for face, MV-Adapter only gives it new UVs; or the
+same surface with a few faces fewer: matched by the faces' centres):
   low      both textures' large-scale colours: averaged in 3D cells (--cell, 1.5 % of the model) with their
            neighbours (not blurred on the image: a texture's UV islands lie anywhere)
   agree    how close the two large-scale colours are (CIELAB distance; full up to --agree, none from 2 x --agree)
@@ -57,7 +58,15 @@ def main():
 
     _, mesh_f, tex_f = load(a.faithful)
     scene_v, mesh_v, tex_v = load(a.vivid)
-    assert len(mesh_f.faces) == len(mesh_v.faces), "not the same mesh (face counts differ)"
+    same = len(mesh_f.faces) == len(mesh_v.faces)
+    if not same:  # the same surface, not face for face (Blender's unwrap dropped 34 degenerate faces of Pixal3D's
+        # Malenia, Nov 24): each vivid face matched to the faithful face with the nearest centre
+        from scipy.spatial import cKDTree
+        dist, match = cKDTree(mesh_f.triangles_center).query(mesh_v.triangles_center)
+        size_f = float(np.ptp(mesh_f.vertices, axis=0).max())
+        print(f"faces {len(mesh_v.faces)} vs {len(mesh_f.faces)}: matched by centre, median distance "
+              f"{np.median(dist) / size_f:.2e}, 99 % {np.percentile(dist, 99) / size_f:.2e} of the model", flush=True)
+        assert np.median(dist) < 1e-4 * size_f, "not the same surface"
     size = tex_v.shape[0]
 
     # every texel of the vivid texture: its face and place in it (rasterised in its UV space)
@@ -77,8 +86,17 @@ def main():
     place = b0[:, None] * corners[:, 0] + b1[:, None] * corners[:, 1] + b2[:, None] * corners[:, 2]
 
     # the same face, the same place, in the faithful mesh's UVs -> its colour there
-    uv_f = mesh_f.visual.uv[mesh_f.faces[face]]  # (n, 3, 2)
-    at = b0[:, None] * uv_f[:, 0] + b1[:, None] * uv_f[:, 1] + b2[:, None] * uv_f[:, 2]
+    if same:
+        uv_f = mesh_f.visual.uv[mesh_f.faces[face]]  # (n, 3, 2)
+        at = b0[:, None] * uv_f[:, 0] + b1[:, None] * uv_f[:, 1] + b2[:, None] * uv_f[:, 2]
+    else:  # the place's barycentrics in the matched faithful face (its corners may be in another order)
+        at = np.zeros((len(face), 2))
+        for i in range(0, len(face), 2_000_000):
+            f = match[face[i:i + 2_000_000]]
+            bary = trimesh.triangles.points_to_barycentric(mesh_f.triangles[f], place[i:i + 2_000_000])
+            bary = np.clip(bary, 0, None)
+            bary /= np.maximum(bary.sum(1, keepdims=True), 1e-9)
+            at[i:i + 2_000_000] = np.einsum("nk,nkd->nd", bary, mesh_f.visual.uv[mesh_f.faces[f]])
     h, w = tex_f.shape[:2]
     x = np.clip(at[:, 0] * (w - 1), 0, w - 1)
     y = np.clip((1 - at[:, 1]) * (h - 1), 0, h - 1)
