@@ -47,8 +47,9 @@ The chat so far:
 {history}
 
 Answer the user's last message. Be short and concrete (at most 6 sentences), in the user's language, plain text.
-If the user asks to change the picture of the step now (pose, what to keep or leave out, details), also write the
-whole new prompt for it, in English, keeping the locked part ("Locked: ...") unchanged at its end.
+Only if the user clearly asks to change the picture of the step now (pose, what to keep or leave out, details),
+write the whole new prompt for it, in English, keeping the locked part ("Locked: ...") unchanged at its end.
+Otherwise "new_prompt" stays "": sending a picture or asking a question is not a request to change the prompt.
 Answer with JSON only: {{"reply": "...", "new_prompt": "" }}"""
 
 

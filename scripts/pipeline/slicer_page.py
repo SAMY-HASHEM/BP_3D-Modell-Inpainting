@@ -219,18 +219,30 @@ def say(name, text, action=None, part_id=None, files=None):
             raw.setdefault("source", raw["sources"][0])
             save(plan_file, raw)
             message["sources"] = list(range(len(sources), len(sources) + len(new)))
+            again = sorted(set(add_pictures.repeated))
+            if again:
+                message["repeated"] = again
         chat["messages"].append(message)
+        if files and not message["sources"]:  # nothing new
+            chat["messages"].append({"who": "slicer", "text": "I have " + ("this picture" if len(again) == 1 else "these pictures")
+                                     + " already (picture " + ", ".join(str(i + 1) for i in again) + "), so I didn't add "
+                                     + ("it" if len(again) == 1 else "them") + " again."})
+            chat["answered"] = len(chat["messages"]) - 2
+            save(chat_path(name), chat)
+            return
         if files and not plan["parts"]:
             if not os.path.isfile(os.path.join(folder, "plan_request.json")):
                 ask_plan(folder, text)
+                chat["answered"] = len(chat["messages"]) - 1
                 n = len(message["sources"])
                 chat["messages"].append({"who": "slicer", "kind": "working", "part": "_plan",
                                          "text": f"Got {'them' if n > 1 else 'it'}. I'm looking at the "
                                                  f"picture{'s' if n > 1 else ''} to plan the parts (about a minute)…"})
-        elif files:
+        elif files and not text:  # no words with them: no need to ask the model
             chat["messages"].append({"who": "slicer", "buttons": ["replan"], "part": "_plan",
                                      "text": "I added the picture(s) to the references. Should I plan the parts again "
                                              "with them? (The parts already made stay where they are.)"})
+            chat["answered"] = len(chat["messages"]) - 2
         if action == "replan":
             ask_plan(folder, text)
             raw = json.load(open(plan_file))
@@ -281,6 +293,9 @@ def answer(name, upto, text, new_prompt=None):
         chat = load_chat(name, plan)
         chat["answered"] = max(chat.get("answered", -1), upto)
         message = {"who": "slicer", "text": text}
+        theirs = chat["messages"][upto] if upto < len(chat["messages"]) else {}
+        if theirs.get("sources") and plan["parts"]:
+            message.update(buttons=["replan"], part="_plan")
         if new_prompt and chat["step"] < len(plan["parts"]):
             part_id = plan["parts"][chat["step"]]["id"]
             raw = json.load(open(plan_path(name)))
@@ -364,11 +379,19 @@ def add_pictures(name, folder, files, sources):
         raise ValueError("at most 12 pictures per character")
     os.makedirs(os.path.join(folder, "sources"), exist_ok=True)
     new = []
+    repeated = add_pictures.repeated = []  # pictures sent before (their numbers), not added again
     for f in files:
         ext = os.path.splitext(str(f.get("name", "")))[1].lower()
         if ext not in PICTURE:
             raise ValueError(f"{f.get('name')!r} is not a picture (png, jpg, webp)")
         data = base64.b64decode(str(f.get("data", "")).split(",", 1)[-1])
+        import hashlib
+        digest = hashlib.sha1(data).hexdigest()
+        have = {hashlib.sha1(open(os.path.join(PROJECT, x), "rb").read()).hexdigest(): i
+                for i, x in enumerate(sources + new) if os.path.isfile(os.path.join(PROJECT, x))}
+        if digest in have:
+            repeated.append(have[digest])
+            continue
         if len(data) > 30e6:
             raise ValueError(f"{f.get('name')!r} is over 30 MB")
         path = os.path.join(folder, "sources", f"{len(sources) + len(new) + 1:02d}{ext}")

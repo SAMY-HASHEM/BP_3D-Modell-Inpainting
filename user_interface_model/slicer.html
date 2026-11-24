@@ -248,7 +248,7 @@ function message(m, st, last) {
   if (m.images) el.append(h("div", { class: "pics" }, ...m.images.map((u, i) => pic(u, ["coloured", "grey"][i] || ""))));
   const part = m.part && st.parts[m.part];
   if (m.kind === "step" && part && last) el.append(promptEditor(part));
-  if (m.buttons && part) {
+  if (m.buttons && (part || m.part === "_plan")) {
     const live = last && !(st.waiting || []).some(r => r.part === m.part);
     el.append(h("div", { class: "buttons" }, ...m.buttons.map((b, i) => {
       const btn = h("button", { class: i === 0 ? "main" : "", type: "button" }, LABEL[b] || b);
