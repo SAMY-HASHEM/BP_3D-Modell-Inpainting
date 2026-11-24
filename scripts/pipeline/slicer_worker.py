@@ -253,6 +253,32 @@ def make_picture(name, start, instruction, only=""):
         running(name, False)
 
 
+def match_skin(out, glb):
+    """The base body's 3D skin brought to its pictures' skin: one gain per colour channel on the texture, from the
+    lit skin's median (de-lit and without MV-Adapter TRELLIS.2 made it darker and redder: 183,112,97 for 205,152,127)."""
+    import numpy as np
+    import trimesh
+    from PIL import Image
+    pics = [np.asarray(Image.open(os.path.join(out, f"{n}.png")).convert("RGBA")).astype(np.float32)
+            for n in ("colour_clear", "colour_back_clear") if os.path.isfile(os.path.join(out, f"{n}.png"))]
+    px = np.concatenate([p[..., :3][p[..., 3] > 200] for p in pics])
+    lum = px.mean(1)
+    target = np.median(px[(lum > np.percentile(lum, 40)) & (lum < np.percentile(lum, 95))], 0)
+    scene = trimesh.load(glb, force="scene")
+    for g in scene.geometry.values():
+        mat = g.visual.material
+        tex = getattr(mat, "baseColorTexture", None)
+        if tex is None:
+            continue
+        a = np.asarray(tex.convert("RGB")).astype(np.float32)
+        used = a.sum(-1) > 30
+        l2 = a[used].mean(1)
+        med = np.median(a[used][(l2 > np.percentile(l2, 40)) & (l2 < np.percentile(l2, 95))], 0)
+        mat.baseColorTexture = Image.fromarray(np.clip(a * np.clip(target / med, 0.5, 2.5), 0, 255).astype(np.uint8))
+    scene.export(glb, file_type="glb")
+    print(time.strftime("%H:%M:%S"), "skin matched to", target.round(), flush=True)
+
+
 def make_3d(name, part_id):
     """Good, make it 3D: the part's transparent coloured and grey pictures through make_model.py, the full pipeline
     (de-light, TRELLIS.2 at the machine's resolution, MV-Adapter colours merged: about 20 to 30 minutes); the result
@@ -286,6 +312,11 @@ def make_3d(name, part_id):
         return
     result = done[-1].split(": ", 1)[1].strip()
     shutil.copy(result, os.path.join(out, "model.glb.tmp"))
+    if base:
+        try:
+            match_skin(out, os.path.join(out, "model.glb.tmp"))
+        except Exception as e:
+            print(time.strftime("%H:%M:%S"), "skin not matched:", repr(e), flush=True)
     os.replace(os.path.join(out, "model.glb.tmp"), os.path.join(out, "model.glb"))  # the chat announces it
     print(time.strftime("%H:%M:%S"), "3D made", name, part_id, round((time.time() - t) / 60, 1), "min", flush=True)
     try:
