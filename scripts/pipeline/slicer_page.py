@@ -76,7 +76,8 @@ class _Lock:
 
 LOCK = _Lock()
 ACTIONS = {"make_pictures": "Make it", "remake_pictures": "Make it again", "make_3d": "Good, make it 3D",
-           "skip": "Skip this part", "replan": "Plan the parts again", "restart": "Start again from step 1"}
+           "skip": "Skip this part", "replan": "Plan the parts again", "restart": "Start again from step 1",
+           "make_back": "Make the back view"}
 
 
 def chat_path(name):
@@ -304,6 +305,7 @@ def say(name, text, action=None, part_id=None, files=None):
                 chat["messages"].append({"who": "slicer", "part": part["id"], "kind": "working",
                     "text": {"make_pictures": "Making the coloured and the grey picture…",
                              "remake_pictures": "Making the pictures again…",
+                             "make_back": "Making the back view…",
                              "make_3d": "Making the 3D model (the full pipeline: de-light, TRELLIS.2, MV-Adapter colours; "
                                         "about 20 to 30 minutes)…"}[action]})
         save(chat_path(name), chat)

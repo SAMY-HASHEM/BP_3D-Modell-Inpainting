@@ -392,6 +392,34 @@ def kind_of(part):
     return part.get("kind") or {"00_apose": "apose", "01_base_body": "base"}.get(part["id"], "legacy")
 
 
+def make_back(part, kind, out, colour_clear, grey_clear, request, seed, apose_path):
+    """The layer's back view, coloured and grey, in the same frame as its filled front pictures."""
+    import slicer_pictures as sp
+    from PIL import Image, ImageOps
+    let_go(quiet=False)
+    if kind == "base":  # the mannequin turned round, then the same skin as the front
+        grey_back_clear, grey_back = sp.back(grey_clear, "smooth matte grey mannequin with exactly this body "
+                                             "shape, in the same A-pose", seed)
+        g = ImageOps.grayscale(grey_back_clear.convert("RGB")).convert("RGBA"); g.putalpha(grey_back_clear.getchannel("A"))
+        grey_back_clear = g
+        tone = sp.skin_tone(Image.open(apose_path))
+        colour_back_clear, _ = sp.tint(grey_back_clear, tone) if tone is not None else (grey_back_clear, None)
+        let_go(quiet=False)
+        real_raw = sp.edit(Image.composite(colour_back_clear.convert("RGB"), Image.new("RGB", colour_back_clear.size, sp.GREY),
+                                           colour_back_clear.getchannel("A")), sp.SKIN, seed)
+        real_clear, _ = sp.cut_out(real_raw, keep_frame=True)
+        if doll_ok(real_clear):
+            colour_back_clear = real_clear
+    else:
+        colour_back_clear, _ = sp.back(colour_clear, part.get("what") or part["name"], seed)
+        let_go(quiet=False)
+        grey_back_clear, _ = sp.redo(colour_back_clear, request["grey_prompt"], seed, match="shape", room=1.2)
+        g = ImageOps.grayscale(grey_back_clear.convert("RGB")).convert("RGBA"); g.putalpha(grey_back_clear.getchannel("A"))
+        grey_back_clear = g
+    colour_back_clear.save(os.path.join(out, "colour_back_clear.png"))
+    grey_back_clear.save(os.path.join(out, "grey_back_clear.png"))
+
+
 def make_step(name, part_id):
     """The Make it / Make it again button, by the part's kind:
     apose  the whole character in an A-pose from the uploaded picture (the reference; no 3D)
@@ -409,6 +437,17 @@ def make_step(name, part_id):
     kind = kind_of(part)
     out = os.path.join(folder, "parts", part_id)
     try:
+        if request["do"] == "make_back":
+            if not os.path.isfile(os.path.join(out, "colour_clear.png")):
+                slicer_says(name, "This part has no pictures yet: press Make it first.", part_id=part_id)
+                return
+            print(time.strftime("%H:%M:%S"), "back view", name, part_id, flush=True)
+            make_back(part, kind, out, Image.open(os.path.join(out, "colour_clear.png")),
+                      Image.open(os.path.join(out, "grey_clear.png")), request, 1,
+                      os.path.join(folder, "parts", "00_apose", "colour_clear.png"))
+            os.utime(os.path.join(out, "colour.png"))  # the chat shows the pictures again, with the back
+            print(time.strftime("%H:%M:%S"), "back made", name, part_id, flush=True)
+            return
         if request["do"] == "make_3d":
             if part.get("no3d"):
                 slicer_says(name, "The A-pose is the reference the layers are cut from: it isn't made in 3D.", part_id=part_id)
@@ -532,28 +571,7 @@ def make_step(name, part_id):
             json.dump({"box": box, "frame": sp.SIZE, "note": "where this picture sits on the A-pose: its square in "
                        "the A-pose picture's pixels"}, open(os.path.join(out, "frame.json"), "w"))
         if kind != "apose":  # the back view too: TRELLIS.2 then sees both sides (the base body's back was guessed)
-            let_go(quiet=False)
-            if kind == "base":  # the mannequin turned round, then the same skin as the front
-                grey_back_clear, grey_back = sp.back(grey_clear, "smooth matte grey mannequin with exactly this body "
-                                                     "shape, in the same A-pose", seed)
-                g = ImageOps.grayscale(grey_back_clear.convert("RGB")).convert("RGBA"); g.putalpha(grey_back_clear.getchannel("A"))
-                grey_back_clear = g
-                tone = sp.skin_tone(Image.open(apose_path))
-                colour_back_clear, _ = sp.tint(grey_back_clear, tone) if tone is not None else (grey_back_clear, None)
-                let_go(quiet=False)
-                real_raw = sp.edit(Image.composite(colour_back_clear.convert("RGB"), Image.new("RGB", colour_back_clear.size, sp.GREY),
-                                                   colour_back_clear.getchannel("A")), sp.SKIN, seed)
-                real_clear, _ = sp.cut_out(real_raw, keep_frame=True)
-                if doll_ok(real_clear):
-                    colour_back_clear = real_clear
-            else:
-                colour_back_clear, _ = sp.back(colour_clear, part.get("what") or part["name"], seed)
-                let_go(quiet=False)
-                grey_back_clear, _ = sp.redo(colour_back_clear, request["grey_prompt"], seed, match="shape", room=1.2)
-                g = ImageOps.grayscale(grey_back_clear.convert("RGB")).convert("RGBA"); g.putalpha(grey_back_clear.getchannel("A"))
-                grey_back_clear = g
-            colour_back_clear.save(os.path.join(out, "colour_back_clear.png"))
-            grey_back_clear.save(os.path.join(out, "grey_back_clear.png"))
+            make_back(part, kind, out, colour_clear, grey_clear, request, seed, apose_path)
         colour_clear.save(os.path.join(out, "colour_clear.png"))
         grey_clear.save(os.path.join(out, "grey_clear.png"))
         grey.save(os.path.join(out, "grey.png"))
